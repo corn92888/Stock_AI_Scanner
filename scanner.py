@@ -14,8 +14,8 @@ except ImportError:
     sys.exit()
 
 # 已填入您的真實 Token 和頻道 ID
-TELEGRAM_BOT_TOKEN = "8586311109:AAG-JPDnQpVee_VAp3bwPOThbpEcLBu7uvA" 
-TELEGRAM_CHAT_ID = "@yumirobt213"          
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "") 
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")    
 
 def send_telegram_message(msg_lines):
     try:
@@ -145,4 +145,3 @@ def run_scanner():
 
 if __name__ == "__main__":
     run_scanner()
-    
