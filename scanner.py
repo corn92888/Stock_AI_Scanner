@@ -14,11 +14,16 @@ except ImportError:
     print("❌ 找不到 logic.py，請確認它在同一個資料夾內。")
     sys.exit()
 
+from dotenv import load_dotenv
+
+# 載入 .env 環境變數
+load_dotenv()
+
 # ==========================================
-# 👇 Telegram 設定區
+# 👇 Telegram 設定區 (.env 設定)
 # ==========================================
-TELEGRAM_BOT_TOKEN = "54565464565" 
-TELEGRAM_CHAT_ID = "@kkk123"          
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "") 
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")          
 # ==========================================
 
 def send_telegram_message(msg_lines):
@@ -26,7 +31,7 @@ def send_telegram_message(msg_lines):
     發送 Telegram 訊息 (通用函式)
     """
     try:
-        if "您的" in TELEGRAM_BOT_TOKEN:
+        if not TELEGRAM_BOT_TOKEN or "您的" in TELEGRAM_BOT_TOKEN:
             print("⚠️ Telegram Token 尚未設定，跳過發送。")
             return
 
