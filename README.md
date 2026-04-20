@@ -4,7 +4,7 @@
 
 ## 🌟 核心功能
 
-* **🤖 自動化策略篩選**：每日自動跑遍台股，利用技術線型找出符合條件的股票。
+* **🤖 雙核心掃描引擎**：提供「盤中即時動能狙擊 (Intraday)」與「盤後嚴格條件篩選 (EOD)」兩套各自獨立的選股系統。
 * **📊 產出選股日報 (Excel)**：依據三大策略自動分類，產出易於閱讀的 `.xlsx` 表格。
 * **📱 Telegram 自動推播**：執行完畢後自動將挑出的標的傳送至指定的 Telegram 群組或對話。
 * **🖥 視覺化戰情室 (Web UI)**：提供基於 Streamlit 開發的網頁 Dashboard，可輸入股票代號即時驗證技術指標 (如 SuperTrend 三線、布林通道等)。
@@ -36,12 +36,17 @@
 
 ## 🚀 如何使用
 
-* **執行自動選股與推播：**
+* **執行盤中狙擊掃描 (限平日 `09:00~13:30`):**
+  ```bash
+  venv/bin/python3 intraday_scanner.py
+  ```
+  *(透過 twstock 抓取即時報價，自動等比例換算為當日「預估總量」，即時預測突破名單並傳送 Telegram)*
+
+* **執行盤後選股總結 (高防禦版):**
   ```bash
   venv/bin/python3 scanner.py
   ```
-  *(或在 Windows 雙擊執行 `run_daily.bat`)*
-  執行後會自動產生 `Reports/` 資料夾並匯出 Excel 報表，接著推播訊息至你的 Telegram。
+  *(每天下午 14:00 收盤結算後使用，產生包含所有技術指標穩定的最終選股日報與 Excel)*
 
 * **測試 Telegram 連線：**
   快速確認 Token 與 Chat ID 是否設定正確，直接發送一則推播：
@@ -50,7 +55,10 @@
   ```
 
 * **設定免開機雲端自動化 (GitHub Actions)：**
-  專案內建 `.github/workflows/daily_scan.yml`，只要將程式碼推送到 GitHub，並在存放區設定（Settings > Secrets and variables > Actions）中新增 `TELEGRAM_BOT_TOKEN` 與 `TELEGRAM_CHAT_ID`，就能達成每天早上 10 點與中午 12 點全自動執行！
+  專案內建兩套 GitHub Actions 自動排程：
+  - `.github/workflows/intraday_scan.yml`: 平日 `10:00`, `11:30`, `13:00` 追蹤盤中名單。
+  - `.github/workflows/daily_scan.yml`: 平日 `14:00` 結算每日盤後高防禦名單。
+  只要將程式碼推送至 GitHub，並在專案的（Settings > Secrets and variables > Actions）中新增 `TELEGRAM_BOT_TOKEN` 與 `TELEGRAM_CHAT_ID`，就能達成全自動監控！
 
 * **開啟戰情室 (Dashboard)：**
   ```bash
