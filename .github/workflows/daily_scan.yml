@@ -1,0 +1,44 @@
+name: Daily Stock AI Scanner
+
+on:
+  schedule:
+    # GitHub Actions 使用 UTC 時間，台灣時間 (UTC+8) 的早上 10 點是 UTC 凌晨 2 點。
+    # 這裡設定每週一到週五的 UTC 2:00 (台灣 10:00) 與 UTC 4:00 (台灣 12:00) 執行。
+    - cron: '0 2,4 * * 1-5'
+  workflow_dispatch: # 保留一個按鈕讓你可以隨時手動點擊觸發
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install yfinance pandas numpy twstock tqdm requests python-dotenv streamlit plotly openpyxl
+
+    - name: Run scanner
+      env:
+        # 將設定在 GitHub 上的秘密金鑰載入環境變數給 scanner.py 使用
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        python scanner.py
+
+    - name: Upload Excel Reports
+      # 將產出的 Excel 報表上傳打包，讓您可以直接從 GitHub 下載
+      uses: actions/upload-artifact@v4
+      with:
+        name: daily-stock-reports
+        path: Reports/*.xlsx
+        retention-days: 5
+        if-no-files-found: ignore
