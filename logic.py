@@ -2,27 +2,27 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-def get_stock_data(ticker, period="2y"):
-    """下載股價數據 (恢復預設：取得盤中即時 K 棒，接受 Yahoo 的微幅延遲)"""
+def get_stock_data(ticker, suffix=None, period="2y"):
+    """下載股價數據 (強制使用真實收盤價)"""
     ticker = str(ticker).strip().upper().replace('.TW', '').replace('.TWO', '')
-    target = f"{ticker}.TW"
-    try:
-        df = yf.download(target, period=period, progress=False)
-        if df.empty:
-            target = f"{ticker}.TWO"
-            df = yf.download(target, period=period, progress=False)
-        if df.empty: return None
-        
-        if isinstance(df.columns, pd.MultiIndex): 
-            df.columns = [col[0] for col in df.columns]
-        
-        df = df.loc[:, ~df.columns.duplicated()]
-        for c in ['Open', 'High', 'Low', 'Close', 'Volume']:
-            if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce')
-        
-        df.dropna(subset=['Close'], inplace=True)
-        return df
-    except: return None
+    targets = [f"{ticker}.{suffix}"] if suffix else [f"{ticker}.TW", f"{ticker}.TWO"]
+    for target in targets:
+        try:
+            # auto_adjust=False 確保與券商 App 報價一致
+            df = yf.download(target, period=period, progress=False, auto_adjust=False)
+            if not df.empty:
+                if isinstance(df.columns, pd.MultiIndex): 
+                    df.columns = [col[0] for col in df.columns]
+                
+                df = df.loc[:, ~df.columns.duplicated()]
+                for c in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                    if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce')
+                
+                df.dropna(subset=['Close'], inplace=True)
+                return df
+        except:
+            pass
+    return None
 
 # --- 技術指標計算 ---
 
@@ -111,7 +111,7 @@ def check_reversal_strict(df):
         range_60 = last['High60'] - last['Low60']
         position_pct = (last['Close'] - last['Low60']) / range_60 * 100
         cond_low_pos = position_pct <= 35 
-        cond_liq = last['Volume'] > 500000 # 需大於 500 張
+        cond_liq = last['Volume'] > 500000 # 修正過濾：需大於 500 張 (50萬股)
         
         support_line = df['Low'].iloc[-25:-5].min()
         break_days_count = sum(df['Low'].iloc[-5:-1] < support_line)
@@ -136,7 +136,7 @@ def check_wave_strict(df):
         volatility = (last['High20'] - last['Low20']) / last['Close']
         cond_vcp = volatility < 0.15 
         cond_vol_dry = last['Volume'] < last['Vol_MA20']
-        cond_liq = last['Volume'] > 500000 # 需大於 500 張
+        cond_liq = last['Volume'] > 500000 # 修正過濾：需大於 500 張 (50萬股)
         cond_above_200ma = last['Close'] > last['MA200']
         cond_runup = (last['High120'] / last['Low120']) >= 1.20
         
