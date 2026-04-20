@@ -2,28 +2,27 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-def get_stock_data(ticker, period="2y"):
+def get_stock_data(ticker, suffix=None, period="2y"):
     """下載股價數據 (強制使用真實收盤價)"""
     ticker = str(ticker).strip().upper().replace('.TW', '').replace('.TWO', '')
-    target = f"{ticker}.TW"
-    try:
-        # auto_adjust=False 確保與券商 App 報價一致
-        df = yf.download(target, period=period, progress=False, auto_adjust=False)
-        if df.empty:
-            target = f"{ticker}.TWO"
+    targets = [f"{ticker}.{suffix}"] if suffix else [f"{ticker}.TW", f"{ticker}.TWO"]
+    for target in targets:
+        try:
+            # auto_adjust=False 確保與券商 App 報價一致
             df = yf.download(target, period=period, progress=False, auto_adjust=False)
-        if df.empty: return None
-        
-        if isinstance(df.columns, pd.MultiIndex): 
-            df.columns = [col[0] for col in df.columns]
-        
-        df = df.loc[:, ~df.columns.duplicated()]
-        for c in ['Open', 'High', 'Low', 'Close', 'Volume']:
-            if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce')
-        
-        df.dropna(subset=['Close'], inplace=True)
-        return df
-    except: return None
+            if not df.empty:
+                if isinstance(df.columns, pd.MultiIndex): 
+                    df.columns = [col[0] for col in df.columns]
+                
+                df = df.loc[:, ~df.columns.duplicated()]
+                for c in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                    if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce')
+                
+                df.dropna(subset=['Close'], inplace=True)
+                return df
+        except:
+            pass
+    return None
 
 # --- 技術指標計算 ---
 
