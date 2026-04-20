@@ -7,10 +7,10 @@ import os
 import glob
 from logic import get_stock_data, calculate_indicators, check_trend_strict, check_reversal_strict, check_wave_strict
 
-st.set_page_config(page_title="Stock AI Scanner 戰情室", layout="wide", page_icon="📈")
+st.set_page_config(page_title="玉米的大噴射台股 💦", layout="wide", page_icon="💦")
 
 # 側邊欄導覽
-st.sidebar.title("📈 Stock AI 戰情室")
+st.sidebar.title("💦 玉米的大噴射台股")
 page = st.sidebar.radio("切換功能", ["📊 歷史報表預覽 (Reports)", "🎯 個股高階圖表分析 (Charts)"])
 
 if page == "📊 歷史報表預覽 (Reports)":
