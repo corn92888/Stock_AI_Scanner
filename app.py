@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import os
 import glob
+import time
 from logic import get_stock_data, calculate_indicators, check_trend_strict, check_reversal_strict, check_wave_strict
 
 st.set_page_config(page_title="玉米的大噴射台股 💦", layout="wide", page_icon="💦")
@@ -17,8 +18,30 @@ if page == "📊 歷史報表預覽 (Reports)":
     st.title("📊 歷史選股報表預覽")
     st.write("預覽系統每日/盤中產出的自動化選股 Excel 報表。")
     
+    with st.expander("🛠️ 手動執行全自動掃描器 (約需 1~2 分鐘)"):
+        st.write("點擊下方按鈕將立刻動用主機資源，對全台股 1900+ 檔股票進行技術線型掃描：")
+        col1, col2 = st.columns(2)
+        if col1.button("🚀 執行盤後高防禦掃描 (EOD)", use_container_width=True):
+            with st.spinner("正在執行最嚴格的盤後防禦檢查，這將花費 1~3 分鐘，請耐心等候..."):
+                import scanner
+                scanner.run_scanner()
+                st.success("✅ 盤後掃描完成！最新報表已自動產出。")
+                st.balloons()
+                time.sleep(2)
+                st.rerun()
+                
+        if col2.button("⚡ 執行盤中即時狙擊 (Intraday)", use_container_width=True):
+            with st.spinner("正在執行盤中狙擊，強制回補 twstock 最新即時報價，請等候..."):
+                import intraday_scanner
+                intraday_scanner.run_scanner()
+                st.success("✅ 盤中狙擊完成！最新報表已自動產出。")
+                st.balloons()
+                time.sleep(2)
+                st.rerun()
+    st.markdown("---")
+    
     if not os.path.exists('Reports'):
-        st.warning("⚠️ 尚未找到 Reports 資料夾，請先執行過 scanner.py 或 intraday_scanner.py。")
+        st.warning("⚠️ 尚未找到 Reports 資料夾，您可以點擊上方的按鈕立即執行掃描。")
     else:
         # 列出所有 xlsx
         files = glob.glob('Reports/*.xlsx')
