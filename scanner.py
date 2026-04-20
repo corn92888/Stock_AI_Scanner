@@ -6,6 +6,10 @@ import os
 import sys
 import time
 import requests 
+from dotenv import load_dotenv
+
+# 執行讀取 .env 檔案的動作 (隱藏機密資訊用)
+load_dotenv()
 
 try:
     from logic import get_stock_data, calculate_indicators, check_trend_strict, check_reversal_strict, check_wave_strict
@@ -13,31 +17,30 @@ except ImportError:
     print("❌ 找不到 logic.py，請確認它在同一個資料夾內。")
     sys.exit()
 
-<<<<<<< HEAD
 # ==========================================
-# ⚠️ 請在下方雙引號內填入您的真實 Token 和頻道 ID
-=======
-from dotenv import load_dotenv
-load_dotenv() # 必須要有這行，程式才會去讀 .env 檔案
-
-# 已填入您的真實 Token 和頻道 ID
->>>>>>> 1a8a872d0e38fab6d897df7c16f78dd18a19f6ec
+# 透過 os.getenv() 來抓取 .env 檔案裡的機密資訊
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "") 
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")            
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 # ==========================================
 
 def send_telegram_message(msg_lines):
     try:
-        if "您的" in TELEGRAM_BOT_TOKEN: 
-            print("⚠️ 尚未填寫 Telegram Token，跳過推播。")
+        # 如果找不到 Token，就跳過推播但不中斷程式
+        if not TELEGRAM_BOT_TOKEN: 
+            print("⚠️ 尚未填寫或讀取不到 Telegram Token，跳過推播。")
             return
+            
         full_text = "".join(msg_lines)
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": full_text, "disable_web_page_preview": True}
         response = requests.post(url, data=payload)
-        if response.status_code == 200: print("✅ Telegram 訊息發送成功！")
-        else: print(f"❌ 發送失敗: {response.text}")
-    except Exception as e: print(f"❌ Telegram 連線錯誤: {e}")
+        
+        if response.status_code == 200: 
+            print("✅ Telegram 訊息發送成功！")
+        else: 
+            print(f"❌ 發送失敗: {response.text}")
+    except Exception as e: 
+        print(f"❌ Telegram 連線錯誤: {e}")
 
 def sort_by_industry_heat(data_list, secondary_sort_key, ascending=False):
     if not data_list: return pd.DataFrame()
@@ -59,7 +62,7 @@ def run_scanner():
     tickers = [c for c in codes.keys() if codes[c].type == '股票']
     
     print(f"📊 掃描標的: {len(tickers)} 檔")
-    print("🎯 模式: 高防禦盤中即時版 (張數對齊)")
+    print("🎯 模式: 高防禦盤中即時版 (張數對齊 + .env防護)")
     print("-" * 40)
     
     list_trend, list_reversal, list_wave = [], [], []
