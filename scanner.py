@@ -45,6 +45,60 @@ def add_url_column(df, col_name='代號'):
     df_link['K線圖'] = df_link[col_name].apply(lambda x: f'https://tw.stock.yahoo.com/quote/{x}')
     return df_link
 
+def _parse_realtime_price(rt):
+    raw_price = rt.get('latest_trade_price', '-')
+    if raw_price and raw_price != '-':
+        try: return float(raw_price)
+        except: pass
+    bid_prices = rt.get('best_bid_price', [])
+    if bid_prices and bid_prices[0] and bid_prices[0] != '-':
+        try: return float(bid_prices[0])
+        except: pass
+    return 0.0
+
+def _safe_float(val, default=0.0):
+    if val and val != '-':
+        try: return float(val)
+        except: pass
+    return default
+
+def fetch_realtime_prices(ticker_list, chunk_size=20):
+    result = {}
+    for i in tqdm(range(0, len(ticker_list), chunk_size), desc="📡 補齊最新報價"):
+        chunk = ticker_list[i:i+chunk_size]
+        try:
+            data = twstock.realtime.get(chunk)
+            if not data: continue
+            if len(chunk) == 1:
+                if data.get('success') and 'realtime' in data:
+                    rt = data['realtime']
+                    price = _parse_realtime_price(rt)
+                    if price > 0:
+                        result[chunk[0]] = {
+                            'Open': _safe_float(rt.get('open')),
+                            'High': _safe_float(rt.get('high')),
+                            'Low': _safe_float(rt.get('low')),
+                            'Close': price,
+                            'Volume': _safe_float(rt.get('accumulate_trade_volume'))
+                        }
+            else:
+                for code, info in data.items():
+                    if code == 'success': continue
+                    if isinstance(info, dict) and info.get('success') and 'realtime' in info:
+                        rt = info['realtime']
+                        price = _parse_realtime_price(rt)
+                        if price > 0:
+                            result[code] = {
+                                'Open': _safe_float(rt.get('open')),
+                                'High': _safe_float(rt.get('high')),
+                                'Low': _safe_float(rt.get('low')),
+                                'Close': price,
+                                'Volume': _safe_float(rt.get('accumulate_trade_volume'))
+                            }
+            time.sleep(0.3)
+        except: pass
+    return result
+
 def batch_download(ticker_list, period="2y", chunk_size=200):
     """批次下載股票資料，回傳 {yf_ticker: DataFrame} 字典"""
     all_data = {}
@@ -113,20 +167,50 @@ def run_scanner():
     # Step 2: 批次下載 K 線資料
     all_stock_data = batch_download(all_yf_tickers, period="2y", chunk_size=200)
     
-    # 顯示資料日期 (排查資料是否最新)
+    # 檢查是否有資料延遲 (並使用 twstock.realtime 強制補齊今日最新一筆 K 棒)
     if all_stock_data:
         sample_df = next(iter(all_stock_data.values()))
         latest_date = sample_df.index[-1]
-        print(f"📆 最新資料日期: {latest_date.strftime('%Y-%m-%d')} ({latest_date.strftime('%A')})")
+        print(f"📆 yfinance 最新日期: {latest_date.strftime('%Y-%m-%d')} ({latest_date.strftime('%A')})")
+        
         today = datetime.date.today()
-        if latest_date.date() < today:
-            weekday = today.weekday()
-            if weekday >= 5: # 週六日
-                print("ℹ️  今天是假日，資料為最近一個交易日的收盤價 (正常)")
-            else:
-                print("⚠️  資料日期不是今天，可能尚未開盤或盤中資料延遲")
-    
-    print(f"📊 成功下載: {len(all_stock_data)}/{len(all_yf_tickers)} 檔")
+        today_ts = pd.Timestamp.now().normalize()
+        
+        # 當 yfinance 資料落後且今天是平日，啟動強制回補機制
+        if latest_date.date() < today and today.weekday() < 5:
+            print(f"⚠️ 偵測到 yfinance 報價延遲，啟動 twstock.realtime 強制回補今日收盤價...")
+            rt_prices = fetch_realtime_prices(tickers, chunk_size=20)
+            
+            appended = 0
+            if rt_prices:
+                for yf_ticker in list(all_stock_data.keys()):
+                    code = yf_to_code.get(yf_ticker)
+                    if code and code in rt_prices:
+                        rt = rt_prices[code]
+                        if rt['Close'] > 0:
+                            # 補齊今日 K 棒 (twstock 成交量張數轉為 yf 習慣的股數)
+                            new_bar = pd.DataFrame({
+                                'Open': [rt['Open']],
+                                'High': [rt['High'] if rt['High'] > 0 else rt['Close']],
+                                'Low': [rt['Low'] if rt['Low'] > 0 else rt['Close']],
+                                'Close': [rt['Close']],
+                                'Volume': [rt['Volume'] * 1000]
+                            }, index=[today_ts])
+                            
+                            common_cols = [c for c in new_bar.columns if c in all_stock_data[yf_ticker].columns]
+                            all_stock_data[yf_ticker] = pd.concat([
+                                all_stock_data[yf_ticker][common_cols], 
+                                new_bar[common_cols]
+                            ])
+                            appended += 1
+                if appended > 0:
+                    print(f"✅ 成功補齊 {appended} 檔今日最新 K 線！現在分析將基於今日真實價格💯。")
+                else:
+                    print("⚠️ 即時報價補齊失敗，將沿用舊有資料進行分析。")
+        elif latest_date.date() < today and today.weekday() >= 5:
+            print("ℹ️ 今天是假日，yfinance 資料停留在上一個交易日 (正常)。")
+            
+    print(f"📊 即將開始分析: {len(all_stock_data)} 檔")
     
     # Step 3: 多執行緒計算技術指標與策略判斷
     list_trend, list_reversal, list_wave = [], [], []

@@ -1,61 +1,124 @@
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import pandas as pd
 import numpy as np
-from logic import get_stock_data, calculate_indicators, check_strategy
+import os
+import glob
+from logic import get_stock_data, calculate_indicators, check_trend_strict, check_reversal_strict, check_wave_strict
 
-st.set_page_config(page_title="台股 SuperTrend 戰情室", layout="wide")
-st.title("📈 台股 SuperTrend 戰情室 (三線版)")
+st.set_page_config(page_title="Stock AI Scanner 戰情室", layout="wide", page_icon="📈")
 
-# 側邊欄
-ticker = st.sidebar.text_input("輸入代號", "2330")
-period = st.sidebar.selectbox("期間", ["1y", "2y", "5y"], index=0)
-btn = st.sidebar.button("分析")
+# 側邊欄導覽
+st.sidebar.title("📈 Stock AI 戰情室")
+page = st.sidebar.radio("切換功能", ["📊 歷史報表預覽 (Reports)", "🎯 個股高階圖表分析 (Charts)"])
 
-if btn:
-    with st.spinner("正在分析..."):
-        df_raw = get_stock_data(ticker, period=period)
-        
-        if df_raw is not None:
-            df = calculate_indicators(df_raw)
-            match, det = check_strategy(df)
-            
-            # 顯示結果
-            c1, c2, c3 = st.columns(3)
-            c1.metric("SuperTrend 三線", "全多頭 (綠)" if det['Three_Green'] else "未全多")
-            c2.metric("布林中線突破", "Yes" if det['BB_Break'] else "No")
-            c3.metric("攻擊量", "Yes" if det['Volume_Up'] else "No")
-            
-            # 繪圖
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-            
-            # K線
-            fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
-            
-            # 布林中線
-            fig.add_trace(go.Scatter(x=df.index, y=df['BBM'], line=dict(color='orange', width=1, dash='dash'), name='20MA'), row=1, col=1)
-            
-            # SuperTrend 三線
-            # ST1 短 (點狀)
-            st1_c = ['green' if t==1 else 'red' for t in df['ST1_Trend']]
-            fig.add_trace(go.Scatter(x=df.index, y=df['ST1_Line'], mode='markers', marker=dict(color=st1_c, size=3), name='ST短(10,1)'), row=1, col=1)
-            
-            # ST2 中 (實線)
-            st2_c = ['green' if t==1 else 'red' for t in df['ST2_Trend']]
-            fig.add_trace(go.Scatter(x=df.index, y=df['ST2_Line'], mode='markers+lines', marker=dict(color=st2_c, size=1), line=dict(width=1), name='ST中(11,2)'), row=1, col=1)
-
-            # ST3 長 (粗線)
-            # 為了美觀，這邊簡化處理，直接畫出線條
-            st3_c = ['rgba(0,255,0,0.5)' if t==1 else 'rgba(255,0,0,0.5)' for t in df['ST3_Trend']]
-            fig.add_trace(go.Scatter(x=df.index, y=df['ST3_Line'], mode='markers', marker=dict(color=st3_c, size=5), name='ST長(12,3)'), row=1, col=1)
-            
-            # 成交量
-            colors = ['red' if c < o else 'green' for o, c in zip(df['Open'], df['Close'])]
-            fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, name='Volume'), row=2, col=1)
-            
-            fig.update_layout(height=800, xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig, use_container_width=True)
-            
+if page == "📊 歷史報表預覽 (Reports)":
+    st.title("📊 歷史選股報表預覽")
+    st.write("預覽系統每日/盤中產出的自動化選股 Excel 報表。")
+    
+    if not os.path.exists('Reports'):
+        st.warning("⚠️ 尚未找到 Reports 資料夾，請先執行過 scanner.py 或 intraday_scanner.py。")
+    else:
+        # 列出所有 xlsx
+        files = glob.glob('Reports/*.xlsx')
+        if not files:
+            st.info("💡 尚未產出任何報表。")
         else:
-            st.error("找不到股票，請確認代號。")
+            files.sort(reverse=True) # 用時間倒序排序
+            file_options = {os.path.basename(f): f for f in files}
+            selected_file = st.selectbox("選擇要檢視的報表", list(file_options.keys()))
             
+            if selected_file:
+                target_path = file_options[selected_file]
+                try:
+                    # 讀取 Excel 的所有 sheet
+                    xl = pd.ExcelFile(target_path)
+                    sheet_names = xl.sheet_names
+                    
+                    selected_sheet = st.radio("選擇策略分頁", sheet_names, horizontal=True)
+                    df_sheet = pd.read_excel(target_path, sheet_name=selected_sheet)
+                    
+                    st.dataframe(df_sheet, use_container_width=True, hide_index=True)
+                except Exception as e:
+                    st.error(f"❌ 無法讀取該報表: {str(e)}")
+
+elif page == "🎯 個股高階圖表分析 (Charts)":
+    st.title("🎯 個股高階圖表分析")
+    st.write("輸入台股代碼，系統將自動套用三大策略進行診斷，並畫出關鍵技術指標。")
+    
+    col1, col2, col3 = st.columns([1, 1, 2])
+    with col1:
+        ticker = st.text_input("輸入股票代號 (如: 2330)", "2330")
+    with col2:
+        period = st.selectbox("圖表歷史區間", ["6mo", "1y", "2y"], index=1)
+    
+    if st.button("🚀 執行深度分析", type="primary"):
+        with st.spinner(f"正在分析 {ticker}..."):
+            df_raw = get_stock_data(ticker, period=period)
+            
+            if df_raw is None or df_raw.empty:
+                st.error("❌ 找不到該股票資料，請確認代號是否正確。")
+            else:
+                df = calculate_indicators(df_raw)
+                
+                # 套用三大策略
+                is_trend, note_trend, p_t, sl_t = check_trend_strict(df)
+                is_rev, note_rev, p_r, sl_r = check_reversal_strict(df)
+                is_wave, note_wave, p_w, sl_w = check_wave_strict(df)
+                
+                st.subheader("🤖 策略診斷結果 (以最後一日為準)")
+                c1, c2, c3 = st.columns(3)
+                
+                c1.info(f"**A. 順勢突破**\n\n狀態: {'✅ 符合' if is_trend else '❌ 不符'}\n\n原因: {note_trend}")
+                c2.warning(f"**B. 逆勢抄底**\n\n狀態: {'✅ 符合' if is_rev else '❌ 不符'}\n\n原因: {note_rev}")
+                c3.success(f"**C. 波段蓄勢**\n\n狀態: {'✅ 符合' if is_wave else '❌ 不符'}\n\n原因: {note_wave}")
+                
+                st.markdown("---")
+                
+                # 繪圖
+                st.subheader("📈 技術線圖")
+                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.03)
+                
+                # 1. K線圖
+                fig.add_trace(go.Candlestick(
+                    x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], 
+                    name='K線', increasing_line_color='red', decreasing_line_color='green'
+                ), row=1, col=1)
+                
+                # 2. 均線
+                fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1.5), name='20MA (月線)'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], line=dict(color='blue', width=1.5), name='60MA (季線)'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df.index, y=df['MA200'], line=dict(color='purple', width=2, dash='dash'), name='200MA (年線)'), row=1, col=1)
+                
+                # 3. SuperTrend 三線 (如果欄位存在)
+                if 'ST1_Line' in df.columns:
+                    st1_c = ['green' if t==1 else 'red' for t in df['ST1_Trend']]
+                    fig.add_trace(go.Scatter(x=df.index, y=df['ST1_Line'], mode='markers', marker=dict(color=st1_c, size=3), name='ST(10,1)'), row=1, col=1)
+                if 'ST2_Line' in df.columns:
+                    st2_c = ['green' if t==1 else 'red' for t in df['ST2_Trend']]
+                    fig.add_trace(go.Scatter(x=df.index, y=df['ST2_Line'], mode='markers', marker=dict(color=st2_c, size=3), name='ST(11,2)'), row=1, col=1)
+                if 'ST3_Line' in df.columns:
+                    st3_c = ['green' if t==1 else 'red' for t in df['ST3_Trend']]
+                    fig.add_trace(go.Scatter(x=df.index, y=df['ST3_Line'], mode='markers', marker=dict(color=st3_c, size=3), name='ST(12,3)'), row=1, col=1)
+
+                # 4. 成交量
+                colors = ['green' if c < o else 'red' for o, c in zip(df['Open'], df['Close'])]
+                fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, name='成交量'), row=2, col=1)
+                if 'Vol_MA20' in df.columns:
+                    fig.add_trace(go.Scatter(x=df.index, y=df['Vol_MA20'], line=dict(color='orange', width=2), name='20日均量'), row=2, col=1)
+                
+                fig.update_layout(
+                    height=700, 
+                    xaxis_rangeslider_visible=False,
+                    margin=dict(l=0, r=0, t=30, b=0),
+                    plot_bgcolor='white',
+                    paper_bgcolor='white',
+                    hovermode='x unified'
+                )
+                
+                # Update axes to look modern
+                fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='LightGray')
+                fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='LightGray')
+                
+                st.plotly_chart(fig, use_container_width=True)
