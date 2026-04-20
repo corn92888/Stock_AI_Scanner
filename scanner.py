@@ -13,8 +13,15 @@ except ImportError:
     print("❌ 找不到 logic.py，請確認它在同一個資料夾內。")
     sys.exit()
 
+<<<<<<< HEAD
 # ==========================================
 # ⚠️ 請在下方雙引號內填入您的真實 Token 和頻道 ID
+=======
+from dotenv import load_dotenv
+load_dotenv() # 必須要有這行，程式才會去讀 .env 檔案
+
+# 已填入您的真實 Token 和頻道 ID
+>>>>>>> 1a8a872d0e38fab6d897df7c16f78dd18a19f6ec
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "") 
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")            
 # ==========================================

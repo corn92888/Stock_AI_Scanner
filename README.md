@@ -38,10 +38,19 @@
 
 * **執行自動選股與推播：**
   ```bash
-  python scanner.py
+  venv/bin/python3 scanner.py
   ```
   *(或在 Windows 雙擊執行 `run_daily.bat`)*
   執行後會自動產生 `Reports/` 資料夾並匯出 Excel 報表，接著推播訊息至你的 Telegram。
+
+* **測試 Telegram 連線：**
+  快速確認 Token 與 Chat ID 是否設定正確，直接發送一則推播：
+  ```bash
+  venv/bin/python3 test_telegram.py
+  ```
+
+* **設定免開機雲端自動化 (GitHub Actions)：**
+  專案內建 `.github/workflows/daily_scan.yml`，只要將程式碼推送到 GitHub，並在存放區設定（Settings > Secrets and variables > Actions）中新增 `TELEGRAM_BOT_TOKEN` 與 `TELEGRAM_CHAT_ID`，就能達成每天早上 10 點與中午 12 點全自動執行！
 
 * **開啟戰情室 (Dashboard)：**
   ```bash
