@@ -280,11 +280,11 @@ def run_intraday_scanner():
         if list_trend:
             df_t = sort_by_industry_heat(list_trend, secondary_sort_key='RSI', ascending=False)
             add_url_column(df_t).to_excel(writer, sheet_name='順勢突破', index=False)
-            msg_trend.extend([f"🚀 順勢噴出 (Top {min(len(list_trend), LIMIT_N)})\n", "----------------\n"])
+            msg_trend.extend([f"🚀 玉米順勢噴出 (Top {min(len(list_trend), LIMIT_N)})\n", "----------------\n"])
             for _, row in df_t.head(LIMIT_N).iterrows():
                 msg_trend.append(f"🏭[{row['產業族群']}] {row['代號']} {row['名稱']} (${row['現價']})\n   └ 漲:{row['漲跌幅']}% | 預估總量:{row['成交(張)(含預估)']}張\n")
         else:
-            msg_trend.append("🚀 順勢噴出: 無\n")
+            msg_trend.append("🚀 玉米順勢噴出: 無\n")
         send_telegram_message(msg_trend)
 
         msg_rev = []

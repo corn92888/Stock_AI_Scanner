@@ -1,9 +1,10 @@
-name: Daily Stock AI Scanner
+name: Intraday Stock AI Scanner
 
 on:
   schedule:
-    # 這裡設定每週一到週五的 UTC 6:00 (台灣 14:00) 執行，此時收盤，yfinance 更新完成。
-    - cron: '0 6 * * 1-5'
+    # 台灣時間 10:00 (UTC 2), 11:30 (UTC 3:30), 13:00 (UTC 5) 盤中狙擊
+    - cron: '0 2,5 * * 1-5'
+    - cron: '30 3 * * 1-5'
   workflow_dispatch: # 保留一個按鈕讓你可以隨時手動點擊觸發
 
 jobs:
@@ -25,19 +26,18 @@ jobs:
         python -m pip install --upgrade pip
         pip install yfinance pandas numpy twstock tqdm requests python-dotenv streamlit plotly openpyxl
 
-    - name: Run scanner
+    - name: Run intraday scanner
       env:
-        # 將設定在 GitHub 上的秘密金鑰載入環境變數給 scanner.py 使用
+        # 將設定在 GitHub 上的秘密金鑰載入環境變數
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: |
-        python scanner.py
+        python intraday_scanner.py
 
     - name: Upload Excel Reports
-      # 將產出的 Excel 報表上傳打包，讓您可以直接從 GitHub 下載
       uses: actions/upload-artifact@v4
       with:
-        name: daily-stock-reports
-        path: Reports/*.xlsx
+        name: intraday-stock-reports
+        path: Reports/盤中日報_*.xlsx
         retention-days: 5
         if-no-files-found: ignore

@@ -191,7 +191,7 @@ def run_scanner():
     with pd.ExcelWriter(filename) as writer:
         LIMIT_N = 10
         
-        msg_trend = [f"📅 {today_str} 選股日報 (高防禦版)\n"]
+        msg_trend = [f"📅 {today_str} 玉米帶你盤後回顧\n"]
         if list_trend:
             df_t = sort_by_industry_heat(list_trend, secondary_sort_key='RSI', ascending=False)
             add_url_column(df_t).to_excel(writer, sheet_name='順勢突破', index=False)
