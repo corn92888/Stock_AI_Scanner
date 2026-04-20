@@ -13,12 +13,17 @@ except ImportError:
     print("❌ 找不到 logic.py，請確認它在同一個資料夾內。")
     sys.exit()
 
-# 已填入您的真實 Token 和頻道 ID
+# ==========================================
+# ⚠️ 請在下方雙引號內填入您的真實 Token 和頻道 ID
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "") 
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")    
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")            
+# ==========================================
 
 def send_telegram_message(msg_lines):
     try:
+        if "您的" in TELEGRAM_BOT_TOKEN: 
+            print("⚠️ 尚未填寫 Telegram Token，跳過推播。")
+            return
         full_text = "".join(msg_lines)
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": full_text, "disable_web_page_preview": True}
@@ -47,7 +52,7 @@ def run_scanner():
     tickers = [c for c in codes.keys() if codes[c].type == '股票']
     
     print(f"📊 掃描標的: {len(tickers)} 檔")
-    print("🎯 模式: 高防禦+張數對齊版")
+    print("🎯 模式: 高防禦盤中即時版 (張數對齊)")
     print("-" * 40)
     
     list_trend, list_reversal, list_wave = [], [], []
