@@ -12,10 +12,10 @@ st.set_page_config(page_title="玉米的大噴射台股 💦", layout="wide", pa
 
 # 側邊欄導覽
 st.sidebar.title("💦 玉米的大噴射台股")
-page = st.sidebar.radio("切換功能", ["📊 歷史報表預覽 (Reports)", "🎯 個股高階圖表分析 (Charts)"])
+page = st.sidebar.radio("切換功能", ["📊 歷史報表預覽 (Reports)", "🎯 個股高階圖表分析 (Charts)", "📰 精選動態新聞 (News)"])
 
 if page == "📊 歷史報表預覽 (Reports)":
-    st.title("📊 歷史選股報表預覽")
+    st.title(" 歷史選股報表預覽")
     st.write("預覽系統每日/盤中產出的自動化選股 Excel 報表。")
     
     with st.expander("🛠️ 手動執行全自動掃描器 (約需 1~2 分鐘)"):
@@ -145,3 +145,42 @@ elif page == "🎯 個股高階圖表分析 (Charts)":
                 fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='LightGray')
                 
                 st.plotly_chart(fig, use_container_width=True)
+
+elif page == "📰 精選動態新聞 (News)":
+    st.title("📰 精選動態新聞")
+    st.write("自動抓取最新一份選股名單的相關財經新聞，助你快速掌握基本面脈動與市場風向。")
+    
+    if not os.path.exists('Reports'):
+        st.warning("⚠️ 尚未找到 Reports 資料夾，請先執行掃描。")
+    else:
+        files = glob.glob('Reports/*.xlsx')
+        if not files:
+            st.info("💡 尚未產出任何報表。")
+        else:
+            latest_file = max(files, key=os.path.getctime)
+            st.success(f"📂 目前顯示基準報表：{os.path.basename(latest_file)}")
+            
+            try:
+                from llm_agent import fetch_google_news
+                xl = pd.ExcelFile(latest_file)
+                
+                for sheet in xl.sheet_names:
+                    df = pd.read_excel(latest_file, sheet_name=sheet)
+                    if df.empty: continue
+                    
+                    st.subheader(f"📌 策略：{sheet}")
+                    # 依序抓取清單上所有股票的新聞
+                    for _, row in df.iterrows():
+                        code = str(row['代號'])
+                        name = row['名稱']
+                        
+                        with st.expander(f"🏭 {name} ({code}) - 近期焦點新聞", expanded=False):
+                            news_list = fetch_google_news(f"{code} {name}", limit=5)
+                            if news_list:
+                                for news in news_list:
+                                    st.markdown(news)
+                            else:
+                                st.write("近期無重大相關新聞。")
+                    st.markdown("---")
+            except Exception as e:
+                st.error(f"❌ 讀取發生錯誤: {e}")
