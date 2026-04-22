@@ -161,8 +161,8 @@ def run_agentic_workflow():
         print(final_msg)
         print("="*50 + "\n")
         
-        print("正在嘗試發送 Telegram 推播...")
-        send_telegram_message(final_msg)
+        print("ℹ️ 根據現有設定，AI 報告暫不發送至 Telegram 聊天室，僅保留本地端輸出。")
+        # send_telegram_message(final_msg)
         print("✅ 程式執行完畢。")
     else:
         print("ℹ️ 本次報表無適合名單可供 AI 分析。")

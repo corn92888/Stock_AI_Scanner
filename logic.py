@@ -117,7 +117,8 @@ def check_reversal_strict(df):
         break_days_count = sum(df['Low'].iloc[-5:-1] < support_line)
         cond_break_bottom = break_days_count >= 2  
         cond_reclaim_support = last['Close'] > support_line
-        cond_engulfing = last['Close'] > prev['High']
+        # 放寬條件：三天內把跌破的綠棒(黑K)吞噬，或今天反彈 >= 3%
+        cond_engulfing = (last['Close'] > df['High'].iloc[-4:-1].max()) or (last['Close'] > prev['High']) or (pct_change >= 3.0)
         cond_macd_improve = last['MACD_hist'] > prev['MACD_hist']
         
         match = cond_low_pos and cond_liq and cond_break_bottom and cond_reclaim_support and cond_engulfing and cond_macd_improve
