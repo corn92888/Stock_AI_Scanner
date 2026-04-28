@@ -33,7 +33,7 @@ if page == "📊 歷史報表預覽 (Reports)":
         if col2.button("⚡ 執行盤中即時狙擊 (Intraday)", use_container_width=True):
             with st.spinner("正在執行盤中狙擊，強制回補 twstock 最新即時報價，請等候..."):
                 import intraday_scanner
-                intraday_scanner.run_scanner()
+                intraday_scanner.run_intraday_scanner()
                 st.success("✅ 盤中狙擊完成！最新報表已自動產出。")
                 st.balloons()
                 time.sleep(2)
@@ -84,6 +84,9 @@ elif page == "🎯 個股高階圖表分析 (Charts)":
                 st.error("❌ 找不到該股票資料，請確認代號是否正確。")
             else:
                 df = calculate_indicators(df_raw)
+                if df is None or df.empty:
+                    st.error("❌ 歷史資料不足，無法計算 200MA / SuperTrend 等完整指標。請切換到 2y 區間後再試一次。")
+                    st.stop()
                 
                 # 套用三大策略
                 is_trend, note_trend, p_t, sl_t = check_trend_strict(df)

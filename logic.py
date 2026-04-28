@@ -39,7 +39,8 @@ def calculate_supertrend_manual(df, period, multiplier):
         final_upper[i] = bu[i] if bu[i] < final_upper[i-1] or cl[i-1] > final_upper[i-1] else final_upper[i-1]
         final_lower[i] = bl[i] if bl[i] > final_lower[i-1] or cl[i-1] < final_lower[i-1] else final_lower[i-1]
         trend[i] = -1 if trend[i-1]==1 and cl[i] < final_lower[i-1] else (1 if trend[i-1]==-1 and cl[i] > final_upper[i-1] else trend[i-1])
-    return pd.DataFrame({'Trend': trend}, index=df.index)
+    line = [final_lower[i] if trend[i] == 1 else final_upper[i] for i in range(len(df))]
+    return pd.DataFrame({'Trend': trend, 'Line': line}, index=df.index)
 
 def calculate_rsi(series, period=14):
     delta = series.diff()
@@ -62,6 +63,8 @@ def calculate_indicators(df):
         st1, st2, st3 = calculate_supertrend_manual(data, 10, 1), calculate_supertrend_manual(data, 11, 2), calculate_supertrend_manual(data, 12, 3)
         if st1 is None: return None
         data['ST1'], data['ST2'], data['ST3'] = st1['Trend'], st2['Trend'], st3['Trend']
+        data['ST1_Trend'], data['ST2_Trend'], data['ST3_Trend'] = st1['Trend'], st2['Trend'], st3['Trend']
+        data['ST1_Line'], data['ST2_Line'], data['ST3_Line'] = st1['Line'], st2['Line'], st3['Line']
         
         data['RSI'] = calculate_rsi(data['Close'])
         exp1 = data['Close'].ewm(span=12, adjust=False).mean()

@@ -274,11 +274,13 @@ def run_scanner():
     
     with pd.ExcelWriter(filename) as writer:
         LIMIT_N = 10
+        wrote_sheet = False
         
         msg_trend = [f"📅 {today_str} 玉米帶你盤後回顧\n"]
         if list_trend:
             df_t = sort_by_industry_heat(list_trend, secondary_sort_key='RSI', ascending=False)
             add_url_column(df_t).to_excel(writer, sheet_name='順勢突破', index=False)
+            wrote_sheet = True
             msg_trend.extend([f"🚀 順勢噴出 (Top {min(len(list_trend), LIMIT_N)})\n", "----------------\n"])
             for _, row in df_t.head(LIMIT_N).iterrows():
                 msg_trend.append(f"🏭[{row['產業族群']}] {row['代號']} {row['名稱']} (${row['現價']})\n   └ 漲:{row['漲跌幅']}% | 防守:${row['防守價']} | 量:{row['成交量(張)']}張\n")
@@ -291,6 +293,7 @@ def run_scanner():
         if list_reversal:
             df_r = sort_by_industry_heat(list_reversal, secondary_sort_key='漲跌幅', ascending=True)
             add_url_column(df_r).to_excel(writer, sheet_name='低檔爆量', index=False)
+            wrote_sheet = True
             msg_rev.extend([f"↩️ 逆勢抄底 (Top {min(len(list_reversal), LIMIT_N)})\n", "----------------\n"])
             for _, row in df_r.head(LIMIT_N).iterrows():
                 msg_rev.append(f"🏭[{row['產業族群']}] {row['代號']} {row['名稱']} (${row['現價']})\n   └ 漲:{row['漲跌幅']}% | 防守:${row['防守價']} | 量:{row['成交量(張)']}張\n")
@@ -303,6 +306,7 @@ def run_scanner():
         if list_wave:
             df_w = sort_by_industry_heat(list_wave, secondary_sort_key='漲跌幅', ascending=True)
             add_url_column(df_w).to_excel(writer, sheet_name='波段蓄勢', index=False)
+            wrote_sheet = True
             msg_wave.extend([f"🌊 波段蓄勢 (Top {min(len(list_wave), LIMIT_N)})\n", "----------------\n"])
             for _, row in df_w.head(LIMIT_N).iterrows():
                 msg_wave.append(f"🏭[{row['產業族群']}] {row['代號']} {row['名稱']} (${row['現價']})\n   └ 漲:{row['漲跌幅']}% | 防守:${row['防守價']} | 量:{row['成交量(張)']}張\n")
@@ -311,6 +315,9 @@ def run_scanner():
             
         msg_wave.extend(["================\n", "🔗 點此查詢: https://tw.stock.yahoo.com/"])
         send_telegram_message(msg_wave)
+
+        if not wrote_sheet:
+            pd.DataFrame([{"狀態": "本次盤後掃描無符合策略條件的標的"}]).to_excel(writer, sheet_name='無符合標的', index=False)
     
     elapsed = time.time() - start_time
     minutes, seconds = divmod(int(elapsed), 60)
