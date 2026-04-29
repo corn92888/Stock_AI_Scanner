@@ -6,6 +6,7 @@
 
 * **🤖 雙核心掃描引擎**：提供「盤中即時動能狙擊 (Intraday)」與「盤後嚴格條件篩選 (EOD)」兩套各自獨立的選股系統。
 * **📊 產出選股日報 (Excel)**：依據三大策略自動分類，產出易於閱讀的 `.xlsx` 表格。
+* **🗃️ 累積選股訊號 (SQLite)**：每次掃描會同步寫入 `data/stock_scanner.db`，保留日後回測所需的原始訊號。
 * **📱 Telegram 自動推播**：執行完畢後自動將挑出的標的傳送至指定的 Telegram 群組或對話。
 * **🖥 視覺化戰情室 (Web UI)**：提供基於 Streamlit 開發的網頁 Dashboard，可輸入股票代號即時驗證技術指標 (如 SuperTrend 三線、布林通道等)。
 
@@ -46,7 +47,23 @@
   ```bash
   venv/bin/python3 scanner.py
   ```
-  *(每天下午 14:00 收盤結算後使用，產生包含所有技術指標穩定的最終選股日報與 Excel)*
+  *(每天下午 14:00 收盤結算後使用，產生包含所有技術指標穩定的最終選股日報與 Excel，並同步寫入 SQLite 訊號資料庫)*
+
+* **回測已累積的選股訊號:**
+  ```bash
+  venv/bin/python3 backtest.py
+  ```
+  第一版回測會用「訊號隔一個交易日開盤價」作為進場價，計算 1 / 3 / 5 / 10 / 20 個交易日後報酬、20 日內最大漲幅、最大回撤，以及是否跌破防守價。
+
+  查看已完成回測統計：
+  ```bash
+  venv/bin/python3 backtest.py --summary
+  ```
+
+  也可以只回測特定模式或策略：
+  ```bash
+  venv/bin/python3 backtest.py --mode eod --strategy trend --limit 20
+  ```
 
 * **測試 Telegram 連線：**
   快速確認 Token 與 Chat ID 是否設定正確，直接發送一則推播：
@@ -59,6 +76,8 @@
   - `.github/workflows/intraday_scan.yml`: 平日 `10:00`, `11:30`, `13:00` 追蹤盤中名單。
   - `.github/workflows/daily_scan.yml`: 平日 `14:00` 結算每日盤後高防禦名單。
   只要將程式碼推送至 GitHub，並在專案的（Settings > Secrets and variables > Actions）中新增 `TELEGRAM_BOT_TOKEN` 與 `TELEGRAM_CHAT_ID`，就能達成全自動監控！
+
+  GitHub Actions 每次掃描後會把 `data/stock_scanner.db` commit 回 `main`，讓歷史選股訊號能跨排程持續累積，日後可直接用 `backtest.py` 驗證策略表現。
 
 * **開啟戰情室 (Dashboard)：**
   ```bash

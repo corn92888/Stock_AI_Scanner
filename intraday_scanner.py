@@ -11,8 +11,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     from logic import calculate_indicators, check_trend_strict, check_reversal_strict, check_wave_strict
+    from database import record_scan_results
 except ImportError:
-    print("❌ 找不到 logic.py，請確認它在同一個資料夾內。")
+    print("❌ 找不到必要模組，請確認 logic.py 與 database.py 在同一個資料夾內。")
     sys.exit()
 
 from dotenv import load_dotenv
@@ -270,9 +271,12 @@ def run_intraday_scanner():
                 if res[2]: list_wave.append(res[2])
             
     if not os.path.exists('Reports'): os.makedirs('Reports')
-    timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H%M')
+    now = datetime.datetime.now(TAIPEI_TZ)
+    timestamp = now.strftime('%Y-%m-%d_%H%M')
     filename = f"Reports/盤中日報_{timestamp}.xlsx"
-    today_str = datetime.datetime.now().strftime('%m/%d')
+    today_str = now.strftime('%m/%d')
+    trade_date = now.date().isoformat()
+    strategy_frames = {}
     
     with pd.ExcelWriter(filename) as writer:
         LIMIT_N = 10
@@ -281,6 +285,7 @@ def run_intraday_scanner():
         
         if list_trend:
             df_t = sort_by_industry_heat(list_trend, secondary_sort_key='RSI', ascending=False)
+            strategy_frames["trend"] = df_t
             add_url_column(df_t).to_excel(writer, sheet_name='順勢突破', index=False)
             wrote_sheet = True
             msg_trend.extend([f"🚀 玉米順勢噴出 (Top {min(len(list_trend), LIMIT_N)})\n", "----------------\n"])
@@ -293,6 +298,7 @@ def run_intraday_scanner():
         msg_rev = []
         if list_reversal:
             df_r = sort_by_industry_heat(list_reversal, secondary_sort_key='漲跌幅', ascending=True)
+            strategy_frames["reversal"] = df_r
             add_url_column(df_r).to_excel(writer, sheet_name='低檔爆量', index=False)
             wrote_sheet = True
             msg_rev.extend([f"↩️ 逆勢抄底 (Top {min(len(list_reversal), LIMIT_N)})\n", "----------------\n"])
@@ -305,6 +311,7 @@ def run_intraday_scanner():
         msg_wave = []
         if list_wave:
             df_w = sort_by_industry_heat(list_wave, secondary_sort_key='漲跌幅', ascending=True)
+            strategy_frames["wave"] = df_w
             add_url_column(df_w).to_excel(writer, sheet_name='波段蓄勢', index=False)
             wrote_sheet = True
             msg_wave.extend([f"🌊 波段蓄勢 (Top {min(len(list_wave), LIMIT_N)})\n", "----------------\n"])
@@ -318,6 +325,17 @@ def run_intraday_scanner():
 
         if not wrote_sheet:
             pd.DataFrame([{"狀態": "本次盤中掃描無符合策略條件的標的"}]).to_excel(writer, sheet_name='無符合標的', index=False)
+
+    try:
+        db_result = record_scan_results(
+            mode="intraday",
+            trade_date=trade_date,
+            strategy_frames=strategy_frames,
+            report_path=filename,
+        )
+        print(f"🗃️  已寫入訊號資料庫: {db_result['db_path']} ({db_result['signals']} 筆訊號)")
+    except Exception as e:
+        print(f"⚠️ 訊號資料庫寫入失敗: {e}")
     
     elapsed = time.time() - start_time
     minutes, seconds = divmod(int(elapsed), 60)
