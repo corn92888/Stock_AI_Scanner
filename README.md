@@ -65,6 +65,17 @@
   venv/bin/python3 backtest.py --mode eod --strategy trend --limit 20
   ```
 
+* **全市場即時盯盤監控:**
+  ```bash
+  venv/bin/python3 market_monitor.py
+  ```
+  會抓取全台股即時報價與近期歷史量價，輸出 `Reports/市場監控_*.xlsx`，包含市場總覽、產業熱度、資金焦點、漲跌幅排行、成交值排行、量能異常與全市場明細。
+
+  若要同步推送 Telegram 全市場摘要：
+  ```bash
+  venv/bin/python3 market_monitor.py --send-telegram
+  ```
+
 * **測試 Telegram 連線：**
   快速確認 Token 與 Chat ID 是否設定正確，直接發送一則推播：
   ```bash
