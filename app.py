@@ -186,7 +186,7 @@ def normalize_portfolio_input(df):
         data[col] = pd.to_numeric(data[col], errors="coerce").fillna(0.0)
     data["備註"] = data["備註"].fillna("").astype(str)
 
-    return data[PORTFOLIO_INPUT_COLUMNS]
+    return data[PORTFOLIO_INPUT_COLUMNS].reset_index(drop=True)
 
 
 def build_holding_decision(row):
@@ -599,7 +599,7 @@ elif page == "💼 持股可視化分析 (Portfolio)":
         existing_df = normalize_portfolio_input(st.session_state.get("portfolio_input"))
         if load_info.get("error"):
             st.warning(f"{load_info['backend']} 載入失敗：{load_info['error']}")
-        if load_info["count"] or previous_loaded_owner is not None or existing_df.empty:
+        if load_info["count"] or bool(previous_loaded_owner) or existing_df.empty:
             st.session_state["portfolio_input"] = normalize_portfolio_input(loaded_df)
             st.session_state["portfolio_editor_version"] += 1
         st.session_state["portfolio_loaded_owner"] = owner_key
@@ -612,6 +612,7 @@ elif page == "💼 持股可視化分析 (Portfolio)":
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
+        disabled=not owner_key,
         column_order=PORTFOLIO_INPUT_COLUMNS,
         column_config={
             "代號": st.column_config.TextColumn("代號", width="small"),
@@ -634,7 +635,7 @@ elif page == "💼 持股可視化分析 (Portfolio)":
             except Exception as exc:
                 st.error(f"儲存失敗：{exc}")
     with save_col2:
-        st.caption("重新整理後，只要使用同一個登入身份或股票倉識別碼，就能從儲存區載回持股。")
+        st.caption("重新整理後，只要使用同一個登入身份，或同一組 Email/股票倉名稱與私密代碼，就能從儲存區載回持股。")
 
     if not market_summary.empty:
         summary_map = dict(zip(market_summary["項目"], market_summary["數值"]))
