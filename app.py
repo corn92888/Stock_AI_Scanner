@@ -32,6 +32,15 @@ def normalize_code(value):
     return code.zfill(4) if code.isdigit() and len(code) < 4 else code
 
 
+def normalize_editing_code(value):
+    if value is None or value != value:
+        return ""
+    code = str(value).strip().upper().replace(".TW", "").replace(".TWO", "")
+    if code.endswith(".0"):
+        code = code[:-2]
+    return code
+
+
 def latest_report(patterns, exclude_keywords=None):
     exclude_keywords = exclude_keywords or []
     files = []
@@ -181,7 +190,7 @@ def normalize_portfolio_input(df):
         if col not in data.columns:
             data[col] = "" if col in ["代號", "備註"] else 0.0
 
-    data["代號"] = data["代號"].apply(normalize_code)
+    data["代號"] = data["代號"].apply(normalize_editing_code)
     for col in ["成本", "股數", "停損價", "目標價"]:
         data[col] = pd.to_numeric(data[col], errors="coerce").fillna(0.0)
     data["備註"] = data["備註"].fillna("").astype(str)
