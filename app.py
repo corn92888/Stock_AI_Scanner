@@ -6,13 +6,280 @@ import numpy as np
 import os
 import glob
 import time
+import yfinance as yf
 from logic import get_stock_data, calculate_indicators, check_trend_strict, check_reversal_strict, check_wave_strict
 
 st.set_page_config(page_title="玉米的大噴射台股 💦", layout="wide", page_icon="💦")
 
+STRATEGY_SHEET_NAMES = ["順勢突破", "低檔爆量", "波段蓄勢"]
+
+
+def normalize_code(value):
+    if value is None or value != value:
+        return ""
+    code = str(value).strip().upper().replace(".TW", "").replace(".TWO", "")
+    if code.endswith(".0"):
+        code = code[:-2]
+    return code.zfill(4) if code.isdigit() and len(code) < 4 else code
+
+
+def latest_report(patterns, exclude_keywords=None):
+    exclude_keywords = exclude_keywords or []
+    files = []
+    for pattern in patterns:
+        files.extend(glob.glob(pattern))
+    files = [
+        path
+        for path in files
+        if all(keyword not in os.path.basename(path) for keyword in exclude_keywords)
+    ]
+    if not files:
+        return None
+    return max(files, key=os.path.getmtime)
+
+
+def list_reports(patterns, exclude_keywords=None):
+    exclude_keywords = exclude_keywords or []
+    files = []
+    for pattern in patterns:
+        files.extend(glob.glob(pattern))
+    files = [
+        path
+        for path in files
+        if all(keyword not in os.path.basename(path) for keyword in exclude_keywords)
+    ]
+    return sorted(set(files), key=os.path.getmtime, reverse=True)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_market_report(path):
+    if not path or not os.path.exists(path):
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    try:
+        market = pd.read_excel(path, sheet_name="全市場明細")
+        industry = pd.read_excel(path, sheet_name="產業熱度")
+        summary = pd.read_excel(path, sheet_name="市場總覽")
+        market["代號"] = market["代號"].apply(normalize_code)
+        return market, industry, summary
+    except Exception:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_scan_report(path):
+    if not path or not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        xl = pd.ExcelFile(path)
+        frames = []
+        for sheet in xl.sheet_names:
+            if sheet not in STRATEGY_SHEET_NAMES:
+                continue
+            df = pd.read_excel(path, sheet_name=sheet)
+            if df.empty or "代號" not in df.columns:
+                continue
+            df = df.copy()
+            df["代號"] = df["代號"].apply(normalize_code)
+            df["策略"] = sheet
+            frames.append(df)
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_daily_quote(code):
+    code = normalize_code(code)
+    for suffix in ["TW", "TWO"]:
+        try:
+            raw = yf.download(f"{code}.{suffix}", period="10d", progress=False, auto_adjust=False)
+            if raw.empty:
+                continue
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw.columns = [col[0] for col in raw.columns]
+            raw = raw.dropna(subset=["Close"])
+            if raw.empty:
+                continue
+            last = raw.iloc[-1]
+            prev = raw.iloc[-2] if len(raw) >= 2 else last
+            return {
+                "price": float(last["Close"]),
+                "prev_close": float(prev["Close"]),
+                "open": float(last["Open"]),
+                "high": float(last["High"]),
+                "low": float(last["Low"]),
+                "volume_lots": int(float(last["Volume"]) / 1000),
+            }
+        except Exception:
+            continue
+    return {}
+
+
+def safe_float(value, default=np.nan):
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def summarize_strategy_signals(scan_df):
+    if scan_df.empty:
+        return {}
+    summary = {}
+    for code, group in scan_df.groupby("代號"):
+        strategies = " / ".join(group["策略"].dropna().astype(str).unique())
+        conditions = "；".join(group.get("條件", pd.Series(dtype=str)).dropna().astype(str).unique())
+        stop_values = pd.to_numeric(group.get("防守價", pd.Series(dtype=float)), errors="coerce").dropna()
+        rsi_values = pd.to_numeric(group.get("RSI", pd.Series(dtype=float)), errors="coerce").dropna()
+        summary[code] = {
+            "策略命中": strategies if strategies else "未命中",
+            "策略條件": conditions,
+            "策略防守價": float(stop_values.max()) if not stop_values.empty else np.nan,
+            "RSI": float(rsi_values.iloc[-1]) if not rsi_values.empty else np.nan,
+        }
+    return summary
+
+
+def build_holding_decision(row):
+    score = 50
+    reasons = []
+    actions = []
+
+    pnl_pct = row.get("損益率(%)", np.nan)
+    pct = row.get("今日漲跌幅(%)", np.nan)
+    volume_ratio = row.get("量比20", np.nan)
+    close_position = row.get("日內位置", np.nan)
+    industry_up_ratio = row.get("產業上漲比例", np.nan)
+    industry_avg = row.get("產業平均漲跌幅", np.nan)
+    strategy_hit = row.get("策略命中", "未命中") != "未命中"
+    stop = row.get("有效停損價", np.nan)
+    price = row.get("現價", np.nan)
+
+    if strategy_hit:
+        score += 15
+        reasons.append("策略訊號仍有支撐")
+    if pct == pct:
+        if pct >= 3:
+            score += 8
+            reasons.append("今日股價強於市場")
+        elif pct < -3:
+            score -= 10
+            reasons.append("今日明顯轉弱")
+    if volume_ratio == volume_ratio:
+        if 1.5 <= volume_ratio <= 8:
+            score += 8
+            reasons.append("量能放大但尚可控")
+        elif volume_ratio > 8:
+            score += 2
+            reasons.append("量能過熱需盯回落")
+    if close_position == close_position:
+        if 0.35 <= close_position <= 0.85:
+            score += 10
+            reasons.append("日內位置健康")
+        elif close_position < 0.2:
+            score -= 15
+            reasons.append("早盤拉高後回落")
+        elif close_position > 0.85:
+            score += 4
+            reasons.append("接近日高但追價風險升高")
+    if industry_up_ratio == industry_up_ratio and industry_avg == industry_avg:
+        if industry_up_ratio >= 50 and industry_avg > 0:
+            score += 8
+            reasons.append("族群有擴散")
+        elif industry_up_ratio < 25 and industry_avg < 0:
+            score -= 10
+            reasons.append("族群逆風")
+    if pnl_pct == pnl_pct:
+        if pnl_pct >= 12 and close_position == close_position and close_position < 0.25:
+            score -= 8
+            actions.append("已有獲利且日內轉弱，可考慮分批停利")
+        elif pnl_pct <= -5:
+            score -= 8
+            actions.append("虧損擴大，優先檢查停損紀律")
+    if stop == stop and price == price and stop > 0:
+        if price <= stop:
+            score -= 25
+            actions.append("現價已觸及或跌破停損")
+        elif ((price - stop) / price * 100) < 3:
+            score -= 6
+            actions.append("距離停損很近，避免加碼")
+
+    score = max(0, min(100, int(round(score))))
+    if score >= 75:
+        status = "續抱偏強"
+        default_action = "續抱，等轉強或回測支撐再決定是否加碼"
+    elif score >= 55:
+        status = "中性觀察"
+        default_action = "續抱觀察，照停損與停利線管理"
+    elif score >= 35:
+        status = "偏弱控風險"
+        default_action = "不加碼，若跌破關鍵價位先降部位"
+    else:
+        status = "風險優先"
+        default_action = "以保護本金或獲利為優先"
+
+    if not actions:
+        actions.append(default_action)
+    if not reasons:
+        reasons.append("資料不足，以成本與停損紀律為主")
+    return score, status, "；".join(actions), "、".join(reasons[:4])
+
+
+def build_ai_brief(analysis_df, market_summary, market_path, scan_path):
+    lines = [
+        "請以專業投資人的角度分析以下台股持股，重點放在部位風險、是否續抱、停利/停損與加減碼條件。",
+        "",
+        f"市場監控報表: {os.path.basename(market_path) if market_path else '無'}",
+        f"策略掃描報表: {os.path.basename(scan_path) if scan_path else '無'}",
+    ]
+    if not market_summary.empty:
+        summary_map = dict(zip(market_summary["項目"], market_summary["數值"]))
+        lines.extend(
+            [
+                f"市場更新時間: {summary_map.get('更新時間', '')}",
+                f"全市場上漲比例: {summary_map.get('上漲比例', '')}",
+                f"平均漲跌幅: {summary_map.get('平均漲跌幅', '')}",
+                f"最熱產業: {summary_map.get('最熱產業', '')}",
+                "",
+            ]
+        )
+    for _, row in analysis_df.iterrows():
+        lines.append(
+            "- {code} {name}: 成本 {cost:.2f}, 現價 {price:.2f}, 張數 {lots:.2f}, "
+            "損益 {pnl_pct:.2f}%, 產業 {industry}, 今日 {pct:.2f}%, 量比20 {vr20:.2f}, "
+            "日內位置 {pos:.2f}, 策略 {strategy}, 有效停損 {stop}, 狀態 {status}, 建議 {action}".format(
+                code=row["代號"],
+                name=row["名稱"],
+                cost=row["成本"],
+                price=row["現價"],
+                lots=row["張數"],
+                pnl_pct=row["損益率(%)"],
+                industry=row["產業族群"],
+                pct=row["今日漲跌幅(%)"],
+                vr20=row["量比20"],
+                pos=row["日內位置"],
+                strategy=row["策略命中"],
+                stop=f"{row['有效停損價']:.2f}" if row["有效停損價"] == row["有效停損價"] else "未填",
+                status=row["持股狀態"],
+                action=row["行動建議"],
+            )
+        )
+    return "\n".join(lines)
+
+
 # 側邊欄導覽
 st.sidebar.title("💦 玉米的大噴射台股")
-page = st.sidebar.radio("切換功能", ["📊 歷史報表預覽 (Reports)", "🎯 個股高階圖表分析 (Charts)", "📰 精選動態新聞 (News)"])
+page = st.sidebar.radio(
+    "切換功能",
+    [
+        "📊 歷史報表預覽 (Reports)",
+        "🎯 個股高階圖表分析 (Charts)",
+        "💼 持股可視化分析 (Portfolio)",
+        "📰 精選動態新聞 (News)",
+    ],
+)
 
 if page == "📊 歷史報表預覽 (Reports)":
     st.title(" 歷史選股報表預覽")
@@ -148,6 +415,345 @@ elif page == "🎯 個股高階圖表分析 (Charts)":
                 fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='LightGray')
                 
                 st.plotly_chart(fig, use_container_width=True)
+
+elif page == "💼 持股可視化分析 (Portfolio)":
+    st.title("💼 持股可視化分析")
+    st.write("輸入目前持股，系統會結合最新市場監控、策略掃描與你的成本，整理成部位風險與操作觀察清單。")
+
+    market_files = list_reports(["Reports/市場監控_*.xlsx"])
+    scan_files = list_reports(
+        ["Reports/盤中日報_*.xlsx", "Reports/選股日報_*.xlsx"],
+        exclude_keywords=["策略市場交叉分析"],
+    )
+
+    col_report1, col_report2 = st.columns(2)
+    with col_report1:
+        selected_market_file = st.selectbox(
+            "市場資料來源",
+            market_files,
+            format_func=os.path.basename,
+            index=0 if market_files else None,
+            placeholder="尚無市場監控報表",
+        ) if market_files else None
+    with col_report2:
+        selected_scan_file = st.selectbox(
+            "策略訊號來源",
+            scan_files,
+            format_func=os.path.basename,
+            index=0 if scan_files else None,
+            placeholder="尚無策略掃描報表",
+        ) if scan_files else None
+
+    market_df, industry_df, market_summary = load_market_report(selected_market_file)
+    scan_df = load_scan_report(selected_scan_file)
+    signal_map = summarize_strategy_signals(scan_df)
+
+    if "portfolio_input" not in st.session_state:
+        st.session_state["portfolio_input"] = pd.DataFrame(
+            [
+                {
+                    "代號": "8131",
+                    "名稱": "福懋科",
+                    "成本": 61.0,
+                    "張數": 1.0,
+                    "停損價": 68.0,
+                    "目標價": 75.0,
+                    "備註": "範例，可直接改掉",
+                }
+            ]
+        )
+
+    holdings = st.data_editor(
+        st.session_state["portfolio_input"],
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "代號": st.column_config.TextColumn("代號", width="small"),
+            "名稱": st.column_config.TextColumn("名稱", width="small"),
+            "成本": st.column_config.NumberColumn("成本", min_value=0.0, step=0.1, format="%.2f"),
+            "張數": st.column_config.NumberColumn("張數", min_value=0.0, step=0.1, format="%.2f"),
+            "停損價": st.column_config.NumberColumn("停損價", min_value=0.0, step=0.1, format="%.2f"),
+            "目標價": st.column_config.NumberColumn("目標價", min_value=0.0, step=0.1, format="%.2f"),
+            "備註": st.column_config.TextColumn("備註", width="medium"),
+        },
+    )
+
+    if not market_summary.empty:
+        summary_map = dict(zip(market_summary["項目"], market_summary["數值"]))
+        st.caption(
+            f"市場資料時間：{summary_map.get('更新時間', '未知')} | "
+            f"上漲比例：{summary_map.get('上漲比例', '未知')} | "
+            f"平均漲跌幅：{summary_map.get('平均漲跌幅', '未知')} | "
+            f"最熱產業：{summary_map.get('最熱產業', '未知')}"
+        )
+
+    analysis_records = []
+    missing_codes = []
+    market_by_code = market_df.set_index("代號", drop=False) if not market_df.empty else pd.DataFrame()
+
+    for _, holding in holdings.iterrows():
+        code = normalize_code(holding.get("代號"))
+        if not code:
+            continue
+
+        cost = safe_float(holding.get("成本"), 0.0)
+        lots = safe_float(holding.get("張數"), 0.0)
+        if cost <= 0 or lots <= 0:
+            continue
+
+        user_name = str(holding.get("名稱", "")).strip()
+        user_stop = safe_float(holding.get("停損價"))
+        target_price = safe_float(holding.get("目標價"))
+        note = str(holding.get("備註", "")).strip()
+
+        market_row = market_by_code.loc[code] if not market_by_code.empty and code in market_by_code.index else {}
+        if isinstance(market_row, pd.DataFrame):
+            market_row = market_row.iloc[0]
+
+        quote = {}
+        price = safe_float(market_row.get("現價") if hasattr(market_row, "get") else np.nan)
+        if price != price:
+            quote = fetch_daily_quote(code)
+            price = safe_float(quote.get("price"))
+
+        if price != price:
+            missing_codes.append(code)
+            continue
+
+        signal = signal_map.get(code, {})
+        name = (
+            user_name
+            or str(market_row.get("名稱", "") if hasattr(market_row, "get") else "")
+            or str(signal.get("名稱", ""))
+            or code
+        )
+        industry = str(market_row.get("產業族群", "") if hasattr(market_row, "get") else "")
+
+        pct_change = safe_float(market_row.get("漲跌幅") if hasattr(market_row, "get") else np.nan)
+        if pct_change != pct_change and quote:
+            prev_close = safe_float(quote.get("prev_close"))
+            pct_change = (price - prev_close) / prev_close * 100 if prev_close > 0 else np.nan
+
+        open_price = safe_float(market_row.get("開盤") if hasattr(market_row, "get") else quote.get("open"))
+        high_price = safe_float(market_row.get("最高") if hasattr(market_row, "get") else quote.get("high"))
+        low_price = safe_float(market_row.get("最低") if hasattr(market_row, "get") else quote.get("low"))
+        close_position = safe_float(market_row.get("收盤位置") if hasattr(market_row, "get") else np.nan)
+        if close_position != close_position and high_price > low_price:
+            close_position = (price - low_price) / (high_price - low_price)
+
+        volume_ratio5 = safe_float(market_row.get("量比5") if hasattr(market_row, "get") else np.nan)
+        volume_ratio20 = safe_float(market_row.get("量比20") if hasattr(market_row, "get") else np.nan)
+        turnover = safe_float(market_row.get("成交值(億)") if hasattr(market_row, "get") else np.nan)
+
+        industry_up_ratio = np.nan
+        industry_avg = np.nan
+        industry_heat = np.nan
+        if industry and not industry_df.empty:
+            industry_match = industry_df[industry_df["產業族群"] == industry]
+            if not industry_match.empty:
+                industry_row = industry_match.iloc[0]
+                industry_up_ratio = safe_float(industry_row.get("上漲比例"))
+                industry_avg = safe_float(industry_row.get("平均漲跌幅"))
+                industry_heat = safe_float(industry_row.get("熱度分數"))
+
+        signal_stop = safe_float(signal.get("策略防守價"))
+        effective_stop = user_stop if user_stop == user_stop and user_stop > 0 else signal_stop
+        shares = lots * 1000
+        cost_amount = cost * shares
+        market_value = price * shares
+        pnl = market_value - cost_amount
+        pnl_pct = pnl / cost_amount * 100 if cost_amount > 0 else np.nan
+        distance_stop_pct = (price - effective_stop) / price * 100 if effective_stop == effective_stop and price > 0 else np.nan
+        stop_pnl = (effective_stop - cost) * shares if effective_stop == effective_stop else np.nan
+        distance_target_pct = (target_price - price) / price * 100 if target_price == target_price and target_price > 0 else np.nan
+
+        record = {
+            "代號": code,
+            "名稱": name,
+            "產業族群": industry or "未知",
+            "成本": cost,
+            "張數": lots,
+            "現價": price,
+            "市值": market_value,
+            "成本金額": cost_amount,
+            "未實現損益": pnl,
+            "損益率(%)": pnl_pct,
+            "今日漲跌幅(%)": pct_change,
+            "開盤": open_price,
+            "最高": high_price,
+            "最低": low_price,
+            "成交值(億)": turnover,
+            "量比5": volume_ratio5,
+            "量比20": volume_ratio20,
+            "日內位置": close_position,
+            "產業上漲比例": industry_up_ratio,
+            "產業平均漲跌幅": industry_avg,
+            "產業熱度分數": industry_heat,
+            "策略命中": signal.get("策略命中", "未命中"),
+            "策略條件": signal.get("策略條件", ""),
+            "策略防守價": signal_stop,
+            "使用者停損價": user_stop,
+            "有效停損價": effective_stop,
+            "距停損(%)": distance_stop_pct,
+            "停損後損益": stop_pnl,
+            "目標價": target_price,
+            "距目標(%)": distance_target_pct,
+            "備註": note,
+        }
+        score, status, action, reasons = build_holding_decision(record)
+        record["續抱分數"] = score
+        record["持股狀態"] = status
+        record["行動建議"] = action
+        record["判斷理由"] = reasons
+        analysis_records.append(record)
+
+    if missing_codes:
+        st.warning(f"以下代號暫時抓不到價格資料：{', '.join(missing_codes)}")
+
+    if not analysis_records:
+        st.info("請至少輸入一筆持股：代號、成本與張數都需要大於 0。")
+    else:
+        analysis_df = pd.DataFrame(analysis_records)
+        total_cost = analysis_df["成本金額"].sum()
+        total_value = analysis_df["市值"].sum()
+        total_pnl = analysis_df["未實現損益"].sum()
+        total_return = total_pnl / total_cost * 100 if total_cost > 0 else 0
+        winners = int((analysis_df["未實現損益"] > 0).sum())
+        risk_hits = int((analysis_df["持股狀態"].isin(["偏弱控風險", "風險優先"])).sum())
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("總市值", f"{total_value:,.0f}")
+        c2.metric("未實現損益", f"{total_pnl:,.0f}", f"{total_return:.2f}%")
+        c3.metric("獲利持股", f"{winners}/{len(analysis_df)}")
+        c4.metric("需控風險", f"{risk_hits} 檔")
+
+        chart_col1, chart_col2 = st.columns([1, 1])
+        with chart_col1:
+            alloc_df = analysis_df[analysis_df["市值"] > 0]
+            fig_alloc = go.Figure(
+                data=[
+                    go.Pie(
+                        labels=alloc_df["代號"] + " " + alloc_df["名稱"],
+                        values=alloc_df["市值"],
+                        hole=0.45,
+                    )
+                ]
+            )
+            fig_alloc.update_layout(title="部位配置", height=360, margin=dict(l=0, r=0, t=45, b=0))
+            st.plotly_chart(fig_alloc, use_container_width=True)
+
+        with chart_col2:
+            colors = np.where(analysis_df["未實現損益"] >= 0, "#d62728", "#2ca02c")
+            fig_pnl = go.Figure(
+                data=[
+                    go.Bar(
+                        x=analysis_df["代號"] + " " + analysis_df["名稱"],
+                        y=analysis_df["未實現損益"],
+                        marker_color=colors,
+                    )
+                ]
+            )
+            fig_pnl.update_layout(title="各持股未實現損益", height=360, margin=dict(l=0, r=0, t=45, b=0))
+            st.plotly_chart(fig_pnl, use_container_width=True)
+
+        scatter_size = (analysis_df["市值"] / analysis_df["市值"].max() * 40 + 12).fillna(16)
+        fig_risk = go.Figure(
+            data=[
+                go.Scatter(
+                    x=analysis_df["損益率(%)"],
+                    y=analysis_df["續抱分數"],
+                    mode="markers+text",
+                    text=analysis_df["代號"],
+                    textposition="top center",
+                    marker=dict(
+                        size=scatter_size,
+                        color=analysis_df["今日漲跌幅(%)"],
+                        colorscale="RdYlGn",
+                        showscale=True,
+                        colorbar=dict(title="今日%"),
+                        line=dict(width=1, color="#333"),
+                    ),
+                    hovertemplate="%{text}<br>損益=%{x:.2f}%<br>續抱分數=%{y}<extra></extra>",
+                )
+            ]
+        )
+        fig_risk.update_layout(
+            title="損益率 vs 續抱分數",
+            xaxis_title="損益率 (%)",
+            yaxis_title="續抱分數",
+            height=420,
+            margin=dict(l=0, r=0, t=45, b=0),
+        )
+        st.plotly_chart(fig_risk, use_container_width=True)
+
+        st.subheader("📋 持股診斷表")
+        display_cols = [
+            "代號",
+            "名稱",
+            "產業族群",
+            "成本",
+            "現價",
+            "張數",
+            "未實現損益",
+            "損益率(%)",
+            "今日漲跌幅(%)",
+            "量比20",
+            "日內位置",
+            "策略命中",
+            "有效停損價",
+            "距停損(%)",
+            "目標價",
+            "距目標(%)",
+            "續抱分數",
+            "持股狀態",
+            "行動建議",
+            "判斷理由",
+        ]
+        st.dataframe(
+            analysis_df[display_cols].style.format(
+                {
+                    "成本": "{:.2f}",
+                    "現價": "{:.2f}",
+                    "張數": "{:.2f}",
+                    "未實現損益": "{:,.0f}",
+                    "損益率(%)": "{:.2f}",
+                    "今日漲跌幅(%)": "{:.2f}",
+                    "量比20": "{:.2f}",
+                    "日內位置": "{:.2f}",
+                    "有效停損價": "{:.2f}",
+                    "距停損(%)": "{:.2f}",
+                    "目標價": "{:.2f}",
+                    "距目標(%)": "{:.2f}",
+                }
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        ai_brief = build_ai_brief(analysis_df, market_summary, selected_market_file, selected_scan_file)
+        with st.expander("🤖 給 AI / Codex 的持股分析摘要", expanded=False):
+            st.text_area("分析摘要", value=ai_brief, height=300)
+            st.download_button(
+                "下載持股分析 CSV",
+                data=analysis_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name="portfolio_analysis.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+        with st.expander("📰 近期新聞快查", expanded=False):
+            if st.button("抓取目前持股近期新聞", use_container_width=True):
+                from llm_agent import fetch_google_news
+
+                for _, row in analysis_df.iterrows():
+                    st.markdown(f"**{row['名稱']} ({row['代號']})**")
+                    news_items = fetch_google_news(f"{row['代號']} {row['名稱']}", limit=3)
+                    if news_items:
+                        for item in news_items:
+                            st.markdown(item)
+                    else:
+                        st.write("近期無明顯新聞。")
 
 elif page == "📰 精選動態新聞 (News)":
     st.title("📰 精選動態新聞")
