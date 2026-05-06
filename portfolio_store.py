@@ -37,6 +37,25 @@ def build_manual_owner_key(identifier, access_code):
     return f"manual::{identifier}::{access_code}", identifier
 
 
+def get_owner_label_from_key(owner_key):
+    key = str(owner_key or "").strip()
+    if key.startswith("manual::"):
+        parts = key.split("::", 2)
+        return parts[1] if len(parts) >= 2 else ""
+    if key.startswith("oidc::"):
+        return key.removeprefix("oidc::").strip().lower()
+    return ""
+
+
+def get_owner_type_from_key(owner_key):
+    key = str(owner_key or "").strip()
+    if key.startswith("manual::"):
+        return "manual"
+    if key.startswith("oidc::"):
+        return "oidc"
+    return "unknown"
+
+
 def _now_iso():
     return dt.datetime.now(TAIPEI_TZ).isoformat(timespec="seconds")
 
@@ -48,6 +67,18 @@ def _safe_float(value, default=None):
         return float(value)
     except Exception:
         return default
+
+
+def _hash_text(value):
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def _split_secret_values(value):
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip().lower() for item in value if str(item).strip()]
+    return [item.strip().lower() for item in str(value).replace(";", ",").split(",") if item.strip()]
 
 
 def _secret_section(secrets, name):
@@ -95,6 +126,46 @@ def get_supabase_config(secrets):
         or connection.get("SUPABASE_KEY")
     )
     return {"url": url, "key": key}
+
+
+def get_admin_config(secrets):
+    direct = _secret_section(secrets, "admin")
+    return {
+        "emails": _split_secret_values(direct.get("emails") or direct.get("email")),
+        "access_code": str(direct.get("access_code") or "").strip(),
+        "access_code_sha256": str(
+            direct.get("access_code_sha256") or direct.get("access_code_hash") or ""
+        ).strip().lower(),
+    }
+
+
+def verify_admin_access(identifier="", access_code="", login_key="", secrets=None):
+    config = get_admin_config(secrets if secrets is not None else {})
+    configured = bool(config["emails"] or config["access_code"] or config["access_code_sha256"])
+    if not configured:
+        return False, "尚未設定 [admin] Secrets。"
+
+    login_email = str(login_key or "").strip().lower()
+    if login_email and login_email in config["emails"]:
+        return True, login_email
+
+    identifier = str(identifier or "").strip().lower()
+    access_code = str(access_code or "").strip()
+    if not identifier or not access_code:
+        return False, "請輸入管理員 Email 與管理員代碼。"
+
+    if config["emails"] and identifier not in config["emails"]:
+        return False, "這個 Email 不在管理員名單。"
+
+    code_matches = False
+    if config["access_code"]:
+        code_matches = access_code == config["access_code"]
+    if config["access_code_sha256"]:
+        code_matches = code_matches or _hash_text(access_code) == config["access_code_sha256"]
+
+    if not code_matches:
+        return False, "管理員代碼不正確。"
+    return True, identifier
 
 
 def _get_supabase_client(secrets):
@@ -161,8 +232,8 @@ def _records_to_holdings(records):
     return pd.DataFrame(rows, columns=PORTFOLIO_INPUT_COLUMNS)
 
 
-def _get_local_connection(db_path=LOCAL_PORTFOLIO_DB):
-    db_path = Path(db_path)
+def _get_local_connection(db_path=None):
+    db_path = Path(db_path or LOCAL_PORTFOLIO_DB)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -170,6 +241,16 @@ def _get_local_connection(db_path=LOCAL_PORTFOLIO_DB):
 
 
 def _init_local_db(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS portfolio_owners (
+            owner_id TEXT PRIMARY KEY,
+            owner_label TEXT,
+            owner_type TEXT,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS portfolio_holdings (
@@ -212,6 +293,35 @@ def _init_local_db(conn):
         """
     )
     conn.commit()
+
+
+def _record_owner_supabase(client, owner_id, owner_label, owner_type, updated_at):
+    try:
+        client.table("portfolio_owners").upsert(
+            {
+                "owner_id": owner_id,
+                "owner_label": owner_label,
+                "owner_type": owner_type,
+                "updated_at": updated_at,
+            },
+            on_conflict="owner_id",
+        ).execute()
+    except Exception:
+        pass
+
+
+def _record_owner_local(conn, owner_id, owner_label, owner_type, updated_at):
+    conn.execute(
+        """
+        INSERT INTO portfolio_owners (owner_id, owner_label, owner_type, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(owner_id) DO UPDATE SET
+            owner_label = excluded.owner_label,
+            owner_type = excluded.owner_type,
+            updated_at = excluded.updated_at
+        """,
+        (owner_id, owner_label, owner_type, updated_at),
+    )
 
 
 def load_holdings(owner_key, secrets=None):
@@ -263,6 +373,8 @@ def save_holdings(owner_key, holdings_df, secrets=None):
         raise ValueError("沒有可儲存的持股，請至少輸入代號、成本與股數")
 
     updated_at = _now_iso()
+    owner_label = get_owner_label_from_key(owner_key)
+    owner_type = get_owner_type_from_key(owner_key)
     records = []
     for _, row in holdings.iterrows():
         records.append(
@@ -281,12 +393,14 @@ def save_holdings(owner_key, holdings_df, secrets=None):
 
     client, _ = _get_supabase_client(secrets if secrets is not None else {})
     if client:
+        _record_owner_supabase(client, owner_id, owner_label, owner_type, updated_at)
         client.table("portfolio_holdings").delete().eq("owner_id", owner_id).execute()
         client.table("portfolio_holdings").insert(records).execute()
         return {"backend": "supabase", "count": len(records), "updated_at": updated_at}
 
     with _get_local_connection() as conn:
         _init_local_db(conn)
+        _record_owner_local(conn, owner_id, owner_label, owner_type, updated_at)
         conn.execute("DELETE FROM portfolio_holdings WHERE owner_id = ?", (owner_id,))
         conn.executemany(
             """
@@ -310,6 +424,8 @@ def save_portfolio_snapshot(owner_key, analysis_df, market_report="", scan_repor
         raise ValueError("沒有可寫入快照的持股分析")
 
     snapshot_at = _now_iso()
+    owner_label = get_owner_label_from_key(owner_key)
+    owner_type = get_owner_type_from_key(owner_key)
     trade_date = dt.datetime.now(TAIPEI_TZ).date().isoformat()
     records = []
     for _, row in analysis_df.iterrows():
@@ -338,11 +454,13 @@ def save_portfolio_snapshot(owner_key, analysis_df, market_report="", scan_repor
 
     client, _ = _get_supabase_client(secrets if secrets is not None else {})
     if client:
+        _record_owner_supabase(client, owner_id, owner_label, owner_type, snapshot_at)
         client.table("portfolio_snapshots").upsert(records, on_conflict="owner_id,trade_date,code").execute()
         return {"backend": "supabase", "count": len(records), "snapshot_at": snapshot_at}
 
     with _get_local_connection() as conn:
         _init_local_db(conn)
+        _record_owner_local(conn, owner_id, owner_label, owner_type, snapshot_at)
         conn.executemany(
             """
             INSERT INTO portfolio_snapshots (
@@ -375,3 +493,94 @@ def save_portfolio_snapshot(owner_key, analysis_df, market_report="", scan_repor
         )
         conn.commit()
     return {"backend": "local", "count": len(records), "snapshot_at": snapshot_at}
+
+
+def _records_to_admin_holdings(records, owners_by_id=None):
+    owners_by_id = owners_by_id or {}
+    rows = []
+    for record in records or []:
+        owner_id = str(record.get("owner_id") or "")
+        owner = owners_by_id.get(owner_id, {})
+        shares = _safe_float(record.get("shares"), 0.0) or 0.0
+        cost = _safe_float(record.get("cost"), 0.0) or 0.0
+        rows.append(
+            {
+                "倉庫": owner.get("owner_label") or "未知",
+                "倉庫類型": owner.get("owner_type") or "",
+                "倉庫ID": owner_id[:12],
+                "代號": normalize_code(record.get("code")),
+                "成本": cost,
+                "股數": shares,
+                "成本金額": cost * shares,
+                "停損價": _safe_float(record.get("stop_price"), 0.0) or 0.0,
+                "目標價": _safe_float(record.get("target_price"), 0.0) or 0.0,
+                "備註": record.get("note") or "",
+                "更新時間": record.get("updated_at") or "",
+            }
+        )
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "倉庫",
+            "倉庫類型",
+            "倉庫ID",
+            "代號",
+            "成本",
+            "股數",
+            "成本金額",
+            "停損價",
+            "目標價",
+            "備註",
+            "更新時間",
+        ],
+    )
+
+
+def list_all_holdings(secrets=None):
+    client, _ = _get_supabase_client(secrets if secrets is not None else {})
+    if client:
+        owners_by_id = {}
+        try:
+            owners_response = client.table("portfolio_owners").select("*").execute()
+            owners_by_id = {
+                row.get("owner_id"): row for row in (getattr(owners_response, "data", []) or [])
+            }
+        except Exception:
+            owners_by_id = {}
+
+        try:
+            holdings_response = (
+                client.table("portfolio_holdings")
+                .select("owner_id,code,cost,shares,stop_price,target_price,note,updated_at")
+                .order("owner_id")
+                .order("code")
+                .execute()
+            )
+        except Exception as exc:
+            return pd.DataFrame(), {"backend": "supabase", "count": 0, "error": str(exc)}
+        data = _records_to_admin_holdings(getattr(holdings_response, "data", []) or [], owners_by_id)
+        return data, {"backend": "supabase", "count": len(data)}
+
+    with _get_local_connection() as conn:
+        _init_local_db(conn)
+        rows = conn.execute(
+            """
+            SELECT
+                h.owner_id, h.code, h.cost, h.shares, h.stop_price, h.target_price,
+                h.note, h.updated_at, o.owner_label, o.owner_type
+            FROM portfolio_holdings h
+            LEFT JOIN portfolio_owners o ON o.owner_id = h.owner_id
+            ORDER BY h.owner_id, h.code
+            """
+        ).fetchall()
+    records = []
+    owners_by_id = {}
+    for row in rows:
+        record = dict(row)
+        records.append(record)
+        owners_by_id[record["owner_id"]] = {
+            "owner_label": record.get("owner_label"),
+            "owner_type": record.get("owner_type"),
+        }
+    data = _records_to_admin_holdings(records, owners_by_id)
+    return data, {"backend": "local", "count": len(data)}

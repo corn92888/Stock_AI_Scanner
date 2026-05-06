@@ -9,7 +9,7 @@
 * **🗃️ 累積選股訊號 (SQLite)**：每次掃描會同步寫入 `data/stock_scanner.db`，保留日後回測所需的原始訊號。
 * **📱 Telegram 自動推播**：執行完畢後自動將挑出的標的傳送至指定的 Telegram 群組或對話。
 * **🖥 視覺化戰情室 (Web UI)**：提供基於 Streamlit 開發的網頁 Dashboard，可輸入股票代號即時驗證技術指標 (如 SuperTrend 三線、布林通道等)，也可輸入目前持股，結合最新市場監控與策略訊號做部位分析。
-* **☁️ 雲端股票倉**：持股頁可接 Supabase/Postgres，讓每個使用者用自己的 Email/名稱 + 私密倉庫代碼開啟獨立股票倉，並寫入每日持股快照，供之後績效追蹤與回測。
+* **☁️ 雲端股票倉**：持股頁可接 Supabase/Postgres，讓每個使用者用自己的 Email/名稱 + 私密倉庫代碼開啟獨立股票倉，並寫入每日持股快照；也可設定超級管理員總覽所有股票倉，供之後績效追蹤與回測。
 
 ## 🎯 內建三大策略
 
@@ -47,7 +47,24 @@
    ```
    若尚未設定 Supabase，Portfolio 頁會自動退回本機 `data/portfolio_holdings.db`，重新整理本機頁面仍可載回，但無法跨主機多人共用。
 
-4. **設定登入 (公開部署建議):**
+4. **設定超級管理員 (可選):**
+   管理員憑證只放在 `.streamlit/secrets.toml` 或 Streamlit Cloud Secrets，不要提交到 GitHub。設定後 Portfolio 頁會出現「超級管理員總覽」，可查看所有使用者儲存的股票倉。
+   ```toml
+   [admin]
+   emails = "your-admin@example.com"
+   access_code_sha256 = "your-sha256-hash"
+   ```
+   建議使用 hash 版本保存管理員代碼：
+   ```bash
+   python3 - <<'PY'
+   import getpass, hashlib
+   code = getpass.getpass("Admin code: ")
+   print(hashlib.sha256(code.encode("utf-8")).hexdigest())
+   PY
+   ```
+   若只是本機測試，也可用 `access_code = "your-admin-code"`；正式部署建議改成 `access_code_sha256`。如果管理員 email 同時也是 OIDC 登入 email，系統會自動開啟管理員模式；未設定登入時則用管理員 Email + 管理員代碼開啟。
+
+5. **設定登入 (公開部署建議):**
    Streamlit 支援 OIDC 登入。設定完成後，Portfolio 頁會自動用登入者 email 區分股票倉。
    ```toml
    [auth]
@@ -122,7 +139,7 @@
   Dashboard 目前包含四個主要頁面：
   - 歷史報表預覽：檢視每日/盤中掃描產出的 Excel。
   - 個股高階圖表分析：輸入代號查看策略診斷與技術圖。
-  - 持股可視化分析：每個使用者可開啟自己的股票倉，輸入代號、成本、股數、停損/目標價，系統會自動帶入股票名稱，結合最新市場監控與策略訊號檢查損益、風險、續抱分數與 AI 分析摘要；成本可輸入到小數點後三位，並可儲存到 Supabase 雲端股票倉與每日持股快照。
+  - 持股可視化分析：每個使用者可開啟自己的股票倉，輸入代號、成本、股數、停損/目標價，系統會自動帶入股票名稱，結合最新市場監控與策略訊號檢查損益、風險、續抱分數與 AI 分析摘要；成本可輸入到小數點後三位，並可儲存到 Supabase 雲端股票倉與每日持股快照。若設定 `[admin]` Secrets，超級管理員可在同頁查看所有股票倉。
   - 精選動態新聞：依最新選股名單快速抓取近期新聞。
 
 ## ⚠️ 免責聲明

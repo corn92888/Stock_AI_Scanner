@@ -12,9 +12,11 @@ from logic import get_stock_data, calculate_indicators, check_trend_strict, chec
 from portfolio_store import (
     build_manual_owner_key,
     get_portfolio_backend_status,
+    list_all_holdings,
     load_holdings,
     save_holdings,
     save_portfolio_snapshot,
+    verify_admin_access,
 )
 
 st.set_page_config(page_title="玉米的大噴射台股 💦", layout="wide", page_icon="💦")
@@ -600,6 +602,103 @@ elif page == "💼 持股可視化分析 (Portfolio)":
                 st.session_state["portfolio_editor_version"] = st.session_state.get("portfolio_editor_version", 0) + 1
                 st.success(f"已從 {load_info['backend']} 載入 {load_info['count']} 筆持股。")
                 st.rerun()
+
+    auto_admin_ok, auto_admin_label = verify_admin_access(login_key=login_key, secrets=st.secrets)
+    if auto_admin_ok and not st.session_state.get("portfolio_admin_auto_paused", False):
+        st.session_state["portfolio_admin_ok"] = True
+        st.session_state["portfolio_admin_label"] = auto_admin_label
+
+    with st.expander("🛡️ 超級管理員總覽", expanded=st.session_state.get("portfolio_admin_ok", False)):
+        st.caption("管理員帳號需在 Secrets 的 [admin] 區塊設定；一般使用者不會看到其他人的股票倉。")
+
+        if not st.session_state.get("portfolio_admin_ok", False):
+            admin_col1, admin_col2 = st.columns(2)
+            with admin_col1:
+                admin_identifier = st.text_input(
+                    "管理員 Email",
+                    value=st.session_state.get("portfolio_admin_identifier", ""),
+                    key="portfolio_admin_identifier_input",
+                )
+            with admin_col2:
+                admin_access_code = st.text_input(
+                    "管理員代碼",
+                    type="password",
+                    key="portfolio_admin_access_code_input",
+                )
+
+            if st.button("開啟管理員總覽", use_container_width=True, key="portfolio_admin_login"):
+                ok, label_or_error = verify_admin_access(
+                    admin_identifier,
+                    admin_access_code,
+                    login_key,
+                    st.secrets,
+                )
+                if ok:
+                    st.session_state["portfolio_admin_ok"] = True
+                    st.session_state["portfolio_admin_label"] = label_or_error
+                    st.session_state["portfolio_admin_identifier"] = admin_identifier.strip()
+                    st.session_state["portfolio_admin_auto_paused"] = False
+                    st.rerun()
+                else:
+                    st.error(label_or_error)
+        else:
+            admin_label = st.session_state.get("portfolio_admin_label", "admin")
+            admin_top_col1, admin_top_col2 = st.columns([2, 1])
+            with admin_top_col1:
+                st.success(f"管理員模式已開啟：{admin_label}")
+            with admin_top_col2:
+                if st.button("關閉管理員模式", use_container_width=True, key="portfolio_admin_logout"):
+                    st.session_state["portfolio_admin_ok"] = False
+                    st.session_state["portfolio_admin_auto_paused"] = True
+                    st.session_state.pop("portfolio_admin_label", None)
+                    st.rerun()
+
+            admin_df, admin_info = list_all_holdings(st.secrets)
+            if admin_info.get("error"):
+                st.error(f"{admin_info['backend']} 管理員總覽讀取失敗：{admin_info['error']}")
+            elif admin_df.empty:
+                st.info("目前還沒有任何使用者儲存持股。")
+            else:
+                warehouse_count = int(admin_df["倉庫ID"].nunique())
+                total_cost_basis = float(admin_df["成本金額"].sum())
+                latest_update = str(admin_df["更新時間"].max())
+                metric_col1, metric_col2, metric_col3 = st.columns(3)
+                metric_col1.metric("股票倉數", f"{warehouse_count}")
+                metric_col2.metric("持股筆數", f"{len(admin_df)}")
+                metric_col3.metric("總成本金額", f"{total_cost_basis:,.0f}")
+                st.caption(f"資料來源：{admin_info['backend']} | 最近更新：{latest_update}")
+
+                warehouse_summary = (
+                    admin_df.groupby(["倉庫", "倉庫類型", "倉庫ID"], dropna=False)
+                    .agg(持股檔數=("代號", "count"), 成本總額=("成本金額", "sum"), 最後更新=("更新時間", "max"))
+                    .reset_index()
+                    .sort_values(["最後更新", "成本總額"], ascending=[False, False])
+                )
+                st.dataframe(
+                    warehouse_summary.style.format({"成本總額": "{:,.0f}"}),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.dataframe(
+                    admin_df.style.format(
+                        {
+                            "成本": "{:.3f}",
+                            "股數": "{:,.0f}",
+                            "成本金額": "{:,.0f}",
+                            "停損價": "{:.2f}",
+                            "目標價": "{:.2f}",
+                        }
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.download_button(
+                    "下載全部持股 CSV",
+                    data=admin_df.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="all_portfolio_holdings.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
 
     owner_key = st.session_state.get("portfolio_owner_key", "").strip()
     owner_label = st.session_state.get("portfolio_owner_label", "").strip()

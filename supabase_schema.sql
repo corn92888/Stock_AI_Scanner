@@ -1,6 +1,13 @@
 -- Supabase SQL Editor: run this once before enabling cloud portfolio storage.
 -- The app stores a hashed owner_id instead of the raw email / portfolio key.
 
+CREATE TABLE IF NOT EXISTS public.portfolio_owners (
+    owner_id text PRIMARY KEY,
+    owner_label text,
+    owner_type text,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS public.portfolio_holdings (
     owner_id text NOT NULL,
     code text NOT NULL,
