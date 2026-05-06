@@ -10,6 +10,7 @@ import twstock
 import yfinance as yf
 from logic import get_stock_data, calculate_indicators, check_trend_strict, check_reversal_strict, check_wave_strict
 from portfolio_store import (
+    build_manual_owner_key,
     get_portfolio_backend_status,
     load_holdings,
     save_holdings,
@@ -523,25 +524,44 @@ elif page == "💼 持股可視化分析 (Portfolio)":
         st.caption(store_status["message"])
 
         if login_key:
-            owner_key = login_key
+            owner_key = f"oidc::{login_key}"
+            owner_label = login_label
             st.session_state["portfolio_owner_key"] = owner_key
-            st.write(f"登入身份：{login_label}")
+            st.session_state["portfolio_owner_label"] = owner_label
+            st.write(f"登入身份：{owner_label}")
             if hasattr(st, "logout") and st.button("登出", key="portfolio_logout"):
                 st.logout()
         else:
-            owner_key = st.text_input(
-                "股票倉識別碼 / Email",
-                value=st.session_state.get("portfolio_owner_key", "demo"),
-                help="正式多人部署建議設定 Streamlit OIDC 登入；還沒設定前，這個識別碼會用來區分不同股票倉。",
-                key="portfolio_owner_key_input",
+            st.caption("未啟用正式登入時，請用 Email/名稱 + 私密倉庫代碼開啟自己的股票倉。不同組合會進入不同倉庫。")
+            owner_col1, owner_col2 = st.columns(2)
+            with owner_col1:
+                manual_identifier = st.text_input(
+                    "Email / 股票倉名稱",
+                    value=st.session_state.get("portfolio_manual_identifier", ""),
+                    help="用來辨識你的股票倉；建議填 email。",
+                    key="portfolio_manual_identifier_input",
+                )
+            with owner_col2:
+                manual_access_code = st.text_input(
+                    "私密倉庫代碼",
+                    value=st.session_state.get("portfolio_manual_access_code", ""),
+                    type="password",
+                    help="類似簡易密碼；請記住，忘記後無法找回同一個倉庫。",
+                    key="portfolio_manual_access_code_input",
+                )
+            st.session_state["portfolio_manual_identifier"] = manual_identifier.strip()
+            st.session_state["portfolio_manual_access_code"] = manual_access_code.strip()
+            owner_key, owner_label = build_manual_owner_key(
+                st.session_state["portfolio_manual_identifier"],
+                st.session_state["portfolio_manual_access_code"],
             )
-            owner_key = owner_key.strip()
             st.session_state["portfolio_owner_key"] = owner_key
+            st.session_state["portfolio_owner_label"] = owner_label
             if streamlit_auth_configured() and hasattr(st, "login"):
                 if st.button("使用登入系統", key="portfolio_login"):
                     st.login()
             else:
-                st.caption("尚未設定 Streamlit 登入；公開部署前請在 secrets 加上 [auth]，避免所有訪客共用 demo 股票倉。")
+                st.caption("公開部署後建議設定 Streamlit OIDC 登入；目前這組私密代碼只用來區分倉庫，不等於完整帳號系統。")
 
         if st.button("從儲存區載入股票倉", use_container_width=True, disabled=not owner_key):
             loaded_df, load_info = load_holdings(owner_key, st.secrets)
@@ -555,8 +575,14 @@ elif page == "💼 持股可視化分析 (Portfolio)":
                 st.rerun()
 
     owner_key = st.session_state.get("portfolio_owner_key", "").strip()
+    owner_label = st.session_state.get("portfolio_owner_label", "").strip()
     if "portfolio_editor_version" not in st.session_state:
         st.session_state["portfolio_editor_version"] = 0
+
+    if owner_key:
+        st.caption(f"目前開啟股票倉：{owner_label or '已登入使用者'}")
+    else:
+        st.info("請先輸入 Email/股票倉名稱與私密倉庫代碼，才能載入或儲存自己的股票倉。")
 
     if "portfolio_input" not in st.session_state:
         loaded_df, load_info = load_holdings(owner_key, st.secrets) if owner_key else (pd.DataFrame(), {"count": 0})

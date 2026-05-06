@@ -29,6 +29,14 @@ def make_owner_id(owner_key):
     return hashlib.sha256(key.encode("utf-8")).hexdigest() if key else ""
 
 
+def build_manual_owner_key(identifier, access_code):
+    identifier = str(identifier or "").strip().lower()
+    access_code = str(access_code or "").strip()
+    if not identifier or not access_code:
+        return "", ""
+    return f"manual::{identifier}::{access_code}", identifier
+
+
 def _now_iso():
     return dt.datetime.now(TAIPEI_TZ).isoformat(timespec="seconds")
 
