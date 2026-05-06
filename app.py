@@ -6,12 +6,14 @@ import numpy as np
 import os
 import glob
 import time
+import twstock
 import yfinance as yf
 from logic import get_stock_data, calculate_indicators, check_trend_strict, check_reversal_strict, check_wave_strict
 
 st.set_page_config(page_title="玉米的大噴射台股 💦", layout="wide", page_icon="💦")
 
 STRATEGY_SHEET_NAMES = ["順勢突破", "低檔爆量", "波段蓄勢"]
+PORTFOLIO_INPUT_COLUMNS = ["代號", "成本", "股數", "停損價", "目標價", "備註"]
 
 
 def normalize_code(value):
@@ -115,6 +117,18 @@ def fetch_daily_quote(code):
     return {}
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_stock_name_from_code(code):
+    code = normalize_code(code)
+    try:
+        stock = twstock.codes.get(code)
+        if stock and stock.name:
+            return stock.name
+    except Exception:
+        pass
+    return ""
+
+
 def safe_float(value, default=np.nan):
     try:
         if value is None or value == "":
@@ -134,12 +148,38 @@ def summarize_strategy_signals(scan_df):
         stop_values = pd.to_numeric(group.get("防守價", pd.Series(dtype=float)), errors="coerce").dropna()
         rsi_values = pd.to_numeric(group.get("RSI", pd.Series(dtype=float)), errors="coerce").dropna()
         summary[code] = {
+            "名稱": str(group.get("名稱", pd.Series(dtype=str)).dropna().astype(str).iloc[0])
+            if "名稱" in group.columns and not group["名稱"].dropna().empty
+            else "",
             "策略命中": strategies if strategies else "未命中",
             "策略條件": conditions,
             "策略防守價": float(stop_values.max()) if not stop_values.empty else np.nan,
             "RSI": float(rsi_values.iloc[-1]) if not rsi_values.empty else np.nan,
         }
     return summary
+
+
+def normalize_portfolio_input(df):
+    if df is None or df.empty:
+        return pd.DataFrame(columns=PORTFOLIO_INPUT_COLUMNS)
+
+    data = df.copy()
+    if "股數" not in data.columns:
+        if "張數" in data.columns:
+            data["股數"] = pd.to_numeric(data["張數"], errors="coerce").fillna(0) * 1000
+        else:
+            data["股數"] = 0
+
+    for col in PORTFOLIO_INPUT_COLUMNS:
+        if col not in data.columns:
+            data[col] = "" if col in ["代號", "備註"] else 0.0
+
+    data["代號"] = data["代號"].apply(normalize_code)
+    for col in ["成本", "股數", "停損價", "目標價"]:
+        data[col] = pd.to_numeric(data[col], errors="coerce").fillna(0.0)
+    data["備註"] = data["備註"].fillna("").astype(str)
+
+    return data[PORTFOLIO_INPUT_COLUMNS]
 
 
 def build_holding_decision(row):
@@ -247,14 +287,14 @@ def build_ai_brief(analysis_df, market_summary, market_path, scan_path):
         )
     for _, row in analysis_df.iterrows():
         lines.append(
-            "- {code} {name}: 成本 {cost:.2f}, 現價 {price:.2f}, 張數 {lots:.2f}, "
+            "- {code} {name}: 成本 {cost:.3f}, 現價 {price:.2f}, 股數 {shares:.0f}, "
             "損益 {pnl_pct:.2f}%, 產業 {industry}, 今日 {pct:.2f}%, 量比20 {vr20:.2f}, "
             "日內位置 {pos:.2f}, 策略 {strategy}, 有效停損 {stop}, 狀態 {status}, 建議 {action}".format(
                 code=row["代號"],
                 name=row["名稱"],
                 cost=row["成本"],
                 price=row["現價"],
-                lots=row["張數"],
+                shares=row["股數"],
                 pnl_pct=row["損益率(%)"],
                 industry=row["產業族群"],
                 pct=row["今日漲跌幅(%)"],
@@ -418,7 +458,7 @@ elif page == "🎯 個股高階圖表分析 (Charts)":
 
 elif page == "💼 持股可視化分析 (Portfolio)":
     st.title("💼 持股可視化分析")
-    st.write("輸入目前持股，系統會結合最新市場監控、策略掃描與你的成本，整理成部位風險與操作觀察清單。")
+    st.write("輸入股票代號、成本與股數，系統會自動帶入股票名稱，並結合最新市場監控與策略掃描整理部位風險。")
 
     market_files = list_reports(["Reports/市場監控_*.xlsx"])
     scan_files = list_reports(
@@ -453,31 +493,32 @@ elif page == "💼 持股可視化分析 (Portfolio)":
             [
                 {
                     "代號": "8131",
-                    "名稱": "福懋科",
-                    "成本": 61.0,
-                    "張數": 1.0,
+                    "成本": 61.000,
+                    "股數": 1000,
                     "停損價": 68.0,
                     "目標價": 75.0,
-                    "備註": "範例，可直接改掉",
+                    "備註": "範例，可直接改掉；名稱會自動帶入",
                 }
             ]
         )
+    st.session_state["portfolio_input"] = normalize_portfolio_input(st.session_state["portfolio_input"])
 
     holdings = st.data_editor(
         st.session_state["portfolio_input"],
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
+        column_order=PORTFOLIO_INPUT_COLUMNS,
         column_config={
             "代號": st.column_config.TextColumn("代號", width="small"),
-            "名稱": st.column_config.TextColumn("名稱", width="small"),
-            "成本": st.column_config.NumberColumn("成本", min_value=0.0, step=0.1, format="%.2f"),
-            "張數": st.column_config.NumberColumn("張數", min_value=0.0, step=0.1, format="%.2f"),
+            "成本": st.column_config.NumberColumn("成本", min_value=0.0, step=0.001, format="%.3f"),
+            "股數": st.column_config.NumberColumn("股數", min_value=0.0, step=1.0, format="%.0f"),
             "停損價": st.column_config.NumberColumn("停損價", min_value=0.0, step=0.1, format="%.2f"),
             "目標價": st.column_config.NumberColumn("目標價", min_value=0.0, step=0.1, format="%.2f"),
             "備註": st.column_config.TextColumn("備註", width="medium"),
         },
     )
+    holdings = normalize_portfolio_input(holdings)
 
     if not market_summary.empty:
         summary_map = dict(zip(market_summary["項目"], market_summary["數值"]))
@@ -498,11 +539,10 @@ elif page == "💼 持股可視化分析 (Portfolio)":
             continue
 
         cost = safe_float(holding.get("成本"), 0.0)
-        lots = safe_float(holding.get("張數"), 0.0)
-        if cost <= 0 or lots <= 0:
+        shares = safe_float(holding.get("股數"), 0.0)
+        if cost <= 0 or shares <= 0:
             continue
 
-        user_name = str(holding.get("名稱", "")).strip()
         user_stop = safe_float(holding.get("停損價"))
         target_price = safe_float(holding.get("目標價"))
         note = str(holding.get("備註", "")).strip()
@@ -523,9 +563,9 @@ elif page == "💼 持股可視化分析 (Portfolio)":
 
         signal = signal_map.get(code, {})
         name = (
-            user_name
-            or str(market_row.get("名稱", "") if hasattr(market_row, "get") else "")
+            str(market_row.get("名稱", "") if hasattr(market_row, "get") else "")
             or str(signal.get("名稱", ""))
+            or get_stock_name_from_code(code)
             or code
         )
         industry = str(market_row.get("產業族群", "") if hasattr(market_row, "get") else "")
@@ -559,7 +599,6 @@ elif page == "💼 持股可視化分析 (Portfolio)":
 
         signal_stop = safe_float(signal.get("策略防守價"))
         effective_stop = user_stop if user_stop == user_stop and user_stop > 0 else signal_stop
-        shares = lots * 1000
         cost_amount = cost * shares
         market_value = price * shares
         pnl = market_value - cost_amount
@@ -573,7 +612,7 @@ elif page == "💼 持股可視化分析 (Portfolio)":
             "名稱": name,
             "產業族群": industry or "未知",
             "成本": cost,
-            "張數": lots,
+            "股數": shares,
             "現價": price,
             "市值": market_value,
             "成本金額": cost_amount,
@@ -612,7 +651,7 @@ elif page == "💼 持股可視化分析 (Portfolio)":
         st.warning(f"以下代號暫時抓不到價格資料：{', '.join(missing_codes)}")
 
     if not analysis_records:
-        st.info("請至少輸入一筆持股：代號、成本與張數都需要大於 0。")
+        st.info("請至少輸入一筆持股：代號、成本與股數都需要大於 0。")
     else:
         analysis_df = pd.DataFrame(analysis_records)
         total_cost = analysis_df["成本金額"].sum()
@@ -694,7 +733,7 @@ elif page == "💼 持股可視化分析 (Portfolio)":
             "產業族群",
             "成本",
             "現價",
-            "張數",
+            "股數",
             "未實現損益",
             "損益率(%)",
             "今日漲跌幅(%)",
@@ -713,9 +752,9 @@ elif page == "💼 持股可視化分析 (Portfolio)":
         st.dataframe(
             analysis_df[display_cols].style.format(
                 {
-                    "成本": "{:.2f}",
+                    "成本": "{:.3f}",
                     "現價": "{:.2f}",
-                    "張數": "{:.2f}",
+                    "股數": "{:,.0f}",
                     "未實現損益": "{:,.0f}",
                     "損益率(%)": "{:.2f}",
                     "今日漲跌幅(%)": "{:.2f}",
