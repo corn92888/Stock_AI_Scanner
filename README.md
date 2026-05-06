@@ -57,7 +57,7 @@
    client_secret = "your-oauth-client-secret"
    server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
    ```
-   未設定登入時，也可以先用「Email / 股票倉名稱」加「私密倉庫代碼」手動區分不同股票倉；同一組資料會開啟同一個倉庫，不同組合則是不同倉庫。
+   未設定登入時，也可以先用「Email / 股票倉名稱」加「自訂私密倉庫代碼」手動區分不同股票倉；第一次使用時自己設定這組代碼，之後用同一組資料會開啟同一個倉庫，不同組合則是不同倉庫。
 
 ## 🚀 如何使用
 

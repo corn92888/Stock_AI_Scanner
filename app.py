@@ -532,7 +532,7 @@ elif page == "💼 持股可視化分析 (Portfolio)":
             if hasattr(st, "logout") and st.button("登出", key="portfolio_logout"):
                 st.logout()
         else:
-            st.caption("未啟用正式登入時，請用 Email/名稱 + 私密倉庫代碼開啟自己的股票倉。不同組合會進入不同倉庫。")
+            st.caption("第一次使用請自己設定 Email/名稱與一組私密代碼；之後用同一組資料就能開啟同一個股票倉。")
             owner_col1, owner_col2 = st.columns(2)
             with owner_col1:
                 manual_identifier = st.text_input(
@@ -543,10 +543,10 @@ elif page == "💼 持股可視化分析 (Portfolio)":
                 )
             with owner_col2:
                 manual_access_code = st.text_input(
-                    "私密倉庫代碼",
+                    "自訂私密倉庫代碼",
                     value=st.session_state.get("portfolio_manual_access_code", ""),
                     type="password",
-                    help="類似簡易密碼；請記住，忘記後無法找回同一個倉庫。",
+                    help="第一次使用時自己設定；下次輸入同一組代碼即可開啟同一個股票倉。",
                     key="portfolio_manual_access_code_input",
                 )
             st.session_state["portfolio_manual_identifier"] = manual_identifier.strip()
@@ -561,7 +561,7 @@ elif page == "💼 持股可視化分析 (Portfolio)":
                 if st.button("使用登入系統", key="portfolio_login"):
                     st.login()
             else:
-                st.caption("公開部署後建議設定 Streamlit OIDC 登入；目前這組私密代碼只用來區分倉庫，不等於完整帳號系統。")
+                st.caption("這不是正式帳號註冊；私密代碼由你自己設定並記住，用來區分股票倉。公開部署後建議改用 Streamlit OIDC 登入。")
 
         if st.button("從儲存區載入股票倉", use_container_width=True, disabled=not owner_key):
             loaded_df, load_info = load_holdings(owner_key, st.secrets)
