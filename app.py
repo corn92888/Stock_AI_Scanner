@@ -130,6 +130,22 @@ def fetch_daily_quote(code):
             }
         except Exception:
             continue
+    try:
+        realtime = twstock.realtime.get(code)
+        if realtime and realtime.get("success"):
+            quote = realtime.get("realtime", {})
+            price = safe_float(quote.get("latest_trade_price"))
+            if price == price and price > 0:
+                return {
+                    "price": price,
+                    "prev_close": np.nan,
+                    "open": safe_float(quote.get("open")),
+                    "high": safe_float(quote.get("high")),
+                    "low": safe_float(quote.get("low")),
+                    "volume_lots": int(safe_float(quote.get("accumulate_trade_volume"), 0) or 0),
+                }
+    except Exception:
+        pass
     return {}
 
 
@@ -522,6 +538,8 @@ elif page == "💼 持股可視化分析 (Portfolio)":
     market_df, industry_df, market_summary = load_market_report(selected_market_file)
     scan_df = load_scan_report(selected_scan_file)
     signal_map = summarize_strategy_signals(scan_df)
+    if selected_market_file is None:
+        st.info("目前沒有市場監控報表，將改用 yfinance/twstock 即時報價備援；產業熱度與量比資料會較少。")
 
     store_status = get_portfolio_backend_status(st.secrets)
     login_key, login_label = get_logged_in_user_key()
