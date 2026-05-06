@@ -9,6 +9,12 @@ import time
 import twstock
 import yfinance as yf
 from logic import get_stock_data, calculate_indicators, check_trend_strict, check_reversal_strict, check_wave_strict
+from portfolio_store import (
+    get_portfolio_backend_status,
+    load_holdings,
+    save_holdings,
+    save_portfolio_snapshot,
+)
 
 st.set_page_config(page_title="玉米的大噴射台股 💦", layout="wide", page_icon="💦")
 
@@ -309,6 +315,25 @@ def build_ai_brief(analysis_df, market_summary, market_path, scan_path):
     return "\n".join(lines)
 
 
+def get_logged_in_user_key():
+    user = getattr(st, "user", None) or getattr(st, "experimental_user", None)
+    if not user or not getattr(user, "is_logged_in", False):
+        return "", ""
+
+    getter = user.get if hasattr(user, "get") else lambda key, default=None: getattr(user, key, default)
+    email = getter("email", "")
+    subject = getter("sub", "")
+    name = getter("name", "")
+    return (email or subject or ""), (name or email or subject or "")
+
+
+def streamlit_auth_configured():
+    try:
+        return "auth" in st.secrets
+    except Exception:
+        return False
+
+
 # 側邊欄導覽
 st.sidebar.title("💦 玉米的大噴射台股")
 page = st.sidebar.radio(
@@ -488,23 +513,76 @@ elif page == "💼 持股可視化分析 (Portfolio)":
     scan_df = load_scan_report(selected_scan_file)
     signal_map = summarize_strategy_signals(scan_df)
 
+    store_status = get_portfolio_backend_status(st.secrets)
+    login_key, login_label = get_logged_in_user_key()
+    with st.expander("☁️ 股票倉儲存設定", expanded=True):
+        if store_status["is_cloud"]:
+            st.success(f"目前儲存後端：{store_status['label']}")
+        else:
+            st.warning(f"目前儲存後端：{store_status['label']}")
+        st.caption(store_status["message"])
+
+        if login_key:
+            owner_key = login_key
+            st.session_state["portfolio_owner_key"] = owner_key
+            st.write(f"登入身份：{login_label}")
+            if hasattr(st, "logout") and st.button("登出", key="portfolio_logout"):
+                st.logout()
+        else:
+            owner_key = st.text_input(
+                "股票倉識別碼 / Email",
+                value=st.session_state.get("portfolio_owner_key", "demo"),
+                help="正式多人部署建議設定 Streamlit OIDC 登入；還沒設定前，這個識別碼會用來區分不同股票倉。",
+                key="portfolio_owner_key_input",
+            )
+            owner_key = owner_key.strip()
+            st.session_state["portfolio_owner_key"] = owner_key
+            if streamlit_auth_configured() and hasattr(st, "login"):
+                if st.button("使用登入系統", key="portfolio_login"):
+                    st.login()
+            else:
+                st.caption("尚未設定 Streamlit 登入；公開部署前請在 secrets 加上 [auth]，避免所有訪客共用 demo 股票倉。")
+
+        if st.button("從儲存區載入股票倉", use_container_width=True, disabled=not owner_key):
+            loaded_df, load_info = load_holdings(owner_key, st.secrets)
+            if load_info.get("error"):
+                st.warning(f"{load_info['backend']} 載入失敗：{load_info['error']}")
+            else:
+                st.session_state["portfolio_input"] = normalize_portfolio_input(loaded_df)
+                st.session_state["portfolio_loaded_owner"] = owner_key
+                st.session_state["portfolio_editor_version"] = st.session_state.get("portfolio_editor_version", 0) + 1
+                st.success(f"已從 {load_info['backend']} 載入 {load_info['count']} 筆持股。")
+                st.rerun()
+
+    owner_key = st.session_state.get("portfolio_owner_key", "").strip()
+    if "portfolio_editor_version" not in st.session_state:
+        st.session_state["portfolio_editor_version"] = 0
+
     if "portfolio_input" not in st.session_state:
-        st.session_state["portfolio_input"] = pd.DataFrame(
-            [
-                {
-                    "代號": "8131",
-                    "成本": 61.000,
-                    "股數": 1000,
-                    "停損價": 68.0,
-                    "目標價": 75.0,
-                    "備註": "範例，可直接改掉；名稱會自動帶入",
-                }
-            ]
-        )
+        loaded_df, load_info = load_holdings(owner_key, st.secrets) if owner_key else (pd.DataFrame(), {"count": 0})
+        st.session_state["portfolio_input"] = normalize_portfolio_input(loaded_df)
+        st.session_state["portfolio_loaded_owner"] = owner_key
+        if load_info.get("error"):
+            st.warning(f"{load_info['backend']} 載入失敗：{load_info['error']}")
+        if load_info["count"]:
+            st.toast(f"已自動載入 {load_info['count']} 筆雲端/本機持股")
+
+    previous_loaded_owner = st.session_state.get("portfolio_loaded_owner")
+    if owner_key and previous_loaded_owner != owner_key:
+        loaded_df, load_info = load_holdings(owner_key, st.secrets)
+        existing_df = normalize_portfolio_input(st.session_state.get("portfolio_input"))
+        if load_info.get("error"):
+            st.warning(f"{load_info['backend']} 載入失敗：{load_info['error']}")
+        if load_info["count"] or previous_loaded_owner is not None or existing_df.empty:
+            st.session_state["portfolio_input"] = normalize_portfolio_input(loaded_df)
+            st.session_state["portfolio_editor_version"] += 1
+        st.session_state["portfolio_loaded_owner"] = owner_key
+
     st.session_state["portfolio_input"] = normalize_portfolio_input(st.session_state["portfolio_input"])
 
     holdings = st.data_editor(
         st.session_state["portfolio_input"],
+        key=f"portfolio_editor_{st.session_state['portfolio_editor_version']}",
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
@@ -519,6 +597,18 @@ elif page == "💼 持股可視化分析 (Portfolio)":
         },
     )
     holdings = normalize_portfolio_input(holdings)
+    st.session_state["portfolio_input"] = holdings
+
+    save_col1, save_col2 = st.columns([1, 2])
+    with save_col1:
+        if st.button("儲存股票倉", type="primary", use_container_width=True, disabled=not owner_key):
+            try:
+                save_info = save_holdings(owner_key, holdings, st.secrets)
+                st.success(f"已儲存 {save_info['count']} 筆持股到 {save_info['backend']}。")
+            except Exception as exc:
+                st.error(f"儲存失敗：{exc}")
+    with save_col2:
+        st.caption("重新整理後，只要使用同一個登入身份或股票倉識別碼，就能從儲存區載回持股。")
 
     if not market_summary.empty:
         summary_map = dict(zip(market_summary["項目"], market_summary["數值"]))
@@ -666,6 +756,23 @@ elif page == "💼 持股可視化分析 (Portfolio)":
         c2.metric("未實現損益", f"{total_pnl:,.0f}", f"{total_return:.2f}%")
         c3.metric("獲利持股", f"{winners}/{len(analysis_df)}")
         c4.metric("需控風險", f"{risk_hits} 檔")
+
+        snap_col1, snap_col2 = st.columns([1, 2])
+        with snap_col1:
+            if st.button("記錄今日持股快照", use_container_width=True, disabled=not owner_key):
+                try:
+                    snap_info = save_portfolio_snapshot(
+                        owner_key,
+                        analysis_df,
+                        selected_market_file,
+                        selected_scan_file,
+                        st.secrets,
+                    )
+                    st.success(f"已寫入 {snap_info['count']} 筆今日快照到 {snap_info['backend']}。")
+                except Exception as exc:
+                    st.error(f"快照寫入失敗：{exc}")
+        with snap_col2:
+            st.caption("每日快照會保存當下現價、損益、續抱分數與策略狀態，之後可用來回測持股決策。")
 
         chart_col1, chart_col2 = st.columns([1, 1])
         with chart_col1:

@@ -9,6 +9,7 @@
 * **🗃️ 累積選股訊號 (SQLite)**：每次掃描會同步寫入 `data/stock_scanner.db`，保留日後回測所需的原始訊號。
 * **📱 Telegram 自動推播**：執行完畢後自動將挑出的標的傳送至指定的 Telegram 群組或對話。
 * **🖥 視覺化戰情室 (Web UI)**：提供基於 Streamlit 開發的網頁 Dashboard，可輸入股票代號即時驗證技術指標 (如 SuperTrend 三線、布林通道等)，也可輸入目前持股，結合最新市場監控與策略訊號做部位分析。
+* **☁️ 雲端股票倉**：持股頁可接 Supabase/Postgres 儲存每個使用者的股票倉，並寫入每日持股快照，供之後績效追蹤與回測。
 
 ## 🎯 內建三大策略
 
@@ -24,7 +25,7 @@
 1. **安裝依賴套件:**
    請確保已安裝 Python 3.8+，並執行以下指令安裝所需套件：
    ```bash
-   pip install yfinance pandas numpy twstock tqdm requests python-dotenv streamlit plotly openpyxl
+   pip install yfinance pandas numpy twstock tqdm requests python-dotenv streamlit supabase plotly openpyxl
    ```
 
 2. **設定環境變數 (.env):**
@@ -34,6 +35,29 @@
    TELEGRAM_BOT_TOKEN=123456789:ABCDefg...
    TELEGRAM_CHAT_ID=@your_channel_or_chat_id
    ```
+
+3. **設定雲端股票倉 (Supabase，可選但建議):**
+   - 到 Supabase 建立專案。
+   - 打開 Supabase SQL Editor，執行專案內的 `supabase_schema.sql`。
+   - 在本機建立 `.streamlit/secrets.toml`，或在 Streamlit Cloud 的 Secrets 加入：
+   ```toml
+   [supabase]
+   url = "https://your-project.supabase.co"
+   service_role_key = "your-service-role-key"
+   ```
+   若尚未設定 Supabase，Portfolio 頁會自動退回本機 `data/portfolio_holdings.db`，重新整理本機頁面仍可載回，但無法跨主機多人共用。
+
+4. **設定登入 (公開部署建議):**
+   Streamlit 支援 OIDC 登入。設定完成後，Portfolio 頁會自動用登入者 email 區分股票倉。
+   ```toml
+   [auth]
+   redirect_uri = "http://localhost:8501/oauth2callback"
+   cookie_secret = "replace-with-a-random-secret"
+   client_id = "your-oauth-client-id"
+   client_secret = "your-oauth-client-secret"
+   server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
+   ```
+   未設定登入時，也可以先用「股票倉識別碼 / Email」手動區分不同股票倉。
 
 ## 🚀 如何使用
 
@@ -98,7 +122,7 @@
   Dashboard 目前包含四個主要頁面：
   - 歷史報表預覽：檢視每日/盤中掃描產出的 Excel。
   - 個股高階圖表分析：輸入代號查看策略診斷與技術圖。
-  - 持股可視化分析：輸入代號、成本、股數、停損/目標價，系統會自動帶入股票名稱，結合最新市場監控與策略訊號檢查損益、風險、續抱分數與 AI 分析摘要；成本可輸入到小數點後三位。
+  - 持股可視化分析：輸入代號、成本、股數、停損/目標價，系統會自動帶入股票名稱，結合最新市場監控與策略訊號檢查損益、風險、續抱分數與 AI 分析摘要；成本可輸入到小數點後三位，並可儲存到 Supabase 雲端股票倉與每日持股快照。
   - 精選動態新聞：依最新選股名單快速抓取近期新聞。
 
 ## ⚠️ 免責聲明

@@ -6,5 +6,6 @@ tqdm
 requests
 python-dotenv
 streamlit
+supabase
 plotly
 openpyxl
