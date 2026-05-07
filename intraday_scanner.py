@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import requests 
+import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
@@ -161,7 +162,7 @@ def fetch_realtime_prices(ticker_list, chunk_size=20):
         except: pass
     return result
 
-def run_intraday_scanner():
+def run_intraday_scanner(send_telegram=True):
     start_time = time.time()
     print("⚡️ 啟動: 盤中即時策略全掃描 (A/B/C 三合一)")
     print("-" * 40)
@@ -293,7 +294,8 @@ def run_intraday_scanner():
                 msg_trend.append(f"🏭[{row['產業族群']}] {row['代號']} {row['名稱']} (${row['現價']})\n   └ 漲:{row['漲跌幅']}% | 預估總量:{row['成交(張)(含預估)']}張\n")
         else:
             msg_trend.append("🚀 玉米順勢噴出: 無\n")
-        send_telegram_message(msg_trend)
+        if send_telegram:
+            send_telegram_message(msg_trend)
 
         msg_rev = []
         if list_reversal:
@@ -306,7 +308,8 @@ def run_intraday_scanner():
                 msg_rev.append(f"🏭[{row['產業族群']}] {row['代號']} {row['名稱']} (${row['現價']})\n   └ 漲:{row['漲跌幅']}% | 預估總量:{row['成交(張)(含預估)']}張\n")
         else:
             msg_rev.append("↩️ 逆勢抄底: 無\n")
-        send_telegram_message(msg_rev)
+        if send_telegram:
+            send_telegram_message(msg_rev)
 
         msg_wave = []
         if list_wave:
@@ -321,7 +324,8 @@ def run_intraday_scanner():
             msg_wave.append("🌊 波段蓄勢: 無\n")
             
         msg_wave.extend(["================\n", "🔗 點此查詢: https://tw.stock.yahoo.com/"])
-        send_telegram_message(msg_wave)
+        if send_telegram:
+            send_telegram_message(msg_wave)
 
         if not wrote_sheet:
             pd.DataFrame([{"狀態": "本次盤中掃描無符合策略條件的標的"}]).to_excel(writer, sheet_name='無符合標的', index=False)
@@ -343,4 +347,7 @@ def run_intraday_scanner():
     print(f"⏱️  總耗時: {minutes} 分 {seconds} 秒")
 
 if __name__ == "__main__":
-    run_intraday_scanner()
+    parser = argparse.ArgumentParser(description="Run the intraday stock scanner.")
+    parser.add_argument("--no-telegram", action="store_true", help="不發送原始三策略清單到 Telegram")
+    args = parser.parse_args()
+    run_intraday_scanner(send_telegram=not args.no_telegram)

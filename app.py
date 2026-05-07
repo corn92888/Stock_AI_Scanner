@@ -380,7 +380,7 @@ if page == "📊 歷史報表預覽 (Reports)":
     
     with st.expander("🛠️ 手動執行全自動掃描器 (約需 1~2 分鐘)"):
         st.write("點擊下方按鈕將立刻動用主機資源，對全台股 1900+ 檔股票進行技術線型掃描：")
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         if col1.button("🚀 執行盤後高防禦掃描 (EOD)", use_container_width=True):
             with st.spinner("正在執行最嚴格的盤後防禦檢查，這將花費 1~3 分鐘，請耐心等候..."):
                 import scanner
@@ -398,6 +398,23 @@ if page == "📊 歷史報表預覽 (Reports)":
                 st.balloons()
                 time.sleep(2)
                 st.rerun()
+
+        if col3.button("📡 盤中分析 + Telegram", use_container_width=True):
+            with st.spinner("正在執行盤中掃描、全市場監控，並整理精簡 Telegram 報告..."):
+                from intraday_analysis_report import generate_intraday_analysis_report
+
+                result = generate_intraday_analysis_report(
+                    run_scanner=True,
+                    run_market_monitor=True,
+                    send_telegram=True,
+                    send_raw_scanner_telegram=False,
+                )
+                if result["telegram_sent"]:
+                    st.success("✅ 盤中分析報告已產出並同步發送 Telegram。")
+                else:
+                    st.warning(f"盤中分析報告已產出，但 Telegram 未送出：{result['telegram_message']}")
+                st.text_area("精簡分析報告", value=result["text"], height=320)
+                st.balloons()
     st.markdown("---")
     
     if not os.path.exists('Reports'):

@@ -29,13 +29,13 @@ jobs:
         python -m pip install --upgrade pip
         pip install yfinance pandas numpy twstock tqdm requests python-dotenv streamlit plotly openpyxl
 
-    - name: Run intraday scanner
+    - name: Run intraday analysis report
       env:
         # 將設定在 GitHub 上的秘密金鑰載入環境變數
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: |
-        python intraday_scanner.py
+        python intraday_analysis_report.py --run-scanner --run-market-monitor --send-telegram
 
     - name: Persist signal database
       run: |
@@ -60,6 +60,9 @@ jobs:
         name: intraday-stock-reports
         path: |
           Reports/盤中日報_*.xlsx
+          Reports/市場監控_*.xlsx
+          Reports/盤中分析報告_*.txt
+          Reports/盤中候選交叉排名_*.csv
           data/stock_scanner.db
         retention-days: 5
         if-no-files-found: ignore

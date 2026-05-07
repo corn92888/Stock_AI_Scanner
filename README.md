@@ -7,7 +7,7 @@
 * **🤖 雙核心掃描引擎**：提供「盤中即時動能狙擊 (Intraday)」與「盤後嚴格條件篩選 (EOD)」兩套各自獨立的選股系統。
 * **📊 產出選股日報 (Excel)**：依據三大策略自動分類，產出易於閱讀的 `.xlsx` 表格。
 * **🗃️ 累積選股訊號 (SQLite)**：每次掃描會同步寫入 `data/stock_scanner.db`，保留日後回測所需的原始訊號。
-* **📱 Telegram 自動推播**：執行完畢後自動將挑出的標的傳送至指定的 Telegram 群組或對話。
+* **📱 Telegram 自動推播**：執行完畢後自動將挑出的標的、全市場監控摘要或精簡盤中分析報告傳送至指定的 Telegram 群組或對話。
 * **🖥 視覺化戰情室 (Web UI)**：提供基於 Streamlit 開發的網頁 Dashboard，可輸入股票代號即時驗證技術指標 (如 SuperTrend 三線、布林通道等)，也可輸入目前持股，結合最新市場監控與策略訊號做部位分析。
 * **☁️ 雲端股票倉**：持股頁可接 Supabase/Postgres，讓每個使用者用自己的 Email/名稱 + 私密倉庫代碼開啟獨立股票倉，並寫入每日持股快照；也可設定超級管理員總覽所有股票倉，供之後績效追蹤與回測。
 
@@ -117,6 +117,15 @@
   venv/bin/python3 market_monitor.py --send-telegram
   ```
 
+* **產生盤中精簡分析報告並同步 Telegram:**
+  ```bash
+  venv/bin/python3 intraday_analysis_report.py --run-scanner --run-market-monitor --send-telegram
+  ```
+  這個流程會依序執行盤中掃描、全市場監控，接著產出不含個人持股提醒的精簡文字報告，並同步發送到 Telegram。若只想把最新已存在的報表整理成訊息：
+  ```bash
+  venv/bin/python3 intraday_analysis_report.py --send-telegram
+  ```
+
 * **測試 Telegram 連線：**
   快速確認 Token 與 Chat ID 是否設定正確，直接發送一則推播：
   ```bash
@@ -125,7 +134,7 @@
 
 * **設定免開機雲端自動化 (GitHub Actions)：**
   專案內建兩套 GitHub Actions 自動排程：
-  - `.github/workflows/intraday_scan.yml`: 平日 `10:00`, `11:30`, `13:00` 追蹤盤中名單。
+  - `.github/workflows/intraday_scan.yml`: 平日 `10:00`, `11:30`, `13:00` 追蹤盤中名單，並同步發送精簡盤中分析報告到 Telegram。
   - `.github/workflows/daily_scan.yml`: 平日 `14:00` 結算每日盤後高防禦名單。
   只要將程式碼推送至 GitHub，並在專案的（Settings > Secrets and variables > Actions）中新增 `TELEGRAM_BOT_TOKEN` 與 `TELEGRAM_CHAT_ID`，就能達成全自動監控！
 
