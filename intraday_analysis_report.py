@@ -377,11 +377,14 @@ def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     chunks = [text[i : i + 3800] for i in range(0, len(text), 3800)] or [text]
     for chunk in chunks:
-        response = requests.post(
-            url,
-            data={"chat_id": TELEGRAM_CHAT_ID, "text": chunk, "disable_web_page_preview": True},
-            timeout=20,
-        )
+        try:
+            response = requests.post(
+                url,
+                data={"chat_id": TELEGRAM_CHAT_ID, "text": chunk, "disable_web_page_preview": True},
+                timeout=20,
+            )
+        except requests.RequestException as exc:
+            return False, f"Telegram 網路連線失敗: {exc.__class__.__name__}"
         if response.status_code != 200:
             return False, response.text
     return True, "Telegram 訊息發送成功。"
@@ -412,7 +415,10 @@ def generate_intraday_analysis_report(
     if run_market_monitor:
         import market_monitor
 
-        market_path = market_monitor.run_market_monitor(send_telegram=False) or market_path
+        generated_market_path = market_monitor.run_market_monitor(send_telegram=False)
+        if not generated_market_path:
+            raise RuntimeError("全市場監控沒有產生新報表，停止產生盤中分析，避免混用舊市場快照。")
+        market_path = generated_market_path
 
     scan_path = scan_path or latest_report(
         ["Reports/盤中日報_*.xlsx"],
