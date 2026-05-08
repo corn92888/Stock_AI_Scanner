@@ -121,7 +121,7 @@
   ```bash
   venv/bin/python3 intraday_analysis_report.py --run-scanner --run-market-monitor --send-telegram
   ```
-  這個流程會依序執行盤中掃描、全市場監控，接著產出不含個人持股提醒的精簡文字報告，並同步發送到 Telegram。若只想把最新已存在的報表整理成訊息：
+  這個流程會依序執行盤中掃描、同步發送原本三策略標的清單、全市場監控，接著產出不含個人持股提醒的精簡文字報告，並同步發送到 Telegram。若只想把最新已存在的報表整理成訊息：
   ```bash
   venv/bin/python3 intraday_analysis_report.py --send-telegram
   ```
@@ -134,7 +134,7 @@
 
 * **設定免開機雲端自動化 (GitHub Actions)：**
   專案內建兩套 GitHub Actions 自動排程：
-  - `.github/workflows/intraday_scan.yml`: 平日 `10:00`, `11:30`, `13:00` 追蹤盤中名單，並同步發送精簡盤中分析報告到 Telegram。
+  - `.github/workflows/intraday_scan.yml`: 平日 `10:00`, `11:30`, `13:00` 追蹤盤中名單，並同步發送三策略標的清單與精簡盤中分析報告到 Telegram。
   - `.github/workflows/daily_scan.yml`: 平日 `14:00` 結算每日盤後高防禦名單。
   只要將程式碼推送至 GitHub，並在專案的（Settings > Secrets and variables > Actions）中新增 `TELEGRAM_BOT_TOKEN` 與 `TELEGRAM_CHAT_ID`，就能達成全自動監控！
 

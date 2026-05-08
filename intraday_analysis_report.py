@@ -396,9 +396,12 @@ def generate_intraday_analysis_report(
     run_scanner=False,
     run_market_monitor=False,
     send_telegram=False,
-    send_raw_scanner_telegram=False,
+    send_raw_scanner_telegram=None,
     save_report=True,
 ):
+    if send_raw_scanner_telegram is None:
+        send_raw_scanner_telegram = bool(run_scanner and send_telegram)
+
     if run_scanner:
         import intraday_scanner
 
@@ -492,10 +495,21 @@ def main():
     parser.add_argument(
         "--send-raw-scanner-telegram",
         action="store_true",
-        help="搭配 --run-scanner 時，也發送原始三策略清單。",
+        help="搭配 --run-scanner 時，也發送原始三策略清單；現在 --run-scanner --send-telegram 已預設開啟。",
+    )
+    parser.add_argument(
+        "--no-raw-scanner-telegram",
+        action="store_true",
+        help="搭配 --run-scanner --send-telegram 時，不發送原始三策略清單，只發送精簡分析。",
     )
     parser.add_argument("--no-save", action="store_true", help="不輸出 txt/csv 報告檔")
     args = parser.parse_args()
+
+    send_raw_scanner_telegram = None
+    if args.send_raw_scanner_telegram:
+        send_raw_scanner_telegram = True
+    if args.no_raw_scanner_telegram:
+        send_raw_scanner_telegram = False
 
     result = generate_intraday_analysis_report(
         scan_path=args.scan_report,
@@ -503,7 +517,7 @@ def main():
         run_scanner=args.run_scanner,
         run_market_monitor=args.run_market_monitor,
         send_telegram=args.send_telegram,
-        send_raw_scanner_telegram=args.send_raw_scanner_telegram,
+        send_raw_scanner_telegram=send_raw_scanner_telegram,
         save_report=not args.no_save,
     )
     print(result["text"])
