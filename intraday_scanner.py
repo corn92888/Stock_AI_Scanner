@@ -239,9 +239,20 @@ def run_intraday_scanner(send_telegram=True):
     if is_market_open():
         print("\n📡 台股盤中！正在抓取即時報價並結合歷史資料...")
         rt_prices = fetch_realtime_prices(tickers, chunk_size=20)
-        if not rt_prices:
-            print("⚠️ TWSE 即時報價無法使用，改用 yfinance 當日資料備援")
-            rt_prices = fetch_yfinance_current_bars(all_yf_tickers, yf_to_code, chunk_size=200)
+        missing_yf_tickers = [
+            yf_ticker
+            for yf_ticker in all_yf_tickers
+            if yf_to_code.get(yf_ticker) not in rt_prices
+        ]
+        if missing_yf_tickers:
+            if rt_prices:
+                print(f"⚠️ TWSE 即時報價僅取得 {len(rt_prices)} 檔，改用 yfinance 補足缺漏")
+            else:
+                print("⚠️ TWSE 即時報價無法使用，改用 yfinance 當日資料備援")
+            yf_prices = fetch_yfinance_current_bars(missing_yf_tickers, yf_to_code, chunk_size=200)
+            rt_prices.update(yf_prices)
+            if yf_prices:
+                print(f"✅ yfinance 當日資料補足 {len(yf_prices)} 檔")
         
         if rt_prices:
             today_ts = pd.Timestamp(datetime.datetime.now(TAIPEI_TZ).date())
