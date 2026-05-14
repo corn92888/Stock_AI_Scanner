@@ -91,6 +91,64 @@ def batch_download(ticker_list, period="2y", chunk_size=200):
         except: pass
     return all_data
 
+def _extract_yf_frame(raw, ticker):
+    if raw.empty:
+        return pd.DataFrame()
+    if isinstance(raw.columns, pd.MultiIndex):
+        ticker_level = raw.columns.get_level_values(1)
+        if ticker in ticker_level.unique():
+            df = raw.loc[:, ticker_level == ticker].copy()
+            df.columns = df.columns.get_level_values(0)
+        else:
+            df = raw.copy()
+            df.columns = [col[0] for col in df.columns]
+    else:
+        df = raw.copy()
+
+    df = df.loc[:, ~df.columns.duplicated()]
+    for c in ['Open', 'High', 'Low', 'Close', 'Volume']:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+    df.dropna(subset=['Close'], inplace=True)
+    return df
+
+def fetch_yfinance_current_bars(yf_tickers, yf_to_code, chunk_size=200):
+    """Fallback source when TWSE realtime quotes are unavailable."""
+    today_ts = pd.Timestamp(datetime.datetime.now(TAIPEI_TZ).date())
+    result = {}
+    for i in tqdm(range(0, len(yf_tickers), chunk_size), desc="📥 yfinance當日備援"):
+        chunk = yf_tickers[i:i+chunk_size]
+        try:
+            raw = yf.download(chunk, period="5d", progress=False, auto_adjust=False, threads=True)
+            if raw.empty:
+                continue
+            for ticker in chunk:
+                try:
+                    df = _extract_yf_frame(raw, ticker)
+                    if df.empty:
+                        continue
+                    latest_date = pd.Timestamp(df.index[-1]).tz_localize(None).normalize()
+                    if latest_date != today_ts:
+                        continue
+                    row = df.iloc[-1]
+                    price = _safe_float(row.get('Close'))
+                    volume_shares = _safe_float(row.get('Volume'))
+                    code = yf_to_code.get(ticker)
+                    if not code or price <= 0:
+                        continue
+                    result[code] = {
+                        'Open': _safe_float(row.get('Open')),
+                        'High': _safe_float(row.get('High')),
+                        'Low': _safe_float(row.get('Low')),
+                        'Close': price,
+                        'Volume': volume_shares / 1000,
+                    }
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return result
+
 def is_market_open():
     now = datetime.datetime.now(TAIPEI_TZ)
     if now.weekday() >= 5: return False
@@ -181,6 +239,9 @@ def run_intraday_scanner(send_telegram=True):
     if is_market_open():
         print("\n📡 台股盤中！正在抓取即時報價並結合歷史資料...")
         rt_prices = fetch_realtime_prices(tickers, chunk_size=20)
+        if not rt_prices:
+            print("⚠️ TWSE 即時報價無法使用，改用 yfinance 當日資料備援")
+            rt_prices = fetch_yfinance_current_bars(all_yf_tickers, yf_to_code, chunk_size=200)
         
         if rt_prices:
             today_ts = pd.Timestamp(datetime.datetime.now(TAIPEI_TZ).date())

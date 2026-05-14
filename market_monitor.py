@@ -138,6 +138,33 @@ def batch_download_recent(yf_tickers, period="3mo", chunk_size=200):
     return all_data
 
 
+def build_yfinance_realtime_fallback(hist_data, yf_to_code, now):
+    today_ts = pd.Timestamp(now.date())
+    fallback = {}
+    for yf_ticker, code in yf_to_code.items():
+        hist = hist_data.get(yf_ticker)
+        if hist is None or hist.empty:
+            continue
+        try:
+            latest_date = pd.Timestamp(hist.index[-1]).tz_localize(None).normalize()
+            if latest_date != today_ts:
+                continue
+            row = hist.iloc[-1]
+            price = safe_float(row.get("Close"), 0.0)
+            if price <= 0:
+                continue
+            fallback[code] = {
+                "open": safe_float(row.get("Open"), 0.0),
+                "high": safe_float(row.get("High"), 0.0),
+                "low": safe_float(row.get("Low"), 0.0),
+                "price": price,
+                "volume_lots": safe_float(row.get("Volume"), 0.0) / 1000,
+            }
+        except Exception:
+            continue
+    return fallback
+
+
 def build_ticker_maps():
     codes = twstock.codes
     tickers = [code for code in codes.keys() if codes[code].type == "股票"]
@@ -155,6 +182,12 @@ def build_market_snapshot():
 
     hist_data = batch_download_recent(list(yf_to_code.keys()), period="3mo", chunk_size=200)
     realtime = fetch_realtime_prices(tickers, chunk_size=20)
+    yf_realtime = build_yfinance_realtime_fallback(hist_data, yf_to_code, now)
+    if yf_realtime:
+        missing_count = len([code for code in yf_realtime if code not in realtime])
+        realtime.update({code: data for code, data in yf_realtime.items() if code not in realtime})
+        if missing_count:
+            print(f"⚠️ 已用 yfinance 當日資料補足 {missing_count} 檔即時報價")
 
     rows = []
     for yf_ticker, code in yf_to_code.items():
