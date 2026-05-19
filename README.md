@@ -121,7 +121,7 @@
   ```bash
   venv/bin/python3 intraday_analysis_report.py --run-scanner --run-market-monitor --send-telegram
   ```
-  這個流程會依序執行盤中掃描、同步發送原本三策略標的清單、全市場監控，接著產出不含個人持股提醒的精簡文字報告，並同步發送到 Telegram。若只想把最新已存在的報表整理成訊息：
+  這個流程會依序執行盤中掃描、同步發送原本三策略標的清單、全市場監控，接著產出不含個人持股提醒的續漲分析報告，並同步發送到 Telegram。分析目標改以 T+1/T+3 續漲為主，買進當天不做賣出判斷，防守價在報告中會轉為隔日收盤觀察價。若只想把最新已存在的報表整理成訊息：
   ```bash
   venv/bin/python3 intraday_analysis_report.py --send-telegram
   ```

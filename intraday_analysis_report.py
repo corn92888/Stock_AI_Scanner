@@ -15,6 +15,7 @@ STRATEGY_SHEET_NAMES = ["順勢突破", "低檔爆量", "波段蓄勢"]
 TAIPEI_TZ = dt.timezone(dt.timedelta(hours=8), name="Asia/Taipei")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+SWING_HOLDING_RULE = "以 T+1/T+3 續漲為目標；買進當天不做賣出判斷，隔日收盤再驗證。"
 
 
 def normalize_code(value):
@@ -137,6 +138,52 @@ def summarize_signals(signals):
     return pd.DataFrame(rows)
 
 
+def _risk_pct(row):
+    price = _safe_float(row.get("現價"))
+    support = _safe_float(row.get("防守價"))
+    if price is None or support is None or price <= 0 or support <= 0 or support >= price:
+        return None
+    return (price - support) / price * 100
+
+
+def _observation_price(row):
+    price = _safe_float(row.get("現價"))
+    support = _safe_float(row.get("防守價"))
+    if support is not None and support > 0:
+        return support
+    return price * 0.96 if price is not None else None
+
+
+def _chase_limit(row):
+    price = _safe_float(row.get("現價"))
+    high = _safe_float(row.get("最高"))
+    if price is None:
+        return None
+    if high is not None and high > price:
+        return min(high, price * 1.025)
+    return price * 1.015
+
+
+def _swing_profile(row):
+    strategies = str(row.get("策略", ""))
+    if "波段蓄勢" in strategies:
+        return "波段續漲"
+    if "順勢突破" in strategies:
+        return "隔日延續"
+    if "低檔爆量" in strategies:
+        return "反彈驗證"
+    return "觀察"
+
+
+def _holding_plan(row):
+    observation = _observation_price(row)
+    chase_limit = _chase_limit(row)
+    return (
+        f"今日買進不賣；隔日收盤未守{_fmt(observation)}再檢討；"
+        f"高於{_fmt(chase_limit)}不追。"
+    )
+
+
 def score_candidate(row):
     score = 0
     notes = []
@@ -145,77 +192,146 @@ def score_candidate(row):
     if row.get("策略數", 0) >= 2:
         score += 18
         notes.append("多策略")
-    elif "順勢突破" in strategies:
-        score += 12
-        notes.append("順勢")
-    elif "波段蓄勢" in strategies:
-        score += 8
-        notes.append("VCP")
-    elif "低檔爆量" in strategies:
-        score += 6
-        notes.append("反轉")
+    if "波段蓄勢" in strategies:
+        score += 18
+        notes.append("波段整理")
+    if "順勢突破" in strategies:
+        score += 14
+        notes.append("趨勢延續")
+    if "低檔爆量" in strategies:
+        score += 4
+        notes.append("反彈待驗證")
+    if row.get("策略數", 0) < 2 and not any(name in strategies for name in STRATEGY_SHEET_NAMES):
+        score -= 4
+        notes.append("策略訊號弱")
+
+    industry_up_ratio = _safe_float(row.get("產業上漲比例"))
+    if industry_up_ratio is not None:
+        if industry_up_ratio >= 60:
+            score += 14
+            notes.append("族群廣度佳")
+        elif industry_up_ratio >= 45:
+            score += 7
+            notes.append("族群尚可")
+        elif industry_up_ratio < 35:
+            score -= 8
+            notes.append("族群分歧")
+
+    industry_avg_pct = _safe_float(row.get("產業平均漲跌幅"))
+    if industry_avg_pct is not None:
+        if industry_avg_pct >= 0.3:
+            score += 6
+            notes.append("族群收紅")
+        elif industry_avg_pct < 0:
+            score -= 5
+            notes.append("族群偏弱")
 
     industry_heat = _safe_float(row.get("產業熱度分數"))
     if industry_heat is not None:
         if industry_heat >= 11:
-            score += 16
+            score += 8
             notes.append("熱區")
         elif industry_heat >= 8:
-            score += 9
+            score += 4
             notes.append("中熱區")
 
     turnover = _safe_float(row.get("成交值(億)"))
     if turnover is not None:
-        if turnover >= 30:
-            score += 14
-            notes.append("成交值足")
-        elif turnover >= 5:
+        if 10 <= turnover <= 150:
+            score += 12
+            notes.append("流動性佳")
+        elif turnover > 150:
             score += 8
-            notes.append("成交值可")
+            notes.append("大資金")
+        elif turnover >= 3:
+            score += 4
+            notes.append("流動性可")
         else:
-            score -= 8
+            score -= 10
             notes.append("流動性弱")
 
     volume_ratio = _safe_float(row.get("量比5"))
     if volume_ratio is not None:
-        if 2 <= volume_ratio <= 8:
-            score += 12
-            notes.append("量能健康")
-        elif 8 < volume_ratio <= 12:
-            score += 4
-            notes.append("量偏熱")
-        elif volume_ratio > 12:
-            score -= 5
-            notes.append("量過熱")
+        if 1.2 <= volume_ratio <= 3.5:
+            score += 16
+            notes.append("續漲量能")
+        elif 3.5 < volume_ratio <= 6:
+            score += 8
+            notes.append("量能偏強")
+        elif 6 < volume_ratio <= 10:
+            score -= 2
+            notes.append("量能偏急")
+        elif volume_ratio > 10:
+            score -= 12
+            notes.append("爆量過熱")
+        elif volume_ratio < 0.8:
+            score -= 6
+            notes.append("量能不足")
 
     pct = _safe_float(row.get("漲跌幅"))
     if pct is not None:
-        if 1 <= pct <= 7:
-            score += 10
-            notes.append("漲幅可追蹤")
-        elif 7 < pct < 9.5:
-            score += 2
-            notes.append("漲幅偏高")
+        if 0.5 <= pct <= 4.5:
+            score += 14
+            notes.append("漲幅適中")
+        elif 4.5 < pct <= 6.5:
+            score += 6
+            notes.append("漲幅偏強")
+        elif 6.5 < pct < 9.5:
+            score -= 4
+            notes.append("短線偏熱")
         elif pct >= 9.5:
-            score -= 8
+            score -= 18
             notes.append("近漲停")
         elif pct < 0:
-            score -= 10
+            score -= 14
             notes.append("逆勢弱")
+        else:
+            score += 2
+            notes.append("低漲幅")
 
     intraday_position = _safe_float(row.get("收盤位置"))
     if intraday_position is not None:
-        if 0.35 <= intraday_position <= 0.85:
-            score += 10
-            notes.append("位置健康")
-        elif intraday_position > 0.9:
-            score -= 3
-            notes.append("接近日高")
+        if 0.55 <= intraday_position <= 0.85:
+            score += 16
+            notes.append("收位健康")
+        elif 0.35 <= intraday_position < 0.55:
+            score += 6
+            notes.append("收位普通")
+        elif 0.85 < intraday_position <= 0.95:
+            score += 8
+            notes.append("收近高")
+        elif intraday_position > 0.95:
+            score -= 6
+            notes.append("近高追價")
         elif intraday_position < 0.25:
-            score -= 8
+            score -= 18
             notes.append("日內回落")
 
-    return pd.Series({"分數": score, "理由": "、".join(notes)})
+    risk = _risk_pct(row)
+    if risk is not None:
+        if 2 <= risk <= 8:
+            score += 10
+            notes.append("隔日觀察價合理")
+        elif risk < 2:
+            score += 4
+            notes.append("觀察價很近")
+        elif 8 < risk <= 12:
+            score -= 4
+            notes.append("觀察價偏遠")
+        else:
+            score -= 12
+            notes.append("波動風險大")
+
+    return pd.Series(
+        {
+            "分數": score,
+            "續漲型態": _swing_profile(row),
+            "隔日觀察價": _observation_price(row),
+            "追價上限": _chase_limit(row),
+            "持有計畫": _holding_plan(row),
+            "理由": "、".join(notes),
+        }
+    )
 
 
 def build_candidate_ranking(scan_path, market_path):
@@ -236,8 +352,12 @@ def build_candidate_ranking(scan_path, market_path):
     extra_market_cols = [
         "產業族群",
         "名稱",
+        "開盤",
+        "最高",
+        "最低",
         "現價",
         "漲跌幅",
+        "目前成交量(張)",
         "成交值(億)",
         "量比5",
         "量比20",
@@ -316,9 +436,10 @@ def _candidate_text(ranked, n=5):
     display = ranked.head(n)
     for _, row in display.iterrows():
         rows.append(
-            f"{normalize_code(row.get('代號'))} {row.get('名稱')} "
-            f"{row.get('策略')}｜價{_fmt(row.get('現價'))} "
-            f"{_fmt(row.get('漲跌幅'), 2, '%')}｜量比{_fmt(row.get('量比5'))}｜守{_fmt(row.get('防守價'))}"
+            f"{normalize_code(row.get('代號'))} {row.get('名稱')}｜{row.get('續漲型態')}｜"
+            f"分{_fmt(row.get('分數'), 0)}｜價{_fmt(row.get('現價'))} "
+            f"{_fmt(row.get('漲跌幅'), 2, '%')}｜量比{_fmt(row.get('量比5'))}｜"
+            f"隔日觀察{_fmt(row.get('隔日觀察價'))}｜不追>{_fmt(row.get('追價上限'))}"
         )
     return "\n".join([f"- {row}" for row in rows])
 
@@ -331,17 +452,18 @@ def _market_stance(summary):
     if up_ratio is None:
         return "資料不足，先以個股風險控管為主。"
     if up_ratio < 45 and (median_pct is None or median_pct <= 0):
-        return "主流族群撐盤，但市場廣度不足；追價保守，優先等回測。"
+        return "主流族群撐盤但市場廣度不足；只挑隔日續漲結構完整、收位健康的標的。"
     if up_ratio >= 55 and avg_pct is not None and avg_pct > 0:
-        return "盤面廣度偏多，可聚焦主流族群內的強勢延續。"
-    return "盤面中性偏分歧，僅挑量價健康且能設防守價的標的。"
+        return "盤面廣度偏多，可聚焦主流族群內的 T+1/T+3 強勢延續。"
+    return "盤面中性偏分歧，僅挑量價健康且隔日觀察價合理的標的。"
 
 
 def build_report_text(ranked, signals, industry, summary, focus):
     values = _summary_map(summary)
     update_time = values.get("更新時間") or dt.datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M")
     lines = [
-        f"盤中分析快報｜{update_time}",
+        f"盤中續漲分析快報｜{update_time}",
+        SWING_HOLDING_RULE,
         "",
         "市場狀態：",
         (
@@ -361,11 +483,11 @@ def build_report_text(ranked, signals, industry, summary, focus):
         "資金焦點：",
         _focus_text(focus),
         "",
-        "觀察名單：",
+        "隔日續漲觀察名單：",
         _candidate_text(ranked),
         "",
         "操作原則：",
-        "強股續抱、弱股控風險；不追近漲停，優先等回測；候選跌破防守價先淘汰。",
+        "今天買進後不做當日賣出判斷；隔日收盤再看是否守住觀察價、族群是否仍強、量能是否延續。盤中急殺只記錄風險，不直接給賣出訊號。",
     ]
     return "\n".join(lines)
 
@@ -447,17 +569,25 @@ def generate_intraday_analysis_report(
         if not ranked.empty:
             ranking_cols = [
                 "分數",
+                "續漲型態",
                 "代號",
                 "名稱",
                 "產業族群",
                 "策略",
+                "開盤",
+                "最高",
+                "最低",
                 "現價",
                 "漲跌幅",
+                "目前成交量(張)",
                 "成交值(億)",
                 "量比5",
                 "量比20",
                 "收盤位置",
+                "隔日觀察價",
+                "追價上限",
                 "防守價",
+                "持有計畫",
                 "理由",
                 "條件",
             ]

@@ -400,7 +400,7 @@ if page == "📊 歷史報表預覽 (Reports)":
                 st.rerun()
 
         if col3.button("📡 盤中分析 + Telegram", use_container_width=True):
-            with st.spinner("正在執行盤中掃描、發送三策略清單、全市場監控，並整理精簡 Telegram 報告..."):
+            with st.spinner("正在執行盤中掃描、發送三策略清單、全市場監控，並整理隔日續漲 Telegram 報告..."):
                 from intraday_analysis_report import generate_intraday_analysis_report
 
                 result = generate_intraday_analysis_report(
@@ -410,10 +410,10 @@ if page == "📊 歷史報表預覽 (Reports)":
                     send_raw_scanner_telegram=True,
                 )
                 if result["telegram_sent"]:
-                    st.success("✅ 三策略清單與盤中分析報告已同步發送 Telegram。")
+                    st.success("✅ 三策略清單與隔日續漲分析報告已同步發送 Telegram。")
                 else:
                     st.warning(f"盤中分析報告已產出，但 Telegram 未送出：{result['telegram_message']}")
-                st.text_area("精簡分析報告", value=result["text"], height=320)
+                st.text_area("隔日續漲分析報告", value=result["text"], height=320)
                 st.balloons()
     st.markdown("---")
     
