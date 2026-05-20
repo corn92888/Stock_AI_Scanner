@@ -2,6 +2,7 @@ import argparse
 import datetime
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 import numpy as np
 import pandas as pd
@@ -17,6 +18,7 @@ load_dotenv()
 TAIPEI_TZ = datetime.timezone(datetime.timedelta(hours=8), name="Asia/Taipei")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TWSTOCK_TIMEOUT_SECONDS = 8
 
 
 def get_taipei_now():
@@ -49,6 +51,22 @@ def parse_realtime_price(rt):
     return 0.0
 
 
+def twstock_realtime_get_with_timeout(chunk, timeout=TWSTOCK_TIMEOUT_SECONDS):
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(twstock.realtime.get, chunk)
+    try:
+        return future.result(timeout=timeout)
+    except TimeoutError:
+        first = chunk[0] if chunk else ""
+        last = chunk[-1] if chunk else ""
+        print(f"⚠️ TWSE 即時報價逾時，跳過批次 {first}-{last}")
+        return None
+    except Exception:
+        return None
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
 def get_projected_volume(current_volume_lots, now=None):
     now = now or get_taipei_now()
     market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
@@ -66,7 +84,7 @@ def fetch_realtime_prices(ticker_list, chunk_size=20):
     for i in tqdm(range(0, len(ticker_list), chunk_size), desc="📡 全市場即時報價"):
         chunk = ticker_list[i : i + chunk_size]
         try:
-            data = twstock.realtime.get(chunk)
+            data = twstock_realtime_get_with_timeout(chunk)
             if not data:
                 continue
             if len(chunk) == 1:

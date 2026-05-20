@@ -8,7 +8,7 @@ import sys
 import time
 import requests 
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 
 try:
     from logic import calculate_indicators, check_trend_strict, check_reversal_strict, check_wave_strict
@@ -23,6 +23,7 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "") 
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")    
 TAIPEI_TZ = datetime.timezone(datetime.timedelta(hours=8), name="Asia/Taipei")
+TWSTOCK_TIMEOUT_SECONDS = 8
 
 def send_telegram_message(msg_lines):
     try:
@@ -182,12 +183,27 @@ def get_projected_volume(current_volume_lots):
     if elapsed_seconds >= total_seconds: return current_volume_lots
     return current_volume_lots * (total_seconds / elapsed_seconds)
 
+def twstock_realtime_get_with_timeout(chunk, timeout=TWSTOCK_TIMEOUT_SECONDS):
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(twstock.realtime.get, chunk)
+    try:
+        return future.result(timeout=timeout)
+    except TimeoutError:
+        first = chunk[0] if chunk else ""
+        last = chunk[-1] if chunk else ""
+        print(f"⚠️ TWSE 即時報價逾時，跳過批次 {first}-{last}")
+        return None
+    except Exception:
+        return None
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
 def fetch_realtime_prices(ticker_list, chunk_size=20):
     result = {}
     for i in tqdm(range(0, len(ticker_list), chunk_size), desc="📡 盤中即時報價"):
         chunk = ticker_list[i:i+chunk_size]
         try:
-            data = twstock.realtime.get(chunk)
+            data = twstock_realtime_get_with_timeout(chunk)
             if not data: continue
             
             if len(chunk) == 1:
