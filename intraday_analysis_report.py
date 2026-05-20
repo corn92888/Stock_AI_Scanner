@@ -337,6 +337,7 @@ def score_candidate(row):
 def build_candidate_ranking(scan_path, market_path):
     signals = load_scan_signals(scan_path)
     market, industry, summary, focus = load_market_report(market_path)
+    quote_time = _summary_map(summary).get("更新時間", "")
 
     if signals.empty:
         return pd.DataFrame(), signals, market, industry, summary, focus
@@ -386,6 +387,8 @@ def build_candidate_ranking(scan_path, market_path):
         ranked = ranked.merge(industry_small, on="產業族群", how="left")
 
     ranked = pd.concat([ranked, ranked.apply(score_candidate, axis=1)], axis=1)
+    if quote_time:
+        ranked["報價時間"] = quote_time
     sort_cols = [col for col in ["分數", "成交值(億)", "策略數"] if col in ranked.columns]
     ranked = ranked.sort_values(sort_cols, ascending=[False] * len(sort_cols)) if sort_cols else ranked
     return ranked, signals, market, industry, summary, focus
@@ -435,9 +438,12 @@ def _candidate_text(ranked, n=5):
     rows = []
     display = ranked.head(n)
     for _, row in display.iterrows():
+        quote_time = str(row.get("報價時間", "") or "")
+        quote_clock = quote_time[11:16] if len(quote_time) >= 16 else quote_time[-5:]
+        quote_label = f"@{quote_clock}" if quote_clock else ""
         rows.append(
             f"{normalize_code(row.get('代號'))} {row.get('名稱')}｜{row.get('續漲型態')}｜"
-            f"分{_fmt(row.get('分數'), 0)}｜價{_fmt(row.get('現價'))} "
+            f"分{_fmt(row.get('分數'), 0)}｜價{_fmt(row.get('現價'))}{quote_label} "
             f"{_fmt(row.get('漲跌幅'), 2, '%')}｜量比{_fmt(row.get('量比5'))}｜"
             f"隔日觀察{_fmt(row.get('隔日觀察價'))}｜不追>{_fmt(row.get('追價上限'))}"
         )
@@ -464,6 +470,7 @@ def build_report_text(ranked, signals, industry, summary, focus):
     lines = [
         f"盤中續漲分析快報｜{update_time}",
         SWING_HOLDING_RULE,
+        "價格為本報告產生時間的快照，不是即時追價；盤中價格若已變動，請重新跑一次。",
         "",
         "市場狀態：",
         (
@@ -570,6 +577,7 @@ def generate_intraday_analysis_report(
             ranking_cols = [
                 "分數",
                 "續漲型態",
+                "報價時間",
                 "代號",
                 "名稱",
                 "產業族群",
