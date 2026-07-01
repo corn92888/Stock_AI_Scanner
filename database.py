@@ -70,10 +70,11 @@ def init_db(conn):
             rank_order INTEGER,
             created_at TEXT NOT NULL,
             FOREIGN KEY (run_id) REFERENCES scan_runs(id),
-            UNIQUE (trade_date, mode, strategy, code)
+            UNIQUE (run_id, strategy, code)
         )
         """
     )
+    _migrate_signal_uniqueness(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS backtest_results (
@@ -104,6 +105,61 @@ def init_db(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_trade_date ON stock_signals(trade_date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_strategy ON stock_signals(strategy)")
     conn.commit()
+
+
+def _migrate_signal_uniqueness(conn):
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'stock_signals'"
+    ).fetchone()
+    if not row or not row[0]:
+        return
+
+    current_schema = row[0]
+    if "UNIQUE (trade_date, mode, strategy, code)" not in current_schema:
+        return
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute(
+        """
+        CREATE TABLE stock_signals_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            trade_date TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            code TEXT NOT NULL,
+            name TEXT,
+            industry TEXT,
+            signal_price REAL,
+            stop_loss REAL,
+            pct_change REAL,
+            volume_lots INTEGER,
+            rsi REAL,
+            condition_text TEXT,
+            rank_order INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (run_id) REFERENCES scan_runs(id),
+            UNIQUE (run_id, strategy, code)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO stock_signals_new (
+            id, run_id, trade_date, mode, strategy, code, name, industry,
+            signal_price, stop_loss, pct_change, volume_lots, rsi,
+            condition_text, rank_order, created_at
+        )
+        SELECT
+            id, run_id, trade_date, mode, strategy, code, name, industry,
+            signal_price, stop_loss, pct_change, volume_lots, rsi,
+            condition_text, rank_order, created_at
+        FROM stock_signals
+        """
+    )
+    conn.execute("DROP TABLE stock_signals")
+    conn.execute("ALTER TABLE stock_signals_new RENAME TO stock_signals")
+    conn.execute("PRAGMA foreign_keys=ON")
 
 
 def detect_source():
@@ -180,8 +236,7 @@ def record_scan_results(mode, trade_date, strategy_frames, report_path=None, not
                         signal_price, stop_loss, pct_change, volume_lots, rsi,
                         condition_text, rank_order, created_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(trade_date, mode, strategy, code) DO UPDATE SET
-                        run_id = excluded.run_id,
+                    ON CONFLICT(run_id, strategy, code) DO UPDATE SET
                         name = excluded.name,
                         industry = excluded.industry,
                         signal_price = excluded.signal_price,
