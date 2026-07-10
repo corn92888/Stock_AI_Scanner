@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 from tqdm import tqdm
 import datetime
+import json
 import os
 import sys
 import time
@@ -24,6 +25,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")    
 TAIPEI_TZ = datetime.timezone(datetime.timedelta(hours=8), name="Asia/Taipei")
 TWSTOCK_TIMEOUT_SECONDS = 8
+MIN_REALTIME_COVERAGE = 0.65
 
 def send_telegram_message(msg_lines):
     try:
@@ -150,8 +152,8 @@ def fetch_yfinance_current_bars(yf_tickers, yf_to_code, chunk_size=200):
             continue
     return result
 
-def is_market_open():
-    now = datetime.datetime.now(TAIPEI_TZ)
+def is_market_open(now=None):
+    now = now or datetime.datetime.now(TAIPEI_TZ)
     if now.weekday() >= 5: return False
     return datetime.time(9, 0) <= now.time() <= datetime.time(13, 30)
 
@@ -236,10 +238,21 @@ def fetch_realtime_prices(ticker_list, chunk_size=20):
         except: pass
     return result
 
-def run_intraday_scanner(send_telegram=True):
+def run_intraday_scanner(send_telegram=True, now=None):
     start_time = time.time()
+    started_at = now or datetime.datetime.now(TAIPEI_TZ)
     print("⚡️ 啟動: 盤中即時策略全掃描 (A/B/C 三合一)")
     print("-" * 40)
+
+    if not is_market_open(started_at):
+        reason = "目前非交易時段，盤中掃描安全略過。"
+        print(f"\nℹ️ {reason}")
+        return {
+            "status": "skipped",
+            "reason": "outside_market_hours",
+            "message": reason,
+            "report_path": "",
+        }
     
     codes = twstock.codes
     tickers = [c for c in codes.keys() if codes[c].type == '股票']
@@ -252,7 +265,7 @@ def run_intraday_scanner(send_telegram=True):
     
     # 2. 抓取即時報價並推算預估量
     is_realtime_mode = False
-    if is_market_open():
+    if is_market_open(started_at):
         print("\n📡 台股盤中！正在抓取即時報價並結合歷史資料...")
         rt_prices = fetch_realtime_prices(tickers, chunk_size=20)
         missing_yf_tickers = [
@@ -296,10 +309,19 @@ def run_intraday_scanner(send_telegram=True):
                             new_bar[common_cols]
                         ])
                         appended += 1
-            print(f"✅ 已為 {appended} 檔追加盤中即時 K 棒 (帶預估量)")
+            coverage = appended / len(all_stock_data) if all_stock_data else 0.0
+            print(
+                f"✅ 已為 {appended} 檔追加盤中即時 K 棒 "
+                f"(帶預估量，覆蓋率 {coverage:.1%})"
+            )
+            if coverage < MIN_REALTIME_COVERAGE:
+                raise RuntimeError(
+                    f"當日報價覆蓋率僅 {coverage:.1%}，低於 {MIN_REALTIME_COVERAGE:.0%}，"
+                    "拒絕產生可能失真的盤中報表。"
+                )
             is_realtime_mode = True
         else:
-            print("⚠️ 無法取得即時報價，轉回純歷史研判")
+            raise RuntimeError("無法取得任何當日報價，拒絕用昨日資料冒充盤中掃描。")
     else:
         print("\nℹ️ 目前非交易時段，若要確認當日收盤表現，請使用 scanner.py")
         sys.exit(0)
@@ -418,21 +440,41 @@ def run_intraday_scanner(send_telegram=True):
         if not wrote_sheet:
             pd.DataFrame([{"狀態": "本次盤中掃描無符合策略條件的標的"}]).to_excel(writer, sheet_name='無符合標的', index=False)
 
+    automation_metadata = {
+        key: value
+        for key, value in {
+            "automation_slot": os.getenv("INTRADAY_AUTOMATION_SLOT", ""),
+            "github_run_id": os.getenv("GITHUB_RUN_ID", ""),
+            "github_run_attempt": os.getenv("GITHUB_RUN_ATTEMPT", ""),
+            "realtime_coverage": round(coverage, 4),
+        }.items()
+        if value not in (None, "")
+    }
     try:
         db_result = record_scan_results(
             mode="intraday",
             trade_date=trade_date,
             strategy_frames=strategy_frames,
             report_path=filename,
+            notes=json.dumps(automation_metadata, ensure_ascii=False, sort_keys=True),
         )
         print(f"🗃️  已寫入訊號資料庫: {db_result['db_path']} ({db_result['signals']} 筆訊號)")
     except Exception as e:
-        print(f"⚠️ 訊號資料庫寫入失敗: {e}")
+        raise RuntimeError(f"訊號資料庫寫入失敗: {e}") from e
     
     elapsed = time.time() - start_time
     minutes, seconds = divmod(int(elapsed), 60)
     print(f"\n📊 掃描完成！Excel 已儲存: {filename}")
     print(f"⏱️  總耗時: {minutes} 分 {seconds} 秒")
+    return {
+        "status": "completed",
+        "reason": "",
+        "message": "盤中掃描完成。",
+        "report_path": filename,
+        "run_id": db_result["run_id"],
+        "signal_count": db_result["signals"],
+        "realtime_coverage": coverage,
+    }
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the intraday stock scanner.")

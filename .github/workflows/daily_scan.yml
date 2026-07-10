@@ -9,9 +9,14 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: stock-scanner-automation
+  cancel-in-progress: false
+
 jobs:
   scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
 
     steps:
     - name: Checkout repository
@@ -42,6 +47,7 @@ jobs:
         python backtest.py --limit 200
 
     - name: Persist signal database
+      if: always()
       run: |
         if [ -f data/stock_scanner.db ]; then
           git config user.name "github-actions[bot]"
@@ -59,6 +65,7 @@ jobs:
         fi
 
     - name: Upload Excel Reports
+      if: always()
       # 將產出的 Excel 報表上傳打包，讓您可以直接從 GitHub 下載
       uses: actions/upload-artifact@v4
       with:
@@ -68,3 +75,16 @@ jobs:
           data/stock_scanner.db
         retention-days: 5
         if-no-files-found: ignore
+
+    - name: Send automation failure alert
+      if: failure()
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+          curl --fail --silent --show-error --retry 2 --max-time 20 \
+            --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
+            --data-urlencode "text=盤後自動化失敗｜run=${{ github.run_id }}｜請查看 GitHub Actions" \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
+        fi

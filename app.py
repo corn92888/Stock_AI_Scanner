@@ -393,11 +393,14 @@ if page == "📊 歷史報表預覽 (Reports)":
         if col2.button("⚡ 執行盤中即時狙擊 (Intraday)", use_container_width=True):
             with st.spinner("正在執行盤中狙擊，強制回補 twstock 最新即時報價，請等候..."):
                 import intraday_scanner
-                intraday_scanner.run_intraday_scanner()
-                st.success("✅ 盤中狙擊完成！最新報表已自動產出。")
-                st.balloons()
-                time.sleep(2)
-                st.rerun()
+                result = intraday_scanner.run_intraday_scanner()
+                if result["status"] == "skipped":
+                    st.info(result["message"])
+                else:
+                    st.success("✅ 盤中狙擊完成！最新報表已自動產出。")
+                    st.balloons()
+                    time.sleep(2)
+                    st.rerun()
 
         if col3.button("📡 盤中分析 + Telegram", use_container_width=True):
             with st.spinner("正在執行盤中掃描、發送三策略清單、全市場監控，並整理隔日續漲 Telegram 報告..."):
@@ -409,12 +412,15 @@ if page == "📊 歷史報表預覽 (Reports)":
                     send_telegram=True,
                     send_raw_scanner_telegram=True,
                 )
-                if result["telegram_sent"]:
+                if result["status"] == "skipped":
+                    st.info(result["text"])
+                elif result["telegram_sent"]:
                     st.success("✅ 三策略清單與隔日續漲分析報告已同步發送 Telegram。")
                 else:
                     st.warning(f"盤中分析報告已產出，但 Telegram 未送出：{result['telegram_message']}")
                 st.text_area("隔日續漲分析報告", value=result["text"], height=320)
-                st.balloons()
+                if result["status"] == "completed":
+                    st.balloons()
     st.markdown("---")
     
     if not os.path.exists('Reports'):

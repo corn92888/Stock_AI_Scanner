@@ -54,6 +54,12 @@
 venv/bin/python3 backfill_candidate_events.py
 ```
 
+## 自動化資料品質閘門
+
+GitHub cron 只負責頻繁喚醒，`automation_guard.py` 依台北時間決定早盤、午盤與尾盤是否應執行，並查詢 `scan_runs` 避免同一時段重複掃描。排程延遲到交易時段外時會回傳 `skipped`，不下載行情、不讀取舊報表，也不建立候選事件。
+
+盤中個股報價與全市場報價覆蓋率都必須至少 65%。掃描報表與市場快照必須是同一交易日，且時間差不超過 45 分鐘。未通過時保留錯誤與 artifacts，但不得進入正式排名或 Telegram 選股報告。
+
 ## 模型升級規則
 
 正式模型為 Champion，新訓練模型為 Challenger。Challenger 只有在 walk-forward 樣本外資料上同時改善 Top 3 淨超額報酬、成功率與最大回撤，且不是只依賴單一產業時，才可升級。

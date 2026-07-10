@@ -77,6 +77,52 @@ def _timestamp_from_path(path):
     return dt.datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d_%H%M")
 
 
+def _report_datetime_from_path(path):
+    match = re.search(r"(\d{4}-\d{2}-\d{2})_(\d{4})", str(path or ""))
+    if not match:
+        return None
+    try:
+        parsed = dt.datetime.strptime("_".join(match.groups()), "%Y-%m-%d_%H%M")
+        return parsed.replace(tzinfo=TAIPEI_TZ)
+    except ValueError:
+        return None
+
+
+def validate_report_freshness(scan_path, market_path, max_skew_minutes=45):
+    scan_time = _report_datetime_from_path(scan_path)
+    market_time = _report_datetime_from_path(market_path)
+    if scan_time is None or market_time is None:
+        return
+    if scan_time.date() != market_time.date():
+        raise RuntimeError(
+            f"盤中日報日期 {scan_time.date()} 與市場快照日期 {market_time.date()} 不一致。"
+        )
+    skew_minutes = abs((market_time - scan_time).total_seconds()) / 60
+    if skew_minutes > max_skew_minutes:
+        raise RuntimeError(
+            f"盤中日報與市場快照相差 {skew_minutes:.0f} 分鐘，"
+            f"超過允許的 {max_skew_minutes} 分鐘。"
+        )
+
+
+def _skipped_result(reason, message):
+    return {
+        "status": "skipped",
+        "reason": reason,
+        "text": message,
+        "scan_path": "",
+        "market_path": "",
+        "report_path": "",
+        "ranking_path": "",
+        "telegram_sent": False,
+        "telegram_message": "盤中流程略過，未發送分析報告。",
+        "signal_count": 0,
+        "selected_count": 0,
+        "candidate_events_saved": 0,
+        "scan_run_id": None,
+    }
+
+
 def _summary_map(summary_df):
     if summary_df is None or summary_df.empty or not {"項目", "數值"}.issubset(summary_df.columns):
         return {}
@@ -571,15 +617,15 @@ def generate_intraday_analysis_report(
     if run_scanner:
         import intraday_scanner
 
-        try:
-            intraday_scanner.run_intraday_scanner(send_telegram=send_raw_scanner_telegram)
-        except SystemExit as exc:
-            if exc.code not in (0, None):
-                raise
-        scan_path = latest_report(
-            ["Reports/盤中日報_*.xlsx"],
-            exclude_keywords=["策略市場交叉分析", "二次篩選分析"],
+        scanner_result = intraday_scanner.run_intraday_scanner(
+            send_telegram=send_raw_scanner_telegram
         )
+        if scanner_result.get("status") != "completed":
+            return _skipped_result(
+                scanner_result.get("reason", "scanner_skipped"),
+                scanner_result.get("message", "盤中掃描未產生新報表。"),
+            )
+        scan_path = scanner_result["report_path"]
 
     if run_market_monitor:
         import market_monitor
@@ -599,6 +645,8 @@ def generate_intraday_analysis_report(
         raise FileNotFoundError("找不到盤中日報，請先執行 intraday_scanner.py。")
     if not market_path:
         raise FileNotFoundError("找不到市場監控報表，請先執行 market_monitor.py。")
+
+    validate_report_freshness(scan_path, market_path)
 
     ranked, signals, market, industry, summary, focus = build_candidate_ranking(scan_path, market_path)
     scan_run = find_scan_run(scan_path, db_path=db_path)
@@ -678,6 +726,8 @@ def generate_intraday_analysis_report(
         telegram_sent, telegram_message = send_telegram_message(report_text)
 
     return {
+        "status": "completed",
+        "reason": "",
         "text": report_text,
         "scan_path": str(scan_path),
         "market_path": str(market_path),
@@ -728,6 +778,9 @@ def main():
         save_report=not args.no_save,
     )
     print(result["text"])
+    if result["status"] == "skipped":
+        print(f"盤中流程略過: {result['reason']}")
+        return
     if result["report_path"]:
         print(f"\n報告已儲存: {result['report_path']}")
     if result["ranking_path"]:

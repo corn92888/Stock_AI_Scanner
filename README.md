@@ -156,11 +156,13 @@
 
 * **設定免開機雲端自動化 (GitHub Actions)：**
   專案內建兩套 GitHub Actions 自動排程：
-  - `.github/workflows/intraday_scan.yml`: 平日 `10:00`, `11:30`, `13:00` 追蹤盤中名單，並同步發送三策略標的清單與精簡盤中分析報告到 Telegram。
+  - `.github/workflows/intraday_scan.yml`: 每 30 分鐘探測一次，但只會在台北時間早盤 `09:35-10:35`、午盤 `11:10-12:10`、尾盤 `12:40-13:20` 各執行一次，降低 GitHub cron 延遲造成整天漏跑的機率；同時發送三策略標的清單與精簡盤中分析報告到 Telegram。
   - `.github/workflows/daily_scan.yml`: 平日 `14:00` 結算每日盤後高防禦名單。
   只要將程式碼推送至 GitHub，並在專案的（Settings > Secrets and variables > Actions）中新增 `TELEGRAM_BOT_TOKEN` 與 `TELEGRAM_CHAT_ID`，就能達成全自動監控！
 
   GitHub Actions 每次掃描後會把 `data/stock_scanner.db` commit 回 `main`，讓歷史選股訊號能跨排程持續累積，日後可直接用 `backtest.py` 驗證策略表現。
+
+  盤中與盤後工作共用 concurrency，不會同時改寫 SQLite。非交易時段會安全略過；當日報價或全市場覆蓋率低於 65%、或盤中日報與市場快照日期/時間不一致時，流程會拒絕產生分析。失敗仍會上傳已取得的 artifacts，並透過 Telegram 發送維運警報。
 
   每日盤後流程也會增量更新最多 200 筆成熟回測結果。行情來源暫時失敗時不會阻斷當日掃描資料保存，未完成的 `partial` 結果會在後續交易日繼續補齊。
 

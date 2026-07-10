@@ -19,6 +19,7 @@ TAIPEI_TZ = datetime.timezone(datetime.timedelta(hours=8), name="Asia/Taipei")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TWSTOCK_TIMEOUT_SECONDS = 8
+MIN_MARKET_COVERAGE = 0.65
 
 
 def get_taipei_now():
@@ -257,6 +258,12 @@ def build_market_snapshot():
     df = pd.DataFrame(rows)
     if df.empty:
         return df, pd.DataFrame(), pd.DataFrame(), now
+    coverage = len(df) / len(yf_to_code) if yf_to_code else 0.0
+    if coverage < MIN_MARKET_COVERAGE:
+        raise RuntimeError(
+            f"全市場報價覆蓋率僅 {coverage:.1%}，低於 {MIN_MARKET_COVERAGE:.0%}，"
+            "拒絕產生失真的市場廣度報表。"
+        )
 
     df["上漲"] = df["漲跌幅"] > 0
     df["下跌"] = df["漲跌幅"] < 0
@@ -285,6 +292,7 @@ def build_market_snapshot():
         [
             {"項目": "更新時間", "數值": now.strftime("%Y-%m-%d %H:%M:%S")},
             {"項目": "有效即時股票數", "數值": len(df)},
+            {"項目": "報價覆蓋率", "數值": f"{coverage * 100:.2f}%"},
             {"項目": "上漲家數", "數值": int(df["上漲"].sum())},
             {"項目": "下跌家數", "數值": int(df["下跌"].sum())},
             {"項目": "上漲比例", "數值": f"{df['上漲'].mean() * 100:.2f}%"},
