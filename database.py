@@ -31,6 +31,8 @@ def get_connection(db_path=DB_PATH):
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
@@ -82,6 +84,8 @@ def init_db(conn):
             signal_id INTEGER NOT NULL,
             entry_date TEXT,
             entry_price REAL,
+            entry_method TEXT,
+            price_basis TEXT,
             exit_1d_price REAL,
             exit_3d_price REAL,
             exit_5d_price REAL,
@@ -94,17 +98,259 @@ def init_db(conn):
             return_20d REAL,
             max_return_20d REAL,
             max_drawdown_20d REAL,
+            max_return_3d REAL,
+            max_drawdown_3d REAL,
+            net_return_1d REAL,
+            net_return_3d REAL,
+            net_return_5d REAL,
+            net_return_10d REAL,
+            net_return_20d REAL,
+            benchmark_code TEXT,
+            benchmark_entry_price REAL,
+            benchmark_exit_1d_price REAL,
+            benchmark_exit_3d_price REAL,
+            benchmark_exit_5d_price REAL,
+            benchmark_exit_10d_price REAL,
+            benchmark_exit_20d_price REAL,
+            benchmark_return_1d REAL,
+            benchmark_return_3d REAL,
+            benchmark_return_5d REAL,
+            benchmark_return_10d REAL,
+            benchmark_return_20d REAL,
+            excess_return_1d REAL,
+            excess_return_3d REAL,
+            excess_return_5d REAL,
+            excess_return_10d REAL,
+            excess_return_20d REAL,
             stop_loss_hit INTEGER,
             stop_loss_date TEXT,
+            success_t3 INTEGER,
+            matured_horizon INTEGER NOT NULL DEFAULT 0,
+            outcome_status TEXT NOT NULL DEFAULT 'pending',
+            price_data_end TEXT,
+            costs_bps REAL,
+            config_json TEXT,
             tested_at TEXT NOT NULL,
+            updated_at TEXT,
             FOREIGN KEY (signal_id) REFERENCES stock_signals(id),
             UNIQUE (signal_id)
         )
         """
     )
+    _migrate_backtest_results(conn)
+    _create_quant_tables(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_trade_date ON stock_signals(trade_date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_strategy ON stock_signals(strategy)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_backtest_status ON backtest_results(outcome_status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_predictions_run_rank ON predictions(run_id, rank_order)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_outcomes_status ON prediction_outcomes(outcome_status)")
     conn.commit()
+
+
+def _ensure_columns(conn, table_name, columns):
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})")}
+    for column_name, definition in columns.items():
+        if column_name not in existing:
+            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
+
+
+def _migrate_backtest_results(conn):
+    _ensure_columns(
+        conn,
+        "backtest_results",
+        {
+            "entry_method": "TEXT",
+            "price_basis": "TEXT",
+            "max_return_3d": "REAL",
+            "max_drawdown_3d": "REAL",
+            "net_return_1d": "REAL",
+            "net_return_3d": "REAL",
+            "net_return_5d": "REAL",
+            "net_return_10d": "REAL",
+            "net_return_20d": "REAL",
+            "benchmark_code": "TEXT",
+            "benchmark_entry_price": "REAL",
+            "benchmark_exit_1d_price": "REAL",
+            "benchmark_exit_3d_price": "REAL",
+            "benchmark_exit_5d_price": "REAL",
+            "benchmark_exit_10d_price": "REAL",
+            "benchmark_exit_20d_price": "REAL",
+            "benchmark_return_1d": "REAL",
+            "benchmark_return_3d": "REAL",
+            "benchmark_return_5d": "REAL",
+            "benchmark_return_10d": "REAL",
+            "benchmark_return_20d": "REAL",
+            "excess_return_1d": "REAL",
+            "excess_return_3d": "REAL",
+            "excess_return_5d": "REAL",
+            "excess_return_10d": "REAL",
+            "excess_return_20d": "REAL",
+            "success_t3": "INTEGER",
+            "matured_horizon": "INTEGER NOT NULL DEFAULT 0",
+            "outcome_status": "TEXT NOT NULL DEFAULT 'pending'",
+            "price_data_end": "TEXT",
+            "costs_bps": "REAL",
+            "config_json": "TEXT",
+            "updated_at": "TEXT",
+        },
+    )
+
+
+def _create_quant_tables(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS feature_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            signal_id INTEGER,
+            code TEXT NOT NULL,
+            as_of TEXT NOT NULL,
+            feature_version TEXT NOT NULL,
+            price REAL,
+            pct_change REAL,
+            turnover_billion REAL,
+            volume_ratio_5 REAL,
+            volume_ratio_20 REAL,
+            intraday_position REAL,
+            rsi REAL,
+            industry_up_ratio REAL,
+            industry_avg_return REAL,
+            industry_heat REAL,
+            market_up_ratio REAL,
+            market_avg_return REAL,
+            market_median_return REAL,
+            pe REAL,
+            pb REAL,
+            revenue_yoy REAL,
+            revenue_mom REAL,
+            eps_ttm REAL,
+            news_score REAL,
+            catalyst_score REAL,
+            risk_score REAL,
+            features_json TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (run_id) REFERENCES scan_runs(id),
+            FOREIGN KEY (signal_id) REFERENCES stock_signals(id),
+            UNIQUE (run_id, code, feature_version)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS news_evidence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            code TEXT,
+            title TEXT NOT NULL,
+            source_name TEXT,
+            url TEXT NOT NULL,
+            published_at TEXT,
+            known_at TEXT NOT NULL,
+            evidence_type TEXT,
+            sentiment TEXT,
+            confidence REAL,
+            content_hash TEXT,
+            extracted_json TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (run_id) REFERENCES scan_runs(id),
+            UNIQUE (run_id, code, url, published_at)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS model_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            model_name TEXT NOT NULL,
+            version TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'candidate',
+            feature_version TEXT NOT NULL,
+            training_start TEXT,
+            training_end TEXT,
+            config_json TEXT,
+            metrics_json TEXT,
+            artifact_path TEXT,
+            created_at TEXT NOT NULL,
+            promoted_at TEXT,
+            UNIQUE (model_name, version)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            signal_id INTEGER,
+            code TEXT NOT NULL,
+            predicted_at TEXT NOT NULL,
+            model_version TEXT NOT NULL,
+            rank_order INTEGER,
+            is_selected INTEGER NOT NULL DEFAULT 0,
+            final_score REAL,
+            probability_t3 REAL,
+            expected_excess_return_3d REAL,
+            expected_max_drawdown_3d REAL,
+            action TEXT,
+            entry_low REAL,
+            entry_high REAL,
+            chase_limit REAL,
+            stop_price REAL,
+            target_low REAL,
+            target_high REAL,
+            rationale_json TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (run_id) REFERENCES scan_runs(id),
+            FOREIGN KEY (signal_id) REFERENCES stock_signals(id),
+            UNIQUE (run_id, code, model_version)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS prediction_outcomes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prediction_id INTEGER NOT NULL,
+            entry_at TEXT,
+            entry_price REAL,
+            entry_method TEXT,
+            net_return_1d REAL,
+            net_return_3d REAL,
+            net_return_5d REAL,
+            benchmark_return_3d REAL,
+            excess_return_3d REAL,
+            max_return_3d REAL,
+            max_drawdown_3d REAL,
+            target_hit_at TEXT,
+            stop_hit_at TEXT,
+            first_barrier TEXT,
+            success_t3 INTEGER,
+            matured_horizon INTEGER NOT NULL DEFAULT 0,
+            outcome_status TEXT NOT NULL DEFAULT 'pending',
+            evaluated_at TEXT,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (prediction_id) REFERENCES predictions(id),
+            UNIQUE (prediction_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS backtest_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            status TEXT NOT NULL,
+            config_json TEXT NOT NULL,
+            git_commit TEXT,
+            signals_requested INTEGER NOT NULL DEFAULT 0,
+            completed_count INTEGER NOT NULL DEFAULT 0,
+            partial_count INTEGER NOT NULL DEFAULT 0,
+            skipped_count INTEGER NOT NULL DEFAULT 0,
+            error_text TEXT
+        )
+        """
+    )
 
 
 def _migrate_signal_uniqueness(conn):
@@ -275,54 +521,133 @@ def record_scan_results(mode, trade_date, strategy_frames, report_path=None, not
 
 def save_backtest_result(signal_id, result, db_path=DB_PATH):
     tested_at = get_taipei_now().isoformat(timespec="seconds")
+    columns = [
+        "signal_id",
+        "entry_date",
+        "entry_price",
+        "entry_method",
+        "price_basis",
+        "exit_1d_price",
+        "exit_3d_price",
+        "exit_5d_price",
+        "exit_10d_price",
+        "exit_20d_price",
+        "return_1d",
+        "return_3d",
+        "return_5d",
+        "return_10d",
+        "return_20d",
+        "max_return_3d",
+        "max_drawdown_3d",
+        "max_return_20d",
+        "max_drawdown_20d",
+        "net_return_1d",
+        "net_return_3d",
+        "net_return_5d",
+        "net_return_10d",
+        "net_return_20d",
+        "benchmark_code",
+        "benchmark_entry_price",
+        "benchmark_exit_1d_price",
+        "benchmark_exit_3d_price",
+        "benchmark_exit_5d_price",
+        "benchmark_exit_10d_price",
+        "benchmark_exit_20d_price",
+        "benchmark_return_1d",
+        "benchmark_return_3d",
+        "benchmark_return_5d",
+        "benchmark_return_10d",
+        "benchmark_return_20d",
+        "excess_return_1d",
+        "excess_return_3d",
+        "excess_return_5d",
+        "excess_return_10d",
+        "excess_return_20d",
+        "stop_loss_hit",
+        "stop_loss_date",
+        "success_t3",
+        "matured_horizon",
+        "outcome_status",
+        "price_data_end",
+        "costs_bps",
+        "config_json",
+        "tested_at",
+        "updated_at",
+    ]
+    values = []
+    for column in columns:
+        if column == "signal_id":
+            value = signal_id
+        elif column in {"tested_at", "updated_at"}:
+            value = tested_at
+        elif column in {"stop_loss_hit", "success_t3"}:
+            raw = result.get(column)
+            value = None if raw is None else int(bool(raw))
+        else:
+            value = result.get(column)
+        values.append(value)
+
+    placeholders = ", ".join("?" for _ in columns)
+    updates = ",\n                ".join(
+        f"{column} = excluded.{column}" for column in columns if column != "signal_id"
+    )
+    with get_connection(db_path) as conn:
+        init_db(conn)
+        conn.execute(
+            f"""
+            INSERT INTO backtest_results ({", ".join(columns)})
+            VALUES ({placeholders})
+            ON CONFLICT(signal_id) DO UPDATE SET
+                {updates}
+            """,
+            values,
+        )
+        conn.commit()
+
+
+def start_backtest_run(config_json, signals_requested, db_path=DB_PATH):
+    started_at = get_taipei_now().isoformat(timespec="seconds")
+    with get_connection(db_path) as conn:
+        init_db(conn)
+        cursor = conn.execute(
+            """
+            INSERT INTO backtest_runs (
+                started_at, status, config_json, git_commit, signals_requested
+            ) VALUES (?, 'running', ?, ?, ?)
+            """,
+            (started_at, config_json, get_git_commit(), int(signals_requested)),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def finish_backtest_run(
+    run_id,
+    status,
+    completed_count=0,
+    partial_count=0,
+    skipped_count=0,
+    error_text=None,
+    db_path=DB_PATH,
+):
+    finished_at = get_taipei_now().isoformat(timespec="seconds")
     with get_connection(db_path) as conn:
         init_db(conn)
         conn.execute(
             """
-            INSERT INTO backtest_results (
-                signal_id, entry_date, entry_price,
-                exit_1d_price, exit_3d_price, exit_5d_price, exit_10d_price, exit_20d_price,
-                return_1d, return_3d, return_5d, return_10d, return_20d,
-                max_return_20d, max_drawdown_20d, stop_loss_hit, stop_loss_date, tested_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(signal_id) DO UPDATE SET
-                entry_date = excluded.entry_date,
-                entry_price = excluded.entry_price,
-                exit_1d_price = excluded.exit_1d_price,
-                exit_3d_price = excluded.exit_3d_price,
-                exit_5d_price = excluded.exit_5d_price,
-                exit_10d_price = excluded.exit_10d_price,
-                exit_20d_price = excluded.exit_20d_price,
-                return_1d = excluded.return_1d,
-                return_3d = excluded.return_3d,
-                return_5d = excluded.return_5d,
-                return_10d = excluded.return_10d,
-                return_20d = excluded.return_20d,
-                max_return_20d = excluded.max_return_20d,
-                max_drawdown_20d = excluded.max_drawdown_20d,
-                stop_loss_hit = excluded.stop_loss_hit,
-                stop_loss_date = excluded.stop_loss_date,
-                tested_at = excluded.tested_at
+            UPDATE backtest_runs
+            SET finished_at = ?, status = ?, completed_count = ?, partial_count = ?,
+                skipped_count = ?, error_text = ?
+            WHERE id = ?
             """,
             (
-                signal_id,
-                result.get("entry_date"),
-                result.get("entry_price"),
-                result.get("exit_1d_price"),
-                result.get("exit_3d_price"),
-                result.get("exit_5d_price"),
-                result.get("exit_10d_price"),
-                result.get("exit_20d_price"),
-                result.get("return_1d"),
-                result.get("return_3d"),
-                result.get("return_5d"),
-                result.get("return_10d"),
-                result.get("return_20d"),
-                result.get("max_return_20d"),
-                result.get("max_drawdown_20d"),
-                1 if result.get("stop_loss_hit") else 0,
-                result.get("stop_loss_date"),
-                tested_at,
+                finished_at,
+                status,
+                int(completed_count),
+                int(partial_count),
+                int(skipped_count),
+                error_text,
+                int(run_id),
             ),
         )
         conn.commit()

@@ -94,7 +94,11 @@
   ```bash
   venv/bin/python3 backtest.py
   ```
-  第一版回測會用「訊號隔一個交易日開盤價」作為進場價，計算 1 / 3 / 5 / 10 / 20 個交易日後報酬、20 日內最大漲幅、最大回撤，以及是否跌破防守價。
+  回測會計算 1 / 3 / 5 / 10 / 20 個交易日後的毛報酬、成本後報酬、大盤報酬與超額報酬，並保存 3 / 20 日最大漲幅、最大回撤及防守價觸發狀態。預設採標準手續費、交易稅與每邊 0.1% 滑價，合計保守成本約 78.5 bps。
+
+  舊盤中訊號缺乏歷史分鐘線，因此會明確標記為 `legacy_next_day_open_intraday` 並使用隔日開盤回測；盤後訊號標記為 `next_day_open_eod`。結果會由 `partial` 持續更新到 20 個交易日資料成熟後的 `complete`，不會因先寫入 T+1 就停止補齊後續資料。
+
+  目前主要成功標籤 `success_t3` 定義為：扣除交易成本後，T+3 相對加權指數超額報酬至少 2%，而且三日內最大回撤不低於 -4%。
 
   查看已完成回測統計：
   ```bash
@@ -104,6 +108,19 @@
   也可以只回測特定模式或策略：
   ```bash
   venv/bin/python3 backtest.py --mode eod --strategy trend --limit 20
+  ```
+
+  強制重算已完成結果，或調整成本與成功門檻：
+  ```bash
+  venv/bin/python3 backtest.py --refresh --limit 20
+  venv/bin/python3 backtest.py --buy-fee-rate 0.001425 --sell-fee-rate 0.001425 \
+    --sell-tax-rate 0.003 --slippage-rate 0.001 \
+    --success-excess-return 2.0 --success-max-drawdown -4.0
+  ```
+
+  執行離線測試：
+  ```bash
+  venv/bin/python3 -m unittest discover -s tests -v
   ```
 
 * **全市場即時盯盤監控:**
@@ -139,6 +156,8 @@
   只要將程式碼推送至 GitHub，並在專案的（Settings > Secrets and variables > Actions）中新增 `TELEGRAM_BOT_TOKEN` 與 `TELEGRAM_CHAT_ID`，就能達成全自動監控！
 
   GitHub Actions 每次掃描後會把 `data/stock_scanner.db` commit 回 `main`，讓歷史選股訊號能跨排程持續累積，日後可直接用 `backtest.py` 驗證策略表現。
+
+  每日盤後流程也會增量更新最多 200 筆成熟回測結果。行情來源暫時失敗時不會阻斷當日掃描資料保存，未完成的 `partial` 結果會在後續交易日繼續補齊。
 
 * **開啟戰情室 (Dashboard)：**
   ```bash
