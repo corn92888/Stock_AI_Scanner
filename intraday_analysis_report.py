@@ -9,6 +9,13 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
+from database import DB_PATH, find_scan_run, get_daily_candidate_state, save_candidate_events
+from selection_policy import (
+    DEFAULT_SELECTION_POLICY,
+    apply_selection_policy,
+    candidate_event_records,
+)
+
 load_dotenv()
 
 STRATEGY_SHEET_NAMES = ["順勢突破", "低檔爆量", "波段蓄勢"]
@@ -432,7 +439,20 @@ def _focus_text(focus, n=5):
     return "；".join(rows)
 
 
-def _candidate_text(ranked, n=5):
+def _policy_status_text(row):
+    status = str(row.get("政策狀態", "") or "")
+    labels = {
+        "selected": "正式入選",
+        "blocked": f"阻擋：{row.get('阻擋原因') or '資料未通過'}",
+        "duplicate_daily_eligible": "今日較早批次已合格",
+        "daily_limit": "當日名額已滿",
+        "industry_limit": "同產業已有入選",
+        "score_below_threshold": "分數未達正式門檻",
+    }
+    return labels.get(status, status)
+
+
+def _candidate_text(ranked, n=5, show_policy=False):
     if ranked.empty:
         return "無候選名單"
     rows = []
@@ -441,12 +461,18 @@ def _candidate_text(ranked, n=5):
         quote_time = str(row.get("報價時間", "") or "")
         quote_clock = quote_time[11:16] if len(quote_time) >= 16 else quote_time[-5:]
         quote_label = f"@{quote_clock}" if quote_clock else ""
-        rows.append(
+        text = (
             f"{normalize_code(row.get('代號'))} {row.get('名稱')}｜{row.get('續漲型態')}｜"
             f"分{_fmt(row.get('分數'), 0)}｜價{_fmt(row.get('現價'))}{quote_label} "
             f"{_fmt(row.get('漲跌幅'), 2, '%')}｜量比{_fmt(row.get('量比5'))}｜"
             f"隔日觀察{_fmt(row.get('隔日觀察價'))}｜不追>{_fmt(row.get('追價上限'))}"
         )
+        if show_policy and "政策狀態" in row:
+            text += f"｜{_policy_status_text(row)}"
+        risk_flags = str(row.get("風險標記", "") or "")
+        if risk_flags:
+            text += f"｜風險：{risk_flags}"
+        rows.append(text)
     return "\n".join([f"- {row}" for row in rows])
 
 
@@ -467,6 +493,13 @@ def _market_stance(summary):
 def build_report_text(ranked, signals, industry, summary, focus):
     values = _summary_map(summary)
     update_time = values.get("更新時間") or dt.datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M")
+    if "政策入選" in ranked.columns:
+        selected = ranked[ranked["政策入選"] == True]  # noqa: E712
+        research = ranked[ranked["政策入選"] != True]  # noqa: E712
+    else:
+        selected = ranked.head(3)
+        research = ranked.iloc[3:]
+
     lines = [
         f"盤中續漲分析快報｜{update_time}",
         SWING_HOLDING_RULE,
@@ -490,8 +523,11 @@ def build_report_text(ranked, signals, industry, summary, focus):
         "資金焦點：",
         _focus_text(focus),
         "",
-        "隔日續漲觀察名單：",
-        _candidate_text(ranked),
+        "正式模擬入選（每日最多3檔、同產業最多1檔）：",
+        _candidate_text(selected, n=3, show_policy=True),
+        "",
+        "其餘研究候選：",
+        _candidate_text(research, n=5, show_policy=True),
         "",
         "操作原則：",
         "今天買進後不做當日賣出判斷；隔日收盤再看是否守住觀察價、族群是否仍強、量能是否延續。盤中急殺只記錄風險，不直接給賣出訊號。",
@@ -527,6 +563,7 @@ def generate_intraday_analysis_report(
     send_telegram=False,
     send_raw_scanner_telegram=None,
     save_report=True,
+    db_path=DB_PATH,
 ):
     if send_raw_scanner_telegram is None:
         send_raw_scanner_telegram = bool(run_scanner and send_telegram)
@@ -564,6 +601,26 @@ def generate_intraday_analysis_report(
         raise FileNotFoundError("找不到市場監控報表，請先執行 market_monitor.py。")
 
     ranked, signals, market, industry, summary, focus = build_candidate_ranking(scan_path, market_path)
+    scan_run = find_scan_run(scan_path, db_path=db_path)
+    daily_state = None
+    if scan_run:
+        daily_state = get_daily_candidate_state(
+            scan_run["id"],
+            DEFAULT_SELECTION_POLICY.version,
+            db_path=db_path,
+        )
+    ranked = apply_selection_policy(
+        ranked,
+        daily_state=daily_state,
+        policy=DEFAULT_SELECTION_POLICY,
+    )
+    candidate_events_saved = 0
+    if scan_run and not ranked.empty:
+        candidate_events_saved = save_candidate_events(
+            scan_run["id"],
+            candidate_event_records(ranked, policy=DEFAULT_SELECTION_POLICY),
+            db_path=db_path,
+        )
     report_text = build_report_text(ranked, signals, industry, summary, focus)
 
     os.makedirs("Reports", exist_ok=True)
@@ -575,6 +632,15 @@ def generate_intraday_analysis_report(
         report_path.write_text(report_text, encoding="utf-8")
         if not ranked.empty:
             ranking_cols = [
+                "政策入選",
+                "政策排名",
+                "政策狀態",
+                "可交易",
+                "每日首次合格",
+                "阻擋原因",
+                "風險標記",
+                "防守距離%",
+                "政策版本",
                 "分數",
                 "續漲型態",
                 "報價時間",
@@ -620,6 +686,9 @@ def generate_intraday_analysis_report(
         "telegram_sent": telegram_sent,
         "telegram_message": telegram_message,
         "signal_count": len(signals),
+        "selected_count": int(ranked["政策入選"].sum()) if "政策入選" in ranked else 0,
+        "candidate_events_saved": candidate_events_saved,
+        "scan_run_id": scan_run["id"] if scan_run else None,
     }
 
 

@@ -155,6 +155,7 @@ class BacktestDatabaseTests(unittest.TestCase):
                 row[1] for row in conn.execute("PRAGMA table_info(backtest_results)")
             }
         self.assertIn("feature_snapshots", tables)
+        self.assertIn("candidate_events", tables)
         self.assertIn("news_evidence", tables)
         self.assertIn("predictions", tables)
         self.assertIn("prediction_outcomes", tables)

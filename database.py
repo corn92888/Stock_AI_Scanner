@@ -2,6 +2,7 @@ import datetime
 import os
 import sqlite3
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 
 DB_PATH = Path("data/stock_scanner.db")
@@ -26,6 +27,7 @@ def get_git_commit():
         return ""
 
 
+@contextmanager
 def get_connection(db_path=DB_PATH):
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -33,7 +35,15 @@ def get_connection(db_path=DB_PATH):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=5000")
-    return conn
+    try:
+        yield conn
+    except Exception:
+        conn.rollback()
+        raise
+    else:
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def init_db(conn):
@@ -142,6 +152,14 @@ def init_db(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_trade_date ON stock_signals(trade_date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_strategy ON stock_signals(strategy)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_backtest_status ON backtest_results(outcome_status)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_candidate_events_day "
+        "ON candidate_events(policy_version, run_id, is_selected)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_candidate_events_code "
+        "ON candidate_events(code, policy_version, tradable)"
+    )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_predictions_run_rank ON predictions(run_id, rank_order)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_outcomes_status ON prediction_outcomes(outcome_status)")
     conn.commit()
@@ -197,6 +215,46 @@ def _migrate_backtest_results(conn):
 
 
 def _create_quant_tables(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS candidate_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            signal_id INTEGER,
+            code TEXT NOT NULL,
+            name TEXT,
+            as_of TEXT NOT NULL,
+            industry TEXT,
+            strategies_json TEXT NOT NULL,
+            strategy_count INTEGER NOT NULL DEFAULT 0,
+            raw_rank INTEGER,
+            score REAL,
+            signal_price REAL,
+            pct_change REAL,
+            turnover_billion REAL,
+            volume_ratio_5 REAL,
+            intraday_position REAL,
+            observation_price REAL,
+            chase_limit REAL,
+            stop_distance_pct REAL,
+            tradable INTEGER NOT NULL DEFAULT 0,
+            block_reasons_json TEXT NOT NULL,
+            risk_flags_json TEXT NOT NULL,
+            is_first_eligible_event INTEGER NOT NULL DEFAULT 0,
+            is_selected INTEGER NOT NULL DEFAULT 0,
+            selection_rank INTEGER,
+            selection_status TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            policy_config_json TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (run_id) REFERENCES scan_runs(id),
+            FOREIGN KEY (signal_id) REFERENCES stock_signals(id),
+            UNIQUE (run_id, code, policy_version)
+        )
+        """
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS feature_snapshots (
@@ -651,3 +709,219 @@ def finish_backtest_run(
             ),
         )
         conn.commit()
+
+
+def find_scan_run(report_path, db_path=DB_PATH):
+    if not report_path:
+        return None
+
+    path = Path(report_path)
+    candidates = {str(path), path.as_posix()}
+    try:
+        candidates.add(str(path.resolve().relative_to(Path.cwd().resolve())))
+    except ValueError:
+        pass
+
+    with get_connection(db_path) as conn:
+        init_db(conn)
+        placeholders = ", ".join("?" for _ in candidates)
+        row = conn.execute(
+            f"""
+            SELECT * FROM scan_runs
+            WHERE report_path IN ({placeholders})
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            tuple(candidates),
+        ).fetchone()
+        if row:
+            return dict(row)
+
+        rows = conn.execute(
+            """
+            SELECT * FROM scan_runs
+            WHERE report_path IS NOT NULL
+            ORDER BY id DESC
+            """
+        ).fetchall()
+        for candidate in rows:
+            if Path(candidate["report_path"]).name == path.name:
+                return dict(candidate)
+    return None
+
+
+def get_daily_candidate_state(run_id, policy_version, db_path=DB_PATH):
+    with get_connection(db_path) as conn:
+        init_db(conn)
+        run = conn.execute(
+            "SELECT id, run_at, trade_date, mode FROM scan_runs WHERE id = ?",
+            (int(run_id),),
+        ).fetchone()
+        if not run:
+            raise ValueError(f"scan run {run_id} does not exist")
+
+        rows = conn.execute(
+            """
+            SELECT ce.code, ce.industry, ce.tradable,
+                   ce.is_first_eligible_event, ce.is_selected
+            FROM candidate_events ce
+            JOIN scan_runs sr ON sr.id = ce.run_id
+            WHERE sr.trade_date = ?
+              AND sr.mode = ?
+              AND ce.policy_version = ?
+              AND (
+                    sr.run_at < ?
+                    OR (sr.run_at = ? AND sr.id < ?)
+              )
+            """,
+            (
+                run["trade_date"],
+                run["mode"],
+                policy_version,
+                run["run_at"],
+                run["run_at"],
+                int(run_id),
+            ),
+        ).fetchall()
+
+    selected_industry_counts = {}
+    for row in rows:
+        if row["is_selected"] and row["industry"]:
+            selected_industry_counts[row["industry"]] = (
+                selected_industry_counts.get(row["industry"], 0) + 1
+            )
+
+    return {
+        "eligible_codes": {
+            row["code"] for row in rows if row["is_first_eligible_event"]
+        },
+        "selected_count": sum(int(row["is_selected"] or 0) for row in rows),
+        "selected_industries": set(selected_industry_counts),
+        "selected_industry_counts": selected_industry_counts,
+    }
+
+
+def save_candidate_events(run_id, events, db_path=DB_PATH):
+    events = list(events)
+    now = get_taipei_now().isoformat(timespec="seconds")
+
+    with get_connection(db_path) as conn:
+        init_db(conn)
+        run = conn.execute(
+            "SELECT id, run_at FROM scan_runs WHERE id = ?", (int(run_id),)
+        ).fetchone()
+        if not run:
+            raise ValueError(f"scan run {run_id} does not exist")
+
+        policies = {str(event["policy_version"]) for event in events}
+        for event in events:
+            code = str(event["code"])
+            signal_id = event.get("signal_id")
+            if signal_id is None:
+                signal = conn.execute(
+                    """
+                    SELECT id FROM stock_signals
+                    WHERE run_id = ? AND code = ?
+                    ORDER BY rank_order, id
+                    LIMIT 1
+                    """,
+                    (int(run_id), code),
+                ).fetchone()
+                signal_id = signal["id"] if signal else None
+
+            conn.execute(
+                """
+                INSERT INTO candidate_events (
+                    run_id, signal_id, code, name, as_of, industry,
+                    strategies_json, strategy_count, raw_rank, score,
+                    signal_price, pct_change, turnover_billion, volume_ratio_5,
+                    intraday_position, observation_price, chase_limit,
+                    stop_distance_pct, tradable, block_reasons_json,
+                    risk_flags_json, is_first_eligible_event, is_selected,
+                    selection_rank, selection_status, policy_version,
+                    policy_config_json, snapshot_json, created_at, updated_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                ON CONFLICT(run_id, code, policy_version) DO UPDATE SET
+                    signal_id = excluded.signal_id,
+                    name = excluded.name,
+                    as_of = excluded.as_of,
+                    industry = excluded.industry,
+                    strategies_json = excluded.strategies_json,
+                    strategy_count = excluded.strategy_count,
+                    raw_rank = excluded.raw_rank,
+                    score = excluded.score,
+                    signal_price = excluded.signal_price,
+                    pct_change = excluded.pct_change,
+                    turnover_billion = excluded.turnover_billion,
+                    volume_ratio_5 = excluded.volume_ratio_5,
+                    intraday_position = excluded.intraday_position,
+                    observation_price = excluded.observation_price,
+                    chase_limit = excluded.chase_limit,
+                    stop_distance_pct = excluded.stop_distance_pct,
+                    tradable = excluded.tradable,
+                    block_reasons_json = excluded.block_reasons_json,
+                    risk_flags_json = excluded.risk_flags_json,
+                    is_first_eligible_event = excluded.is_first_eligible_event,
+                    is_selected = excluded.is_selected,
+                    selection_rank = excluded.selection_rank,
+                    selection_status = excluded.selection_status,
+                    policy_config_json = excluded.policy_config_json,
+                    snapshot_json = excluded.snapshot_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    int(run_id),
+                    signal_id,
+                    code,
+                    event.get("name"),
+                    event.get("as_of") or run["run_at"],
+                    event.get("industry"),
+                    event.get("strategies_json", "[]"),
+                    int(event.get("strategy_count") or 0),
+                    event.get("raw_rank"),
+                    event.get("score"),
+                    event.get("signal_price"),
+                    event.get("pct_change"),
+                    event.get("turnover_billion"),
+                    event.get("volume_ratio_5"),
+                    event.get("intraday_position"),
+                    event.get("observation_price"),
+                    event.get("chase_limit"),
+                    event.get("stop_distance_pct"),
+                    int(bool(event.get("tradable"))),
+                    event.get("block_reasons_json", "[]"),
+                    event.get("risk_flags_json", "[]"),
+                    int(bool(event.get("is_first_eligible_event"))),
+                    int(bool(event.get("is_selected"))),
+                    event.get("selection_rank"),
+                    event.get("selection_status", "blocked"),
+                    event["policy_version"],
+                    event.get("policy_config_json", "{}"),
+                    event.get("snapshot_json", "{}"),
+                    now,
+                    now,
+                ),
+            )
+
+        for policy_version in policies:
+            current_codes = [
+                str(event["code"])
+                for event in events
+                if str(event["policy_version"]) == policy_version
+            ]
+            if current_codes:
+                placeholders = ", ".join("?" for _ in current_codes)
+                conn.execute(
+                    f"""
+                    DELETE FROM candidate_events
+                    WHERE run_id = ? AND policy_version = ?
+                      AND code NOT IN ({placeholders})
+                    """,
+                    (int(run_id), policy_version, *current_codes),
+                )
+        conn.commit()
+
+    return len(events)

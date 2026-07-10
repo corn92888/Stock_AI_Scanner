@@ -143,6 +143,11 @@
   venv/bin/python3 intraday_analysis_report.py --send-telegram
   ```
 
+  交叉排名會另外套用版本化的正式入選政策：成交值至少 5 億、排除接近漲跌停/爆量過熱/日內回落與防守距離過遠，綜合分數至少 50 分；每日最多正式入選 3 檔且同產業最多 1 檔。同股當日只會在第一次合格時被考慮，後續盤中批次仍保存研究快照但不重複模擬開倉。既有報表可依時間順序回填：
+  ```bash
+  venv/bin/python3 backfill_candidate_events.py
+  ```
+
 * **測試 Telegram 連線：**
   快速確認 Token 與 Chat ID 是否設定正確，直接發送一則推播：
   ```bash
