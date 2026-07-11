@@ -10,6 +10,7 @@
 * **📱 Telegram 自動推播**：執行完畢後自動將挑出的標的、全市場監控摘要或精簡盤中分析報告傳送至指定的 Telegram 群組或對話。
 * **🖥 視覺化戰情室 (Web UI)**：提供基於 Streamlit 開發的網頁 Dashboard，可輸入股票代號即時驗證技術指標 (如 SuperTrend 三線、布林通道等)，也可輸入目前持股，結合最新市場監控與策略訊號做部位分析。
 * **☁️ 雲端股票倉**：持股頁可接 Supabase/Postgres，讓每個使用者用自己的 Email/名稱 + 私密倉庫代碼開啟獨立股票倉，並寫入每日持股快照；也可設定超級管理員總覽所有股票倉，供之後績效追蹤與回測。
+* **🧭 量化控制中心**：獨立的 Next.js 儀表板整合正式候選、回測證據、AI 資料管線與 GitHub Actions 維運狀態，線上版位於 [stock-ai-control.vercel.app](https://stock-ai-control.vercel.app)。
 
 ## 🎯 內建三大策略
 
@@ -165,6 +166,16 @@
   盤中與盤後工作共用 concurrency，不會同時改寫 SQLite。非交易時段會安全略過；當日報價或全市場覆蓋率低於 65%、或盤中日報與市場快照日期/時間不一致時，流程會拒絕產生分析。失敗仍會上傳已取得的 artifacts，並透過 Telegram 發送維運警報。
 
   每日盤後流程也會增量更新最多 200 筆成熟回測結果。行情來源暫時失敗時不會阻斷當日掃描資料保存，未完成的 `partial` 結果會在後續交易日繼續補齊。
+
+  每次盤中或盤後掃描完成後，流程也會執行 `export_dashboard_snapshot.py`，將不含持股、Email 或私密憑證的公開快照同步更新到 `data/dashboard_snapshot.json` 與 Next.js 儀表板。
+
+* **開啟量化控制中心 (Next.js)：**
+  ```bash
+  cd web
+  npm install
+  npm run dev
+  ```
+  本機預設網址為 `http://localhost:3000`。線上正式版為 [https://stock-ai-control.vercel.app](https://stock-ai-control.vercel.app)，包含決策總覽、回測績效、資料管線與操作中心；操作中心目前以 GitHub Actions 登入權限保護手動執行，不會將管理員 Token 放在瀏覽器。
 
 * **開啟戰情室 (Dashboard)：**
   ```bash

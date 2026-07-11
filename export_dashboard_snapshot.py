@@ -1,0 +1,302 @@
+import argparse
+import datetime as dt
+import json
+import sqlite3
+from pathlib import Path
+
+import pandas as pd
+
+
+TAIPEI_TZ = dt.timezone(dt.timedelta(hours=8), name="Asia/Taipei")
+SCHEMA_VERSION = "dashboard_v1"
+DEFAULT_OUTPUTS = (
+    Path("data/dashboard_snapshot.json"),
+    Path("web/public/dashboard_snapshot.json"),
+)
+
+STRATEGY_LABELS = {
+    "trend": "順勢突破",
+    "reversal": "低檔爆量",
+    "wave": "波段蓄勢",
+}
+
+STATUS_LABELS = {
+    "selected": "正式入選",
+    "blocked": "資料阻擋",
+    "score_below_threshold": "分數不足",
+    "duplicate_daily_eligible": "當日已評估",
+    "daily_limit": "當日名額已滿",
+    "industry_limit": "同產業限制",
+}
+
+
+def _table_exists(conn, table_name):
+    return bool(
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        ).fetchone()
+    )
+
+
+def _table_count(conn, table_name):
+    if not _table_exists(conn, table_name):
+        return 0
+    return int(conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0])
+
+
+def _read_records(conn, query, params=()):
+    frame = pd.read_sql_query(query, conn, params=params)
+    if frame.empty:
+        return []
+    frame = frame.astype(object).where(pd.notna(frame), None)
+    return frame.to_dict(orient="records")
+
+
+def _decode_list(value):
+    if not value:
+        return []
+    try:
+        result = json.loads(value)
+        return result if isinstance(result, list) else []
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+
+
+def _automation_slot(notes):
+    if not notes:
+        return ""
+    try:
+        result = json.loads(notes)
+        return str(result.get("automation_slot", "")) if isinstance(result, dict) else ""
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return ""
+
+
+def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
+    db_path = Path(db_path)
+    if not db_path.exists():
+        raise FileNotFoundError(f"Dashboard database not found: {db_path}")
+
+    conn = sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        required = {"scan_runs", "stock_signals", "candidate_events", "backtest_results"}
+        missing = sorted(table for table in required if not _table_exists(conn, table))
+        if missing:
+            raise RuntimeError(f"Dashboard database missing tables: {', '.join(missing)}")
+
+        latest = conn.execute(
+            """
+            SELECT trade_date, run_at, mode
+            FROM scan_runs
+            ORDER BY run_at DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        overview = {
+            "latestTradeDate": latest["trade_date"] if latest else "",
+            "latestRunAt": latest["run_at"] if latest else "",
+            "latestMode": latest["mode"] if latest else "",
+            "scanRuns": _table_count(conn, "scan_runs"),
+            "signals": _table_count(conn, "stock_signals"),
+            "candidateEvents": _table_count(conn, "candidate_events"),
+            "featureSnapshots": _table_count(conn, "feature_snapshots"),
+            "predictions": _table_count(conn, "predictions"),
+            "predictionOutcomes": _table_count(conn, "prediction_outcomes"),
+            "modelVersions": _table_count(conn, "model_versions"),
+            "newsEvidence": _table_count(conn, "news_evidence"),
+            "backtestResults": _table_count(conn, "backtest_results"),
+            "formalSelections": int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM candidate_events WHERE is_selected=1"
+                ).fetchone()[0]
+            ),
+        }
+        mature = conn.execute(
+            """
+            SELECT
+                SUM(CASE WHEN matured_horizon >= 3 THEN 1 ELSE 0 END),
+                SUM(CASE WHEN outcome_status = 'complete' THEN 1 ELSE 0 END)
+            FROM backtest_results
+            """
+        ).fetchone()
+        overview["matureT3"] = int(mature[0] or 0)
+        overview["completeT20"] = int(mature[1] or 0)
+
+        candidates = _read_records(
+            conn,
+            """
+            SELECT
+                sr.trade_date AS tradeDate,
+                sr.run_at AS runAt,
+                ce.selection_rank AS selectionRank,
+                ce.raw_rank AS rawRank,
+                ce.code,
+                ce.name,
+                ce.industry,
+                ce.strategies_json AS strategiesJson,
+                ce.score,
+                ce.signal_price AS signalPrice,
+                ce.pct_change AS pctChange,
+                ce.turnover_billion AS turnoverBillion,
+                ce.volume_ratio_5 AS volumeRatio5,
+                ce.intraday_position AS intradayPosition,
+                ce.observation_price AS observationPrice,
+                ce.chase_limit AS chaseLimit,
+                ce.stop_distance_pct AS stopDistancePct,
+                ce.tradable,
+                ce.is_selected AS isSelected,
+                ce.selection_status AS selectionStatus,
+                ce.risk_flags_json AS riskFlagsJson,
+                ce.block_reasons_json AS blockReasonsJson,
+                ce.policy_version AS policyVersion
+            FROM candidate_events ce
+            JOIN scan_runs sr ON sr.id=ce.run_id
+            ORDER BY sr.trade_date DESC, sr.run_at DESC, ce.raw_rank
+            """,
+        )
+        for row in candidates:
+            row["strategies"] = _decode_list(row.pop("strategiesJson", ""))
+            row["riskFlags"] = _decode_list(row.pop("riskFlagsJson", ""))
+            row["blockReasons"] = _decode_list(row.pop("blockReasonsJson", ""))
+            row["statusLabel"] = STATUS_LABELS.get(
+                row["selectionStatus"], row["selectionStatus"]
+            )
+            row["tradable"] = bool(row["tradable"])
+            row["isSelected"] = bool(row["isSelected"])
+
+        daily_candidates = _read_records(
+            conn,
+            """
+            SELECT
+                sr.trade_date AS tradeDate,
+                COUNT(*) AS candidates,
+                SUM(ce.tradable) AS tradable,
+                SUM(ce.is_selected) AS selected,
+                COUNT(DISTINCT ce.run_id) AS analyzedRuns
+            FROM candidate_events ce
+            JOIN scan_runs sr ON sr.id=ce.run_id
+            GROUP BY sr.trade_date
+            ORDER BY sr.trade_date
+            """,
+        )
+        status_counts = _read_records(
+            conn,
+            """
+            SELECT selection_status AS status, COUNT(*) AS count
+            FROM candidate_events
+            GROUP BY selection_status
+            ORDER BY count DESC
+            """,
+        )
+        for row in status_counts:
+            row["label"] = STATUS_LABELS.get(row["status"], row["status"])
+
+        performance = _read_records(
+            conn,
+            """
+            SELECT
+                s.trade_date AS tradeDate,
+                s.mode,
+                s.strategy,
+                s.code,
+                s.name,
+                br.matured_horizon AS maturedHorizon,
+                br.outcome_status AS outcomeStatus,
+                br.net_return_1d AS netReturn1d,
+                br.net_return_3d AS netReturn3d,
+                br.net_return_5d AS netReturn5d,
+                br.excess_return_3d AS excessReturn3d,
+                br.max_return_3d AS maxReturn3d,
+                br.max_drawdown_3d AS maxDrawdown3d,
+                br.success_t3 AS successT3,
+                br.costs_bps AS costsBps,
+                br.entry_method AS entryMethod,
+                br.tested_at AS testedAt
+            FROM backtest_results br
+            JOIN stock_signals s ON s.id=br.signal_id
+            ORDER BY s.trade_date DESC, s.id DESC
+            """,
+        )
+        for row in performance:
+            row["strategyLabel"] = STRATEGY_LABELS.get(row["strategy"], row["strategy"])
+            if row["successT3"] is not None:
+                row["successT3"] = bool(row["successT3"])
+
+        scan_runs = _read_records(
+            conn,
+            """
+            SELECT id, run_at AS runAt, trade_date AS tradeDate, mode, source,
+                   strategy_version AS strategyVersion, git_commit AS gitCommit,
+                   report_path AS reportPath, notes
+            FROM scan_runs
+            ORDER BY run_at DESC, id DESC
+            LIMIT 80
+            """,
+        )
+        for row in scan_runs:
+            row["automationSlot"] = _automation_slot(row.pop("notes", ""))
+
+        backtest_runs = []
+        if _table_exists(conn, "backtest_runs"):
+            backtest_runs = _read_records(
+                conn,
+                """
+                SELECT id, started_at AS startedAt, finished_at AS finishedAt,
+                       status, signals_requested AS signalsRequested,
+                       completed_count AS completedCount,
+                       partial_count AS partialCount,
+                       skipped_count AS skippedCount,
+                       error_text AS errorText
+                FROM backtest_runs
+                ORDER BY started_at DESC, id DESC
+                LIMIT 30
+                """,
+            )
+
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "generatedAt": dt.datetime.now(TAIPEI_TZ).isoformat(timespec="seconds"),
+            "overview": overview,
+            "candidates": candidates,
+            "dailyCandidates": daily_candidates,
+            "statusCounts": status_counts,
+            "performance": performance,
+            "scanRuns": scan_runs,
+            "backtestRuns": backtest_runs,
+        }
+    finally:
+        conn.close()
+
+
+def write_dashboard_snapshot(snapshot, output_paths=DEFAULT_OUTPUTS):
+    content = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")) + "\n"
+    written = []
+    for output_path in output_paths:
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(content, encoding="utf-8")
+        temporary.replace(path)
+        written.append(str(path))
+    return written
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Export a public read-only quant dashboard snapshot.")
+    parser.add_argument("--db-path", default="data/stock_scanner.db")
+    parser.add_argument("--output", action="append", dest="outputs")
+    args = parser.parse_args()
+
+    snapshot = build_dashboard_snapshot(args.db_path)
+    outputs = tuple(Path(path) for path in args.outputs) if args.outputs else DEFAULT_OUTPUTS
+    written = write_dashboard_snapshot(snapshot, outputs)
+    print(
+        f"Dashboard snapshot exported: candidates={len(snapshot['candidates'])} "
+        f"performance={len(snapshot['performance'])} outputs={', '.join(written)}"
+    )
+
+
+if __name__ == "__main__":
+    main()
