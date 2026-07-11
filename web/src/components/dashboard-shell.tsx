@@ -155,7 +155,7 @@ function CandidateTable({ rows }: { rows: Candidate[] }) {
         <thead>
           <tr>
             <th>排名</th><th>標的</th><th>策略</th><th>分數</th><th>訊號價</th>
-            <th>漲跌</th><th>五日量比</th><th>成交值</th><th>狀態</th><th>風險</th>
+            <th>漲跌</th><th>五日量比</th><th>成交值</th><th>AI T+3</th><th>AI 新聞</th><th>狀態</th><th>風險</th>
           </tr>
         </thead>
         <tbody>
@@ -172,6 +172,8 @@ function CandidateTable({ rows }: { rows: Candidate[] }) {
               <td className={row.pctChange >= 0 ? "positive-text" : "negative-text"}>{pct(row.pctChange)}</td>
               <td>{decimal.format(row.volumeRatio5)}x</td>
               <td>{decimal.format(row.turnoverBillion)} 億</td>
+              <td>{row.aiProbabilityT3 == null ? "--" : <div className="symbol-cell"><strong>{decimal.format(row.aiProbabilityT3 * 100)}%</strong><span>{row.aiProspective ? (row.aiShadowSelected ? "影子入選" : "影子觀察") : "歷史試跑"}</span></div>}</td>
+              <td className="risk-cell" title={row.aiNewsSummary || undefined}>{row.aiNewsSentiment ? `${row.aiNewsSentiment} · ${row.aiNewsEvidenceCount}則` : "--"}</td>
               <td><span className={`status-pill ${row.isSelected ? "selected" : row.tradable ? "eligible" : "blocked"}`}>{row.statusLabel}</span></td>
               <td className="risk-cell">{[...row.riskFlags, ...row.blockReasons].slice(0, 2).join("、") || "無"}</td>
             </tr>
@@ -321,21 +323,30 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
     { label: "候選事件", value: snapshot.overview.candidateEvents, icon: SlidersHorizontal, note: "正規化決策紀錄" },
     { label: "正式入選", value: snapshot.overview.formalSelections, icon: Target, note: "通過政策排序" },
     { label: "特徵快照", value: snapshot.overview.featureSnapshots, icon: Database, note: "模型可用輸入" },
-    { label: "AI 預測", value: snapshot.overview.predictions, icon: Bot, note: "可追溯模型輸出" },
-    { label: "結果標註", value: snapshot.overview.predictionOutcomes, icon: CheckCircle2, note: "學習閉環完成" },
+    { label: "前瞻預測", value: snapshot.overview.prospectivePredictions ?? 0, icon: Bot, note: "可追溯即時模型輸出" },
+    { label: "成熟結果", value: snapshot.overview.maturePredictionOutcomes ?? 0, icon: CheckCircle2, note: "前瞻預測 T+3 標註" },
   ];
   const max = Math.max(...stages.map((stage) => stage.value), 1);
   const statusData = snapshot.statusCounts.slice(0, 8).map((row) => ({ ...row, short: row.label.slice(0, 6) }));
+  const latestModel = (snapshot.aiModels ?? [])[0];
+  const loopReady = (snapshot.overview.prospectivePredictions ?? 0) > 0 && (snapshot.overview.maturePredictionOutcomes ?? 0) > 0;
+  const modelState = loopReady ? "閉環運作中" : (snapshot.overview.prospectivePredictions ?? 0) > 0 ? "影子預測中" : latestModel ? "模型就緒" : "基礎資料累積中";
 
   return (
     <div className="view-stack">
       <section className="panel">
-        <PanelHeader eyebrow="Learning readiness" title="量化學習資料管線" trailing={<span className={`health-badge ${snapshot.overview.predictions ? "healthy" : "building"}`}>{snapshot.overview.predictions ? "閉環運作中" : "基礎資料累積中"}</span>} />
+        <PanelHeader eyebrow="Learning readiness" title="量化學習資料管線" trailing={<span className={`health-badge ${loopReady ? "healthy" : "building"}`}>{modelState}</span>} />
         <div className="pipeline-grid">
           {stages.map((stage, index) => { const Icon = stage.icon; return <div className="pipeline-stage" key={stage.label}><div className="stage-icon"><Icon size={18} /></div><span>{stage.label}</span><strong>{number.format(stage.value)}</strong><small>{stage.note}</small><div className="progress"><i style={{ width: `${Math.max(stage.value ? 3 : 0, stage.value / max * 100)}%` }} /></div>{index < stages.length - 1 && <ChevronRight className="stage-arrow" size={16} />}</div>; })}
         </div>
-        <div className="readiness-callout"><Bot size={21} /><div><strong>AI 尚未開始自行改權重</strong><p>目前 feature snapshots、模型版本與預測結果仍為 0。這是刻意的保護：先累積可靠標籤，再讓模型進入影子測試，避免用極少樣本追逐雜訊。</p></div></div>
+        <div className="readiness-callout"><Bot size={21} /><div><strong>{latestModel ? "AI 已進入影子測試，尚未接管正式排名" : "AI 尚未開始自行改權重"}</strong><p>{latestModel ? `最新 ${latestModel.version} 使用 ${latestModel.metrics.samples ?? 0} 筆成熟樣本，先與規則名單平行比較；只有在時序外驗證與前瞻結果都穩定改善後才會升級。` : "先累積可靠標籤，再讓模型進入影子測試，避免用極少樣本追逐雜訊。"}</p></div></div>
       </section>
+      {latestModel && <section className="metrics-grid">
+        <Metric label="影子模型樣本" value={number.format(latestModel.metrics.samples ?? 0)} detail={`正樣本 ${latestModel.metrics.positive_samples ?? 0}`} tone="info" />
+        <Metric label="時序驗證 AUC" value={latestModel.metrics.validation_auc == null ? "NA" : decimal.format(latestModel.metrics.validation_auc)} detail={`${latestModel.metrics.validation_start ?? "--"} 至 ${latestModel.metrics.validation_end ?? "--"}`} tone={(latestModel.metrics.validation_auc ?? 0) >= 0.55 ? "positive" : "warning"} />
+        <Metric label="超額預測 MAE" value={latestModel.metrics.validation_excess_mae == null ? "NA" : pct(latestModel.metrics.validation_excess_mae)} detail="驗證區間平均絕對誤差" />
+        <Metric label="模型狀態" value={latestModel.status} detail="不影響正式選股政策" tone="warning" />
+      </section>}
       <section className="split-grid">
         <div className="panel chart-panel">
           <PanelHeader eyebrow="Policy outcomes" title="候選事件分流" />

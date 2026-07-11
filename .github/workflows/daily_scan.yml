@@ -31,7 +31,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install yfinance pandas numpy twstock tqdm requests python-dotenv streamlit plotly openpyxl
+        pip install -r requirements.txt
 
     - name: Run scanner
       env:
@@ -51,6 +51,14 @@ jobs:
       run: |
         python backtest.py --selection-scope nonformal --limit 200
 
+    - name: Update AI shadow model outcomes
+      continue-on-error: true
+      env:
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+      run: |
+        python ai_pipeline.py --no-news --no-predict
+
     - name: Export dashboard snapshot
       run: |
         python export_dashboard_snapshot.py
@@ -62,6 +70,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/stock_scanner.db data/dashboard_snapshot.json web/public/dashboard_snapshot.json
+          if compgen -G 'data/models/*.joblib' > /dev/null; then
+            git add data/models/*.joblib
+          fi
           if ! git diff --cached --quiet; then
             git commit -m "Record daily scanner signals"
             git pull --rebase origin main

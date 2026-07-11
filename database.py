@@ -149,6 +149,7 @@ def init_db(conn):
     )
     _migrate_backtest_results(conn)
     _create_quant_tables(conn)
+    _migrate_quant_tables(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_trade_date ON stock_signals(trade_date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_strategy ON stock_signals(strategy)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_backtest_status ON backtest_results(outcome_status)")
@@ -264,6 +265,14 @@ def _create_quant_tables(conn):
             code TEXT NOT NULL,
             as_of TEXT NOT NULL,
             feature_version TEXT NOT NULL,
+            candidate_score REAL,
+            strategy_count INTEGER,
+            strategy_trend INTEGER,
+            strategy_reversal INTEGER,
+            strategy_wave INTEGER,
+            tradable INTEGER,
+            is_first_eligible_event INTEGER,
+            stop_distance_pct REAL,
             price REAL,
             pct_change REAL,
             turnover_billion REAL,
@@ -343,6 +352,7 @@ def _create_quant_tables(conn):
             code TEXT NOT NULL,
             predicted_at TEXT NOT NULL,
             model_version TEXT NOT NULL,
+            is_prospective INTEGER NOT NULL DEFAULT 1,
             rank_order INTEGER,
             is_selected INTEGER NOT NULL DEFAULT 0,
             final_score REAL,
@@ -408,6 +418,28 @@ def _create_quant_tables(conn):
             error_text TEXT
         )
         """
+    )
+
+
+def _migrate_quant_tables(conn):
+    _ensure_columns(
+        conn,
+        "feature_snapshots",
+        {
+            "candidate_score": "REAL",
+            "strategy_count": "INTEGER",
+            "strategy_trend": "INTEGER",
+            "strategy_reversal": "INTEGER",
+            "strategy_wave": "INTEGER",
+            "tradable": "INTEGER",
+            "is_first_eligible_event": "INTEGER",
+            "stop_distance_pct": "REAL",
+        },
+    )
+    _ensure_columns(
+        conn,
+        "predictions",
+        {"is_prospective": "INTEGER NOT NULL DEFAULT 1"},
     )
 
 

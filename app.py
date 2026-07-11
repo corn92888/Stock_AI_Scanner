@@ -411,6 +411,7 @@ if page == "📊 歷史報表預覽 (Reports)":
                     run_market_monitor=True,
                     send_telegram=True,
                     send_raw_scanner_telegram=True,
+                    run_ai=True,
                 )
                 if result["status"] == "skipped":
                     st.info(result["text"])

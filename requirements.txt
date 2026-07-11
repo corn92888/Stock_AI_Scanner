@@ -9,3 +9,5 @@ streamlit
 supabase
 plotly
 openpyxl
+scikit-learn
+joblib

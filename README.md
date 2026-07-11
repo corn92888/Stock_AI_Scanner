@@ -11,6 +11,7 @@
 * **🖥 視覺化戰情室 (Web UI)**：提供基於 Streamlit 開發的網頁 Dashboard，可輸入股票代號即時驗證技術指標 (如 SuperTrend 三線、布林通道等)，也可輸入目前持股，結合最新市場監控與策略訊號做部位分析。
 * **☁️ 雲端股票倉**：持股頁可接 Supabase/Postgres，讓每個使用者用自己的 Email/名稱 + 私密倉庫代碼開啟獨立股票倉，並寫入每日持股快照；也可設定超級管理員總覽所有股票倉，供之後績效追蹤與回測。
 * **🧭 量化控制中心**：獨立的 Next.js 儀表板整合正式候選、回測證據、AI 資料管線與 GitHub Actions 維運狀態，線上版位於 [stock-ai-control.vercel.app](https://stock-ai-control.vercel.app)。
+* **🧠 AI 影子決策閉環**：候選會轉成時間點特徵，由時序留出驗證的模型預測 T+3 成功率、超額報酬與回撤；Claude 另對正式候選的近期新聞抽取催化劑與風險。AI 先平行觀察，不直接改寫正式規則名單。
 
 ## 🎯 內建三大策略
 
@@ -24,9 +25,9 @@
 ## 📦 安裝與設定
 
 1. **安裝依賴套件:**
-   請確保已安裝 Python 3.8+，並執行以下指令安裝所需套件：
+   請確保已安裝 Python 3.10+，並執行以下指令安裝所需套件：
    ```bash
-   pip install yfinance pandas numpy twstock tqdm requests python-dotenv streamlit supabase plotly openpyxl
+   pip install -r requirements.txt
    ```
 
 2. **設定環境變數 (.env):**
@@ -35,6 +36,8 @@
    ```env
    TELEGRAM_BOT_TOKEN=123456789:ABCDefg...
    TELEGRAM_CHAT_ID=@your_channel_or_chat_id
+   ANTHROPIC_API_KEY=your_anthropic_api_key
+   ANTHROPIC_MODEL=claude-sonnet-4-6
    ```
 
 3. **設定雲端股票倉 (Supabase，可選但建議):**
@@ -147,9 +150,9 @@
 
 * **產生盤中精簡分析報告並同步 Telegram:**
   ```bash
-  venv/bin/python3 intraday_analysis_report.py --run-scanner --run-market-monitor --send-telegram
+  venv/bin/python3 intraday_analysis_report.py --run-scanner --run-market-monitor --run-ai --send-telegram
   ```
-  這個流程會依序執行盤中掃描、同步發送原本三策略標的清單、全市場監控，接著產出不含個人持股提醒的續漲分析報告，並同步發送到 Telegram。分析目標改以 T+1/T+3 續漲為主，買進當天不做賣出判斷，防守價在報告中會轉為隔日收盤觀察價。若只想把最新已存在的報表整理成訊息：
+  這個流程會依序執行盤中掃描、同步發送原本三策略標的清單、全市場監控，接著產出不含個人持股提醒的續漲分析報告與 AI 影子研究，並同步發送到 Telegram。分析目標改以 T+1/T+3 續漲為主，買進當天不做賣出判斷，防守價在報告中會轉為隔日收盤觀察價。若只想把最新已存在的報表整理成訊息：
   ```bash
   venv/bin/python3 intraday_analysis_report.py --send-telegram
   ```
@@ -158,6 +161,18 @@
   ```bash
   venv/bin/python3 backfill_candidate_events.py
   ```
+
+* **單獨執行 AI 影子管線:**
+  ```bash
+  venv/bin/python3 ai_pipeline.py
+  ```
+  這會補齊 `feature_snapshots`、同步成熟結果到 `prediction_outcomes`、重新訓練版本化模型，並對最新候選產生影子預測。新聞 AI 只分析正式入選；每則證據同時保存發布時間與系統得知時間。未設定 `ANTHROPIC_API_KEY` 時仍會完成量化模型，不會阻斷掃描。
+
+  若只更新量化模型、不呼叫新聞 API：
+  ```bash
+  venv/bin/python3 ai_pipeline.py --no-news --no-predict
+  ```
+  AI 目前不改變 `tradability_v1` 正式名單。控制中心會顯示模型樣本、時序驗證 AUC、預期超額與回撤；等前瞻結果持續優於規則基準後，才考慮升級為混合排名。
 
 * **測試 Telegram 連線：**
   快速確認 Token 與 Chat ID 是否設定正確，直接發送一則推播：
@@ -169,7 +184,7 @@
   專案內建兩套 GitHub Actions 自動排程：
   - `.github/workflows/intraday_scan.yml`: 每 30 分鐘探測一次，但只會在台北時間早盤 `09:35-10:35`、午盤 `11:10-12:10`、尾盤 `12:40-13:20` 各執行一次，降低 GitHub cron 延遲造成整天漏跑的機率；同時發送三策略標的清單與精簡盤中分析報告到 Telegram。
   - `.github/workflows/daily_scan.yml`: 平日 `14:00` 結算每日盤後高防禦名單。
-  只要將程式碼推送至 GitHub，並在專案的（Settings > Secrets and variables > Actions）中新增 `TELEGRAM_BOT_TOKEN` 與 `TELEGRAM_CHAT_ID`，就能達成全自動監控！
+  只要將程式碼推送至 GitHub，並在專案的（Settings > Secrets and variables > Actions）中新增 `TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID` 與 `ANTHROPIC_API_KEY`，就能達成全自動監控與新聞 AI；`ANTHROPIC_MODEL` 可選擇放在 Actions Variables，未設定時使用程式預設值。
 
   GitHub Actions 每次掃描後會把 `data/stock_scanner.db` commit 回 `main`，讓歷史選股訊號能跨排程持續累積，日後可直接用 `backtest.py` 驗證策略表現。
 

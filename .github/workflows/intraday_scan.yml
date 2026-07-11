@@ -44,7 +44,7 @@ jobs:
       if: steps.gate.outputs.run == 'true'
       run: |
         python -m pip install --upgrade pip
-        pip install yfinance pandas numpy twstock tqdm requests python-dotenv streamlit plotly openpyxl
+        pip install -r requirements.txt
 
     - name: Run intraday analysis report
       if: steps.gate.outputs.run == 'true'
@@ -52,9 +52,11 @@ jobs:
         # 將設定在 GitHub 上的秘密金鑰載入環境變數
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
         INTRADAY_AUTOMATION_SLOT: ${{ steps.gate.outputs.slot }}
       run: |
-        python intraday_analysis_report.py --run-scanner --run-market-monitor --send-telegram --send-raw-scanner-telegram
+        python intraday_analysis_report.py --run-scanner --run-market-monitor --run-ai --send-telegram --send-raw-scanner-telegram
 
     - name: Export dashboard snapshot
       if: steps.gate.outputs.run == 'true'
@@ -68,6 +70,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/stock_scanner.db data/dashboard_snapshot.json web/public/dashboard_snapshot.json
+          if compgen -G 'data/models/*.joblib' > /dev/null; then
+            git add data/models/*.joblib
+          fi
           if ! git diff --cached --quiet; then
             git commit -m "Record intraday scanner signals"
             git pull --rebase origin main

@@ -64,8 +64,23 @@ def _decode_list(value):
         return []
 
 
+def _decode_object(value):
+    if not value:
+        return {}
+    try:
+        result = json.loads(value)
+        return result if isinstance(result, dict) else {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+
+
 def _automation_slot(notes):
     if not notes:
+        return ""
+    try:
+        result = json.loads(notes)
+        return str(result.get("automation_slot", "")) if isinstance(result, dict) else ""
+    except (TypeError, ValueError, json.JSONDecodeError):
         return ""
 
 
@@ -77,11 +92,6 @@ def _backtest_scope(config_json):
         return str(result.get("selection_scope", "legacy")) if isinstance(result, dict) else "legacy"
     except (TypeError, ValueError, json.JSONDecodeError):
         return "legacy"
-    try:
-        result = json.loads(notes)
-        return str(result.get("automation_slot", "")) if isinstance(result, dict) else ""
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return ""
 
 
 def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
@@ -124,6 +134,24 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
                 ).fetchone()[0]
             ),
         }
+        overview["maturePredictionOutcomes"] = (
+            int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM prediction_outcomes WHERE matured_horizon >= 3"
+                ).fetchone()[0]
+            )
+            if _table_exists(conn, "prediction_outcomes")
+            else 0
+        )
+        overview["prospectivePredictions"] = (
+            int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM predictions WHERE is_prospective=1"
+                ).fetchone()[0]
+            )
+            if _table_exists(conn, "predictions")
+            else 0
+        )
         mature = conn.execute(
             """
             SELECT
@@ -148,6 +176,53 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
         overview["formalBacktestResults"] = int(formal_mature[0] or 0)
         overview["formalMatureT3"] = int(formal_mature[1] or 0)
         overview["formalCompleteT20"] = int(formal_mature[2] or 0)
+
+        has_predictions = _table_exists(conn, "predictions")
+        prediction_columns = """
+                p.model_version AS aiModelVersion,
+                p.is_prospective AS aiProspective,
+                p.rank_order AS aiRank,
+                p.is_selected AS aiShadowSelected,
+                p.final_score AS aiScore,
+                p.probability_t3 AS aiProbabilityT3,
+                p.expected_excess_return_3d AS aiExpectedExcess3d,
+                p.expected_max_drawdown_3d AS aiExpectedDrawdown3d,
+                p.action AS aiAction,
+        """ if has_predictions else ""
+        prediction_join = """
+            LEFT JOIN predictions p ON p.id=(
+                SELECT p2.id FROM predictions p2
+                WHERE p2.run_id=ce.run_id AND p2.code=ce.code
+                ORDER BY p2.id DESC LIMIT 1
+            )
+        """ if has_predictions else ""
+        if not prediction_columns:
+            prediction_columns = """
+                NULL AS aiModelVersion, NULL AS aiProspective, NULL AS aiRank,
+                NULL AS aiShadowSelected, NULL AS aiScore,
+                NULL AS aiProbabilityT3, NULL AS aiExpectedExcess3d,
+                NULL AS aiExpectedDrawdown3d, NULL AS aiAction,
+            """
+        has_news = _table_exists(conn, "news_evidence")
+        news_columns = """
+                ne.sentiment AS aiNewsSentiment,
+                ne.confidence AS aiNewsConfidence,
+                ne.extracted_json AS aiNewsJson,
+                (SELECT COUNT(*) FROM news_evidence ne2
+                 WHERE ne2.run_id=ce.run_id AND ne2.code=ce.code) AS aiNewsEvidenceCount,
+        """ if has_news else ""
+        news_join = """
+            LEFT JOIN news_evidence ne ON ne.id=(
+                SELECT ne3.id FROM news_evidence ne3
+                WHERE ne3.run_id=ce.run_id AND ne3.code=ce.code
+                ORDER BY ne3.id DESC LIMIT 1
+            )
+        """ if has_news else ""
+        if not news_columns:
+            news_columns = """
+                NULL AS aiNewsSentiment, NULL AS aiNewsConfidence,
+                NULL AS aiNewsJson, 0 AS aiNewsEvidenceCount,
+            """
 
         candidates = _read_records(
             conn,
@@ -175,9 +250,13 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
                 ce.selection_status AS selectionStatus,
                 ce.risk_flags_json AS riskFlagsJson,
                 ce.block_reasons_json AS blockReasonsJson,
+                {prediction_columns}
+                {news_columns}
                 ce.policy_version AS policyVersion
             FROM candidate_events ce
             JOIN scan_runs sr ON sr.id=ce.run_id
+            {prediction_join}
+            {news_join}
             WHERE sr.trade_date IN (
                 SELECT DISTINCT sr2.trade_date
                 FROM candidate_events ce2
@@ -197,6 +276,12 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             )
             row["tradable"] = bool(row["tradable"])
             row["isSelected"] = bool(row["isSelected"])
+            if row["aiShadowSelected"] is not None:
+                row["aiShadowSelected"] = bool(row["aiShadowSelected"])
+            if row["aiProspective"] is not None:
+                row["aiProspective"] = bool(row["aiProspective"])
+            news_analysis = _decode_object(row.pop("aiNewsJson", ""))
+            row["aiNewsSummary"] = news_analysis.get("summary", "")
 
         daily_candidates = _read_records(
             conn,
@@ -298,6 +383,25 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             for row in backtest_runs:
                 row["selectionScope"] = _backtest_scope(row.pop("configJson", ""))
 
+        ai_models = []
+        if _table_exists(conn, "model_versions"):
+            ai_models = _read_records(
+                conn,
+                """
+                SELECT model_name AS modelName, version, status,
+                       feature_version AS featureVersion,
+                       training_start AS trainingStart,
+                       training_end AS trainingEnd,
+                       metrics_json AS metricsJson,
+                       created_at AS createdAt
+                FROM model_versions
+                ORDER BY id DESC
+                LIMIT 12
+                """,
+            )
+            for row in ai_models:
+                row["metrics"] = _decode_object(row.pop("metricsJson", ""))
+
         return {
             "schemaVersion": SCHEMA_VERSION,
             "generatedAt": dt.datetime.now(TAIPEI_TZ).isoformat(timespec="seconds"),
@@ -309,6 +413,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "performance": performance,
             "scanRuns": scan_runs,
             "backtestRuns": backtest_runs,
+            "aiModels": ai_models,
         }
     finally:
         conn.close()

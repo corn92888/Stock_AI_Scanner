@@ -7,7 +7,9 @@ export type Overview = {
   candidateEvents: number;
   featureSnapshots: number;
   predictions: number;
+  prospectivePredictions: number;
   predictionOutcomes: number;
+  maturePredictionOutcomes: number;
   modelVersions: number;
   newsEvidence: number;
   backtestResults: number;
@@ -44,6 +46,19 @@ export type Candidate = {
   riskFlags: string[];
   blockReasons: string[];
   policyVersion: string;
+  aiModelVersion: string | null;
+  aiProspective: boolean | null;
+  aiRank: number | null;
+  aiShadowSelected: boolean | null;
+  aiScore: number | null;
+  aiProbabilityT3: number | null;
+  aiExpectedExcess3d: number | null;
+  aiExpectedDrawdown3d: number | null;
+  aiAction: string | null;
+  aiNewsSentiment: string | null;
+  aiNewsConfidence: number | null;
+  aiNewsEvidenceCount: number;
+  aiNewsSummary: string;
 };
 
 export type DailyCandidate = {
@@ -102,6 +117,28 @@ export type BacktestRun = {
   selectionScope: string;
 };
 
+export type AiModel = {
+  modelName: string;
+  version: string;
+  status: string;
+  featureVersion: string;
+  trainingStart: string;
+  trainingEnd: string;
+  createdAt: string;
+  metrics: {
+    samples?: number;
+    positive_samples?: number;
+    training_samples?: number;
+    validation_samples?: number;
+    validation_auc?: number | null;
+    validation_brier?: number;
+    validation_excess_mae?: number;
+    validation_drawdown_mae?: number;
+    validation_start?: string;
+    validation_end?: string;
+  };
+};
+
 export type DashboardSnapshot = {
   schemaVersion: string;
   generatedAt: string;
@@ -113,6 +150,7 @@ export type DashboardSnapshot = {
   performance: Performance[];
   scanRuns: ScanRun[];
   backtestRuns: BacktestRun[];
+  aiModels: AiModel[];
 };
 
 export type WorkflowRun = {

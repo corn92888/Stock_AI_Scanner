@@ -120,6 +120,7 @@ def _skipped_result(reason, message):
         "selected_count": 0,
         "candidate_events_saved": 0,
         "scan_run_id": None,
+        "ai_result": None,
     }
 
 
@@ -440,6 +441,10 @@ def build_candidate_ranking(scan_path, market_path):
         ranked = ranked.merge(industry_small, on="產業族群", how="left")
 
     ranked = pd.concat([ranked, ranked.apply(score_candidate, axis=1)], axis=1)
+    market_values = _summary_map(summary)
+    ranked["市場上漲比例"] = _safe_float(market_values.get("上漲比例"))
+    ranked["市場平均漲跌幅"] = _safe_float(market_values.get("平均漲跌幅"))
+    ranked["市場中位數漲跌幅"] = _safe_float(market_values.get("中位數漲跌幅"))
     if quote_time:
         ranked["報價時間"] = quote_time
     sort_cols = [col for col in ["分數", "成交值(億)", "策略數"] if col in ranked.columns]
@@ -608,6 +613,7 @@ def generate_intraday_analysis_report(
     run_market_monitor=False,
     send_telegram=False,
     send_raw_scanner_telegram=None,
+    run_ai=False,
     save_report=True,
     db_path=DB_PATH,
 ):
@@ -670,6 +676,20 @@ def generate_intraday_analysis_report(
             db_path=db_path,
         )
     report_text = build_report_text(ranked, signals, industry, summary, focus)
+    ai_result = None
+    if run_ai and scan_run and candidate_events_saved:
+        try:
+            from ai_pipeline import run_ai_pipeline
+
+            ai_result = run_ai_pipeline(run_id=scan_run["id"], db_path=db_path)
+            if ai_result.get("report_text"):
+                report_text += ai_result["report_text"]
+        except Exception as exc:
+            ai_result = {"status": "failed", "error": str(exc)}
+            report_text += (
+                "\n\nAI 影子研究：\n"
+                f"- 本批次 AI 管線失敗（{exc.__class__.__name__}），正式規則名單不受影響。"
+            )
 
     os.makedirs("Reports", exist_ok=True)
     timestamp = _timestamp_from_path(market_path)
@@ -739,6 +759,7 @@ def generate_intraday_analysis_report(
         "selected_count": int(ranked["政策入選"].sum()) if "政策入選" in ranked else 0,
         "candidate_events_saved": candidate_events_saved,
         "scan_run_id": scan_run["id"] if scan_run else None,
+        "ai_result": ai_result,
     }
 
 
@@ -749,6 +770,11 @@ def main():
     parser.add_argument("--run-scanner", action="store_true", help="先執行 intraday_scanner.py")
     parser.add_argument("--run-market-monitor", action="store_true", help="先執行 market_monitor.py")
     parser.add_argument("--send-telegram", action="store_true", help="同步發送精簡分析報告到 Telegram")
+    parser.add_argument(
+        "--run-ai",
+        action="store_true",
+        help="建立特徵、執行影子模型與新聞 AI，並附加到分析報告",
+    )
     parser.add_argument(
         "--send-raw-scanner-telegram",
         action="store_true",
@@ -775,6 +801,7 @@ def main():
         run_market_monitor=args.run_market_monitor,
         send_telegram=args.send_telegram,
         send_raw_scanner_telegram=send_raw_scanner_telegram,
+        run_ai=args.run_ai,
         save_report=not args.no_save,
     )
     print(result["text"])
