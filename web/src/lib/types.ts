@@ -12,6 +12,9 @@ export type Overview = {
   newsEvidence: number;
   backtestResults: number;
   formalSelections: number;
+  formalBacktestResults: number;
+  formalMatureT3: number;
+  formalCompleteT20: number;
   matureT3: number;
   completeT20: number;
 };
@@ -70,6 +73,8 @@ export type Performance = {
   costsBps: number;
   entryMethod: string;
   testedAt: string;
+  isFormalSelection: boolean;
+  policyVersion: string;
 };
 
 export type ScanRun = {
@@ -94,11 +99,13 @@ export type BacktestRun = {
   partialCount: number;
   skippedCount: number;
   errorText: string | null;
+  selectionScope: string;
 };
 
 export type DashboardSnapshot = {
   schemaVersion: string;
   generatedAt: string;
+  candidateDetailDays: number;
   overview: Overview;
   candidates: Candidate[];
   dailyCandidates: DailyCandidate[];

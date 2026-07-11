@@ -41,10 +41,15 @@ jobs:
       run: |
         python scanner.py
 
-    - name: Update matured backtest outcomes
+    - name: Update formal selection outcomes
       continue-on-error: true
       run: |
-        python backtest.py --limit 200
+        python backtest.py --selection-scope formal --limit 200
+
+    - name: Backfill non-formal research outcomes
+      continue-on-error: true
+      run: |
+        python backtest.py --selection-scope nonformal --limit 200
 
     - name: Export dashboard snapshot
       run: |

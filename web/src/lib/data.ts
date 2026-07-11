@@ -23,7 +23,7 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
     });
     if (!response.ok) throw new Error(`snapshot request failed: ${response.status}`);
     const snapshot = (await response.json()) as DashboardSnapshot;
-    if (snapshot.schemaVersion !== "dashboard_v1") {
+    if (snapshot.schemaVersion !== "dashboard_v2") {
       throw new Error(`unsupported dashboard schema: ${snapshot.schemaVersion}`);
     }
     return snapshot;

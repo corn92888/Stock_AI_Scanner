@@ -191,6 +191,76 @@ class BacktestDatabaseTests(unittest.TestCase):
         pending = load_pending_signals(db_path=self.db_path)
         self.assertEqual(pending, [])
 
+    def test_formal_selections_are_prioritized_and_can_be_scoped(self):
+        with get_connection(self.db_path) as conn:
+            raw_cursor = conn.execute(
+                """
+                INSERT INTO stock_signals (
+                    run_id, trade_date, mode, strategy, code, name, stop_loss,
+                    rank_order, created_at
+                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "2025-12-31",
+                    "eod",
+                    "wave",
+                    "2317",
+                    "Hon Hai",
+                    90.0,
+                    1,
+                    "2025-12-31T14:00:00+08:00",
+                ),
+            )
+            raw_signal_id = raw_cursor.lastrowid
+            conn.execute(
+                """
+                INSERT INTO candidate_events (
+                    run_id, signal_id, code, name, as_of, strategies_json,
+                    strategy_count, raw_rank, tradable, block_reasons_json,
+                    risk_flags_json, is_first_eligible_event, is_selected,
+                    selection_rank, selection_status, policy_version,
+                    policy_config_json, snapshot_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    1,
+                    self.signal_id,
+                    "2330",
+                    "TSMC",
+                    "2026-01-02T10:00:00+08:00",
+                    '["trend"]',
+                    1,
+                    1,
+                    1,
+                    "[]",
+                    "[]",
+                    1,
+                    1,
+                    1,
+                    "selected",
+                    "candidate-v1",
+                    "{}",
+                    "{}",
+                    "2026-01-02T10:00:00+08:00",
+                    "2026-01-02T10:00:00+08:00",
+                ),
+            )
+
+        all_pending = load_pending_signals(db_path=self.db_path)
+        formal_pending = load_pending_signals(
+            selection_scope="formal", db_path=self.db_path
+        )
+        nonformal_pending = load_pending_signals(
+            selection_scope="nonformal", db_path=self.db_path
+        )
+
+        self.assertEqual(
+            [row["id"] for row in all_pending],
+            [self.signal_id, raw_signal_id],
+        )
+        self.assertEqual([row["id"] for row in formal_pending], [self.signal_id])
+        self.assertEqual([row["id"] for row in nonformal_pending], [raw_signal_id])
+
 
 if __name__ == "__main__":
     unittest.main()

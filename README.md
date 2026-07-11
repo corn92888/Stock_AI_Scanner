@@ -111,6 +111,16 @@
   venv/bin/python3 backtest.py --mode eod --strategy trend --limit 20
   ```
 
+  正式策略驗證與研究訊號分開執行：
+  ```bash
+  # 優先驗證系統實際推薦過的正式入選
+  venv/bin/python3 backtest.py --selection-scope formal --limit 200
+
+  # 再補首次合格候選與其餘未正式入選的研究訊號
+  venv/bin/python3 backtest.py --selection-scope nonformal --limit 200
+  ```
+  `formal` 是判斷目前選股政策是否有效的主要樣本；`nonformal` 只用於研究各項技術訊號，不應與正式勝率混在一起。每日自動化會先更新正式入選，再補 200 筆非正式研究訊號。
+
   強制重算已完成結果，或調整成本與成功門檻：
   ```bash
   venv/bin/python3 backtest.py --refresh --limit 20

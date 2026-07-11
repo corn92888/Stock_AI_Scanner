@@ -8,7 +8,8 @@ import pandas as pd
 
 
 TAIPEI_TZ = dt.timezone(dt.timedelta(hours=8), name="Asia/Taipei")
-SCHEMA_VERSION = "dashboard_v1"
+SCHEMA_VERSION = "dashboard_v2"
+CANDIDATE_DETAIL_DAYS = 20
 DEFAULT_OUTPUTS = (
     Path("data/dashboard_snapshot.json"),
     Path("web/public/dashboard_snapshot.json"),
@@ -66,6 +67,16 @@ def _decode_list(value):
 def _automation_slot(notes):
     if not notes:
         return ""
+
+
+def _backtest_scope(config_json):
+    if not config_json:
+        return "legacy"
+    try:
+        result = json.loads(config_json)
+        return str(result.get("selection_scope", "legacy")) if isinstance(result, dict) else "legacy"
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return "legacy"
     try:
         result = json.loads(notes)
         return str(result.get("automation_slot", "")) if isinstance(result, dict) else ""
@@ -87,7 +98,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             raise RuntimeError(f"Dashboard database missing tables: {', '.join(missing)}")
 
         latest = conn.execute(
-            """
+            f"""
             SELECT trade_date, run_at, mode
             FROM scan_runs
             ORDER BY run_at DESC, id DESC
@@ -123,10 +134,24 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
         ).fetchone()
         overview["matureT3"] = int(mature[0] or 0)
         overview["completeT20"] = int(mature[1] or 0)
+        formal_mature = conn.execute(
+            """
+            SELECT
+                COUNT(br.id),
+                SUM(CASE WHEN br.matured_horizon >= 3 THEN 1 ELSE 0 END),
+                SUM(CASE WHEN br.outcome_status = 'complete' THEN 1 ELSE 0 END)
+            FROM candidate_events ce
+            LEFT JOIN backtest_results br ON br.signal_id=ce.signal_id
+            WHERE ce.is_selected=1
+            """
+        ).fetchone()
+        overview["formalBacktestResults"] = int(formal_mature[0] or 0)
+        overview["formalMatureT3"] = int(formal_mature[1] or 0)
+        overview["formalCompleteT20"] = int(formal_mature[2] or 0)
 
         candidates = _read_records(
             conn,
-            """
+            f"""
             SELECT
                 sr.trade_date AS tradeDate,
                 sr.run_at AS runAt,
@@ -153,6 +178,13 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
                 ce.policy_version AS policyVersion
             FROM candidate_events ce
             JOIN scan_runs sr ON sr.id=ce.run_id
+            WHERE sr.trade_date IN (
+                SELECT DISTINCT sr2.trade_date
+                FROM candidate_events ce2
+                JOIN scan_runs sr2 ON sr2.id=ce2.run_id
+                ORDER BY sr2.trade_date DESC
+                LIMIT {CANDIDATE_DETAIL_DAYS}
+            )
             ORDER BY sr.trade_date DESC, sr.run_at DESC, ce.raw_rank
             """,
         )
@@ -213,7 +245,15 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
                 br.success_t3 AS successT3,
                 br.costs_bps AS costsBps,
                 br.entry_method AS entryMethod,
-                br.tested_at AS testedAt
+                br.tested_at AS testedAt,
+                EXISTS(
+                    SELECT 1 FROM candidate_events ce
+                    WHERE ce.signal_id=s.id AND ce.is_selected=1
+                ) AS isFormalSelection,
+                COALESCE((
+                    SELECT MAX(ce.policy_version) FROM candidate_events ce
+                    WHERE ce.signal_id=s.id AND ce.is_selected=1
+                ), '') AS policyVersion
             FROM backtest_results br
             JOIN stock_signals s ON s.id=br.signal_id
             ORDER BY s.trade_date DESC, s.id DESC
@@ -223,6 +263,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             row["strategyLabel"] = STRATEGY_LABELS.get(row["strategy"], row["strategy"])
             if row["successT3"] is not None:
                 row["successT3"] = bool(row["successT3"])
+            row["isFormalSelection"] = bool(row["isFormalSelection"])
 
         scan_runs = _read_records(
             conn,
@@ -248,16 +289,19 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
                        completed_count AS completedCount,
                        partial_count AS partialCount,
                        skipped_count AS skippedCount,
-                       error_text AS errorText
+                       error_text AS errorText, config_json AS configJson
                 FROM backtest_runs
                 ORDER BY started_at DESC, id DESC
                 LIMIT 30
                 """,
             )
+            for row in backtest_runs:
+                row["selectionScope"] = _backtest_scope(row.pop("configJson", ""))
 
         return {
             "schemaVersion": SCHEMA_VERSION,
             "generatedAt": dt.datetime.now(TAIPEI_TZ).isoformat(timespec="seconds"),
+            "candidateDetailDays": CANDIDATE_DETAIL_DAYS,
             "overview": overview,
             "candidates": candidates,
             "dailyCandidates": daily_candidates,

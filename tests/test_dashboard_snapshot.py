@@ -37,6 +37,7 @@ def _create_fixture(path):
         );
         CREATE TABLE backtest_runs (
             id INTEGER PRIMARY KEY, started_at TEXT, finished_at TEXT, status TEXT,
+            config_json TEXT,
             signals_requested INTEGER, completed_count INTEGER, partial_count INTEGER,
             skipped_count INTEGER, error_text TEXT
         );
@@ -74,10 +75,13 @@ class DashboardSnapshotTests(unittest.TestCase):
             payload = json.loads(output.read_text(encoding="utf-8"))
             serialized = output.read_text(encoding="utf-8").lower()
 
-            self.assertEqual(payload["schemaVersion"], "dashboard_v1")
+            self.assertEqual(payload["schemaVersion"], "dashboard_v2")
             self.assertEqual(payload["overview"]["formalSelections"], 1)
+            self.assertEqual(payload["overview"]["formalBacktestResults"], 1)
+            self.assertEqual(payload["overview"]["formalMatureT3"], 1)
             self.assertEqual(payload["candidates"][0]["strategies"], ["trend"])
             self.assertTrue(payload["candidates"][0]["isSelected"])
             self.assertEqual(payload["performance"][0]["netReturn3d"], 2.0)
+            self.assertTrue(payload["performance"][0]["isFormalSelection"])
             for private_key in ("email", "portfolio", "supabase", "private_code", "chat_id"):
                 self.assertNotIn(private_key, serialized)

@@ -259,7 +259,11 @@ function DecisionView({ snapshot }: { snapshot: DashboardSnapshot }) {
 
 function PerformanceView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const [mode, setMode] = useState("all");
-  const rows = useMemo(() => snapshot.performance.filter((row) => mode === "all" || row.mode === mode), [snapshot.performance, mode]);
+  const [sampleScope, setSampleScope] = useState<"formal" | "all">("formal");
+  const rows = useMemo(() => snapshot.performance.filter((row) => {
+    if (sampleScope === "formal" && !row.isFormalSelection) return false;
+    return mode === "all" || row.mode === mode;
+  }), [snapshot.performance, mode, sampleScope]);
   const mature = rows.filter((row) => row.maturedHorizon >= 3 && row.netReturn3d != null);
   const grouped = useMemo(() => Object.values(mature.reduce<Record<string, { strategy: string; label: string; values: Performance[] }>>((acc, row) => {
     const key = `${row.mode}-${row.strategy}`;
@@ -279,13 +283,13 @@ function PerformanceView({ snapshot }: { snapshot: DashboardSnapshot }) {
   return (
     <div className="view-stack">
       <section className="metrics-grid">
-        <Metric label="成熟 T+3 樣本" value={number.format(mature.length)} detail={`總回測 ${rows.length} 筆`} tone="info" />
+        <Metric label="成熟 T+3 樣本" value={number.format(mature.length)} detail={sampleScope === "formal" ? `正式名單已回測 ${snapshot.overview.formalBacktestResults}/${snapshot.overview.formalSelections}` : `全部回測 ${snapshot.overview.backtestResults} 筆`} tone="info" />
         <Metric label="平均淨報酬" value={pct(avg(mature.map((row) => row.netReturn3d)))} detail="已扣模型設定交易成本" tone={(avg(mature.map((row) => row.netReturn3d)) ?? 0) >= 0 ? "positive" : "warning"} />
         <Metric label="平均超額報酬" value={pct(avg(mature.map((row) => row.excessReturn3d)))} detail="相對大盤 T+3" />
         <Metric label="成功率" value={`${decimal.format(successRate)}%`} detail="依策略成功門檻判定" tone="warning" />
       </section>
       <section className="panel chart-panel large-chart">
-        <PanelHeader eyebrow="Evidence, not confidence" title="策略三日績效" trailing={<div className="segmented">{[["all", "全部"], ["intraday", "盤中"], ["eod", "盤後"]].map(([id, label]) => <button key={id} className={mode === id ? "active" : ""} onClick={() => setMode(id)}>{label}</button>)}</div>} />
+        <PanelHeader eyebrow="Evidence, not confidence" title="策略三日績效" trailing={<div className="filter-groups"><div className="segmented"><button className={sampleScope === "formal" ? "active" : ""} onClick={() => setSampleScope("formal")}>正式入選</button><button className={sampleScope === "all" ? "active" : ""} onClick={() => setSampleScope("all")}>全部訊號</button></div><div className="segmented">{[["all", "全部"], ["intraday", "盤中"], ["eod", "盤後"]].map(([id, label]) => <button key={id} className={mode === id ? "active" : ""} onClick={() => setMode(id)}>{label}</button>)}</div></div>} />
         <div className="chart-frame tall">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={grouped} margin={{ top: 16, right: 16, left: -12, bottom: 32 }}>
@@ -300,7 +304,7 @@ function PerformanceView({ snapshot }: { snapshot: DashboardSnapshot }) {
         </div>
       </section>
       <section className="panel">
-        <PanelHeader eyebrow="Audit trail" title="成熟樣本明細" trailing={<span className="record-count">{mature.length} 筆</span>} />
+        <PanelHeader eyebrow="Audit trail" title={sampleScope === "formal" ? "正式入選成熟樣本" : "全部成熟樣本"} trailing={<span className="record-count">{mature.length} 筆</span>} />
         <div className="table-scroll">
           <table className="data-table compact-table"><thead><tr><th>日期</th><th>模式 / 策略</th><th>標的</th><th>T+1</th><th>T+3 淨報酬</th><th>T+3 超額</th><th>最大回撤</th><th>判定</th></tr></thead>
             <tbody>{mature.map((row, index) => <tr key={`${row.tradeDate}-${row.code}-${index}`}><td>{row.tradeDate}</td><td>{modeLabel(row.mode)} · {row.strategyLabel}</td><td><strong>{row.code}</strong> {row.name}</td><td>{pct(row.netReturn1d)}</td><td className={(row.netReturn3d ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.netReturn3d)}</td><td>{pct(row.excessReturn3d)}</td><td className="negative-text">{pct(row.maxDrawdown3d)}</td><td><span className={`status-pill ${row.successT3 ? "selected" : "blocked"}`}>{row.successT3 ? "通過" : "未通過"}</span></td></tr>)}</tbody>

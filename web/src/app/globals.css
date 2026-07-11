@@ -150,6 +150,7 @@ a { color: inherit; text-decoration: none; }
 .segmented { display: inline-flex; min-width: 0; padding: 3px; background: #0d1319; border: 1px solid var(--border); border-radius: 6px; }
 .segmented button { min-height: 29px; padding: 0 11px; color: var(--muted); background: transparent; border: 0; border-radius: 4px; cursor: pointer; font-size: 11px; white-space: nowrap; }
 .segmented button.active { color: var(--text); background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.filter-groups { display: flex; gap: 8px; align-items: center; }
 .search-control { width: min(280px, 100%); height: 35px; display: flex; gap: 8px; align-items: center; margin-left: auto; padding: 0 10px; color: var(--faint); background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 5px; }
 .search-control input { width: 100%; min-width: 0; color: var(--text); background: transparent; border: 0; outline: 0; font-size: 12px; }
 .search-control input::placeholder { color: var(--faint); }
@@ -294,6 +295,8 @@ a { color: inherit; text-decoration: none; }
   .segmented button { flex: 1; padding: 0 6px; }
   .search-control { width: 100%; margin-left: 0; }
   .large-chart .panel-header { align-items: stretch; flex-direction: column; }
+  .filter-groups { width: 100%; flex-direction: column; align-items: stretch; }
+  .filter-groups .segmented { width: 100%; }
   .large-chart .segmented { width: 100%; }
   .chart-frame { height: 245px; }
   .chart-frame.tall { height: 300px; }

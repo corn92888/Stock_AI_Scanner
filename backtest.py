@@ -122,6 +122,7 @@ def load_pending_signals(
     strategy=None,
     limit=None,
     refresh=False,
+    selection_scope="all",
     db_path=DB_PATH,
 ):
     params = []
@@ -135,13 +136,41 @@ def load_pending_signals(
         where.append("s.strategy = ?")
         params.append(strategy)
 
+    formal_selection = """
+        EXISTS (
+            SELECT 1 FROM candidate_events ce
+            WHERE ce.signal_id = s.id AND ce.is_selected = 1
+        )
+    """
+    first_eligible = """
+        EXISTS (
+            SELECT 1 FROM candidate_events ce
+            WHERE ce.signal_id = s.id AND ce.is_first_eligible_event = 1
+        )
+    """
+    if selection_scope == "formal":
+        where.append(formal_selection)
+    elif selection_scope == "nonformal":
+        where.append(f"NOT {formal_selection}")
+    elif selection_scope != "all":
+        raise ValueError(f"Unsupported selection scope: {selection_scope}")
+
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     sql = f"""
         SELECT s.*
         FROM stock_signals s
         LEFT JOIN backtest_results br ON br.signal_id = s.id
         {where_sql}
-        ORDER BY s.trade_date ASC, s.mode ASC, s.strategy ASC, s.rank_order ASC
+        ORDER BY
+            CASE
+                WHEN {formal_selection} THEN 0
+                WHEN {first_eligible} THEN 1
+                ELSE 2
+            END,
+            s.trade_date ASC,
+            s.mode ASC,
+            s.strategy ASC,
+            s.rank_order ASC
     """
     if limit:
         sql += " LIMIT ?"
@@ -313,6 +342,7 @@ def run_backtest(
     db_path=DB_PATH,
     config=None,
     refresh=False,
+    selection_scope="all",
     price_loader=download_price_data,
 ):
     config = config or BacktestConfig()
@@ -321,6 +351,7 @@ def run_backtest(
         strategy=strategy,
         limit=limit,
         refresh=refresh,
+        selection_scope=selection_scope,
         db_path=db_path,
     )
     if not signals:
@@ -332,7 +363,9 @@ def run_backtest(
     end = pd.Timestamp.now().normalize() + pd.Timedelta(days=1)
     cache = PriceCache(start=start, end=end, loader=price_loader)
     benchmark_df = cache.get_ticker(config.benchmark_code)
-    config_json = config.to_json()
+    audit_config = json.loads(config.to_json())
+    audit_config["selection_scope"] = selection_scope
+    config_json = json.dumps(audit_config, ensure_ascii=True, sort_keys=True)
     audit_run_id = start_backtest_run(config_json, len(signals), db_path=db_path)
 
     saved = 0
@@ -454,6 +487,12 @@ def main():
     parser.add_argument("--limit", type=int, help="Maximum signals to update")
     parser.add_argument("--summary", action="store_true", help="Show backtest statistics")
     parser.add_argument("--refresh", action="store_true", help="Recalculate completed outcomes")
+    parser.add_argument(
+        "--selection-scope",
+        choices=["formal", "nonformal", "all"],
+        default="all",
+        help="Backtest formal selections first, non-formal research signals, or all signals",
+    )
     parser.add_argument("--db", default=str(DB_PATH), help="SQLite database path")
     parser.add_argument("--benchmark", default="^TWII", help="Yahoo Finance benchmark ticker")
     parser.add_argument("--buy-fee-rate", type=float, default=0.001425)
@@ -484,6 +523,7 @@ def main():
         db_path=args.db,
         config=config,
         refresh=args.refresh,
+        selection_scope=args.selection_scope,
     )
 
 
