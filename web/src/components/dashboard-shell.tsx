@@ -55,7 +55,7 @@ import {
 import type { Candidate, DashboardSnapshot, Performance, WorkflowRun } from "@/lib/types";
 
 type ViewId = "decision" | "performance" | "pipeline" | "operations";
-type Scope = "selected" | "all" | "rejected";
+type Scope = "latest" | "selected" | "all" | "rejected";
 type CandidateSort = "rank" | "score" | "turnover" | "volume" | "ai" | "excess";
 type SortDirection = "asc" | "desc";
 
@@ -467,7 +467,7 @@ function DecisionView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const dates = useMemo(() => [...new Set(snapshot.candidates.map((row) => row.tradeDate))].sort().reverse(), [snapshot.candidates]);
   const latestCandidateDate = dates.includes(snapshot.overview.latestTradeDate) ? snapshot.overview.latestTradeDate : dates[0] || "";
   const [date, setDate] = useState(latestCandidateDate);
-  const [scope, setScope] = useState<Scope>("selected");
+  const [scope, setScope] = useState<Scope>("latest");
   const [query, setQuery] = useState("");
   const [strategy, setStrategy] = useState("all");
   const [riskFilter, setRiskFilter] = useState("all");
@@ -476,7 +476,9 @@ function DecisionView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
 
   const dayRows = useMemo(() => snapshot.candidates.filter((row) => row.tradeDate === date), [snapshot.candidates, date]);
+  const latestRunAt = useMemo(() => dayRows.reduce((latest, row) => row.runAt > latest ? row.runAt : latest, ""), [dayRows]);
   const rows = useMemo(() => dayRows.filter((row) => {
+    if (scope === "latest" && row.runAt !== latestRunAt) return false;
     if (scope === "selected" && !row.isSelected) return false;
     if (scope === "rejected" && row.isSelected) return false;
     if (strategy !== "all" && !row.strategies.includes(strategy)) return false;
@@ -495,13 +497,13 @@ function DecisionView({ snapshot }: { snapshot: DashboardSnapshot }) {
     };
     const delta = values[sort][0] - values[sort][1];
     return direction === "asc" ? delta : -delta;
-  }), [dayRows, scope, strategy, riskFilter, query, sort, direction]);
+  }), [dayRows, latestRunAt, scope, strategy, riskFilter, query, sort, direction]);
 
   const handleSort = (field: CandidateSort) => {
     if (field === sort) setDirection((current) => current === "asc" ? "desc" : "asc");
     else { setSort(field); setDirection(field === "rank" ? "asc" : "desc"); }
   };
-  const resetFilters = () => { setScope("selected"); setQuery(""); setStrategy("all"); setRiskFilter("all"); setSort("rank"); setDirection("asc"); };
+  const resetFilters = () => { setScope("latest"); setQuery(""); setStrategy("all"); setRiskFilter("all"); setSort("rank"); setDirection("asc"); };
 
   const selected = dayRows.filter((row) => row.isSelected);
   const tradable = dayRows.filter((row) => row.tradable);
@@ -522,10 +524,10 @@ function DecisionView({ snapshot }: { snapshot: DashboardSnapshot }) {
       </section>
 
       <section className="panel decision-panel">
-        <PanelHeader eyebrow="Decision workspace" title="候選決策工作台" description="同一交易日的規則訊號、流動性、AI 影子預測與風險證據" trailing={<div className="panel-actions"><span className="record-count">{rows.length} / {dayRows.length} 筆</span><IconButton label="重設篩選" onClick={resetFilters}><RotateCcw size={16} /></IconButton><IconButton label="匯出目前候選 CSV" onClick={() => downloadCandidates(rows, date)}><Download size={16} /></IconButton></div>} />
+        <PanelHeader eyebrow="Decision workspace" title="候選決策工作台" description="同一交易日的規則訊號、流動性、AI 影子預測與風險證據" trailing={<div className="panel-actions"><span className="record-count">{scope === "latest" && latestRunAt ? `${formatDateTime(latestRunAt)} · ` : ""}{rows.length} / {dayRows.length} 筆</span><IconButton label="重設篩選" onClick={resetFilters}><RotateCcw size={16} /></IconButton><IconButton label="匯出目前候選 CSV" onClick={() => downloadCandidates(rows, date)}><Download size={16} /></IconButton></div>} />
         <div className="toolbar decision-toolbar">
           <label className="select-control"><span>交易日</span><select value={date} onChange={(event) => setDate(event.target.value)}>{dates.map((item) => <option key={item}>{item}</option>)}</select></label>
-          <div className="segmented" aria-label="候選範圍">{([['selected', '正式入選'], ['all', '全部候選'], ['rejected', '未入選']] as Array<[Scope, string]>).map(([id, label]) => <button key={id} className={scope === id ? "active" : ""} onClick={() => setScope(id)}>{label}</button>)}</div>
+          <div className="segmented" aria-label="候選範圍">{([['latest', '最新批次'], ['selected', '每日正式'], ['all', '全日候選'], ['rejected', '未入選']] as Array<[Scope, string]>).map(([id, label]) => <button key={id} className={scope === id ? "active" : ""} onClick={() => setScope(id)}>{label}</button>)}</div>
           <label className="select-control"><span>策略</span><select value={strategy} onChange={(event) => setStrategy(event.target.value)}><option value="all">全部策略</option><option value="trend">順勢突破</option><option value="reversal">低檔爆量</option><option value="wave">波段蓄勢</option></select></label>
           <label className="select-control"><span>風險</span><select value={riskFilter} onChange={(event) => setRiskFilter(event.target.value)}><option value="all">全部狀態</option><option value="clean">僅看清潔</option><option value="risk">僅看有風險</option></select></label>
           <label className="search-control"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜尋代號、名稱或產業" /></label>

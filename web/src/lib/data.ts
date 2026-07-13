@@ -17,8 +17,11 @@ async function localSnapshot(): Promise<DashboardSnapshot> {
 
 export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
   try {
-    const response = await fetch(process.env.DASHBOARD_DATA_URL ?? DEFAULT_DATA_URL, {
-      next: { revalidate: 60 },
+    const sourceUrl = process.env.DASHBOARD_DATA_URL ?? DEFAULT_DATA_URL;
+    const versionedUrl = new URL(sourceUrl);
+    versionedUrl.searchParams.set("minute", String(Math.floor(Date.now() / 60_000)));
+    const response = await fetch(versionedUrl, {
+      cache: "no-store",
       headers: { Accept: "application/json" },
     });
     if (!response.ok) throw new Error(`snapshot request failed: ${response.status}`);
