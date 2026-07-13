@@ -66,23 +66,7 @@ jobs:
     - name: Persist signal database
       if: always()
       run: |
-        if [ -f data/stock_scanner.db ]; then
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/stock_scanner.db data/dashboard_snapshot.json web/public/dashboard_snapshot.json
-          if compgen -G 'data/models/*.joblib' > /dev/null; then
-            git add data/models/*.joblib
-          fi
-          if ! git diff --cached --quiet; then
-            git commit -m "Record daily scanner signals"
-            git pull --rebase origin main
-            git push origin HEAD:main
-          else
-            echo "No database changes to commit."
-          fi
-        else
-          echo "No signal database found."
-        fi
+        bash persist_scanner_data.sh "Record daily scanner signals"
 
     - name: Upload Excel Reports
       if: always()
