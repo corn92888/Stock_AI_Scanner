@@ -9,7 +9,7 @@ import pandas as pd
 
 TAIPEI_TZ = dt.timezone(dt.timedelta(hours=8), name="Asia/Taipei")
 SCHEMA_VERSION = "dashboard_v2"
-CANDIDATE_DETAIL_DAYS = 20
+CANDIDATE_DETAIL_DAYS = 12
 DEFAULT_OUTPUTS = (
     Path("data/dashboard_snapshot.json"),
     Path("web/public/dashboard_snapshot.json"),
