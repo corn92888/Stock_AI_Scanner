@@ -7,6 +7,7 @@ from pathlib import Path
 
 DB_PATH = Path("data/stock_scanner.db")
 STRATEGY_VERSION = "strict_v1"
+CANDIDATE_EXECUTION_VERSION = "next_day_open_defense_close_t3_v1"
 
 
 def get_taipei_now():
@@ -163,6 +164,10 @@ def init_db(conn):
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_predictions_run_rank ON predictions(run_id, rank_order)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_outcomes_status ON prediction_outcomes(outcome_status)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_candidate_outcomes_status "
+        "ON candidate_outcomes(execution_version, matured_horizon, outcome_status)"
+    )
     conn.commit()
 
 
@@ -299,6 +304,42 @@ def _create_quant_tables(conn):
             FOREIGN KEY (run_id) REFERENCES scan_runs(id),
             FOREIGN KEY (signal_id) REFERENCES stock_signals(id),
             UNIQUE (run_id, code, feature_version)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS candidate_outcomes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            candidate_id INTEGER NOT NULL,
+            execution_version TEXT NOT NULL,
+            entry_at TEXT,
+            entry_price REAL,
+            entry_method TEXT NOT NULL,
+            exit_at TEXT,
+            exit_price REAL,
+            exit_reason TEXT,
+            fixed_net_return_1d REAL,
+            fixed_net_return_3d REAL,
+            fixed_net_return_5d REAL,
+            net_return_3d REAL,
+            benchmark_code TEXT,
+            benchmark_entry_price REAL,
+            benchmark_return_3d REAL,
+            excess_return_3d REAL,
+            max_return_3d REAL,
+            max_drawdown_3d REAL,
+            defense_triggered INTEGER NOT NULL DEFAULT 0,
+            success_t3 INTEGER,
+            matured_horizon INTEGER NOT NULL DEFAULT 0,
+            outcome_status TEXT NOT NULL DEFAULT 'pending',
+            price_data_end TEXT,
+            costs_bps REAL,
+            config_json TEXT,
+            evaluated_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (candidate_id) REFERENCES candidate_events(id),
+            UNIQUE (candidate_id, execution_version)
         )
         """
     )
@@ -688,6 +729,72 @@ def save_backtest_result(signal_id, result, db_path=DB_PATH):
             INSERT INTO backtest_results ({", ".join(columns)})
             VALUES ({placeholders})
             ON CONFLICT(signal_id) DO UPDATE SET
+                {updates}
+            """,
+            values,
+        )
+        conn.commit()
+
+
+def save_candidate_outcome(candidate_id, execution_version, result, db_path=DB_PATH):
+    evaluated_at = get_taipei_now().isoformat(timespec="seconds")
+    columns = [
+        "candidate_id",
+        "execution_version",
+        "entry_at",
+        "entry_price",
+        "entry_method",
+        "exit_at",
+        "exit_price",
+        "exit_reason",
+        "fixed_net_return_1d",
+        "fixed_net_return_3d",
+        "fixed_net_return_5d",
+        "net_return_3d",
+        "benchmark_code",
+        "benchmark_entry_price",
+        "benchmark_return_3d",
+        "excess_return_3d",
+        "max_return_3d",
+        "max_drawdown_3d",
+        "defense_triggered",
+        "success_t3",
+        "matured_horizon",
+        "outcome_status",
+        "price_data_end",
+        "costs_bps",
+        "config_json",
+        "evaluated_at",
+        "updated_at",
+    ]
+    values = []
+    for column in columns:
+        if column == "candidate_id":
+            value = int(candidate_id)
+        elif column == "execution_version":
+            value = execution_version
+        elif column in {"evaluated_at", "updated_at"}:
+            value = evaluated_at
+        elif column in {"defense_triggered", "success_t3"}:
+            raw = result.get(column)
+            value = None if raw is None else int(bool(raw))
+        else:
+            value = result.get(column)
+        values.append(value)
+
+    placeholders = ", ".join("?" for _ in columns)
+    updates = ",\n                ".join(
+        f"{column} = excluded.{column}"
+        for column in columns
+        if column not in {"candidate_id", "execution_version"}
+    )
+    with get_connection(db_path) as conn:
+        init_db(conn)
+        conn.execute(
+            f"""
+            INSERT INTO candidate_outcomes ({", ".join(columns)})
+            VALUES ({placeholders})
+            ON CONFLICT(candidate_id, execution_version) DO UPDATE SET
                 {updates}
             """,
             values,

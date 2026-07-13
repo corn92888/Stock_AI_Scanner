@@ -621,15 +621,18 @@ function PerformanceView({ snapshot }: { snapshot: DashboardSnapshot }) {
 }
 
 function GateRow({ label, value, target, display, passed, lowerIsBetter = false }: { label: string; value: number; target: number; display: string; passed: boolean; lowerIsBetter?: boolean }) {
-  const progress = lowerIsBetter ? target / Math.max(value, target) * 100 : value / target * 100;
+  const progress = target === 0
+    ? (passed ? 100 : 3)
+    : lowerIsBetter ? target / Math.max(value, target) * 100 : value / target * 100;
   return <div className="gate-row"><div><span>{passed ? <CircleCheck size={15} /> : <Clock3 size={15} />}{label}</span><strong className={passed ? "positive-text" : ""}>{display}</strong></div><div className="progress"><i className={passed ? "green" : "amber"} style={{ width: `${Math.min(100, Math.max(3, progress))}%` }} /></div><small>上線門檻 {lowerIsBetter ? "≤" : "≥"} {target}</small></div>;
 }
 
 function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
+  const research = snapshot.researchQuality;
   const stages = [
     { label: "掃描訊號", value: snapshot.overview.signals, icon: Activity, note: "原始策略命中" },
     { label: "候選事件", value: snapshot.overview.candidateEvents, icon: SlidersHorizontal, note: "正規化決策紀錄" },
-    { label: "正式入選", value: snapshot.overview.formalSelections, icon: Target, note: "通過政策排序" },
+    { label: "候選回測", value: snapshot.overview.candidateOutcomes, icon: Target, note: "含落選對照組" },
     { label: "特徵快照", value: snapshot.overview.featureSnapshots, icon: Database, note: "模型可用輸入" },
     { label: "前瞻預測", value: snapshot.overview.prospectivePredictions ?? 0, icon: Bot, note: "即時模型輸出" },
     { label: "成熟結果", value: snapshot.overview.maturePredictionOutcomes ?? 0, icon: CheckCircle2, note: "前瞻 T+3 標註" },
@@ -643,7 +646,13 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const mae = latestModel?.metrics.validation_excess_mae ?? 99;
   const prospective = snapshot.overview.prospectivePredictions ?? 0;
   const matureProspective = snapshot.overview.maturePredictionOutcomes ?? 0;
-  const allGatesPassed = samples >= 150 && positives >= 30 && auc >= 0.6 && mae <= 3 && matureProspective >= 150;
+  const selectionLift = research.selectionNetLift3d ?? -Infinity;
+  const economicEdge = (research.formalMeanNetReturn3d ?? -Infinity) > 0
+    && (research.formalMeanExcessReturn3d ?? -Infinity) > 0
+    && selectionLift > 0;
+  const allGatesPassed = samples >= 500 && positives >= 50 && auc >= 0.6 && mae <= 3
+    && research.matureCandidateOutcomes >= 500 && research.matureRejectedOutcomes >= 250
+    && research.uniqueTradeDates >= 120 && matureProspective >= 150 && economicEdge;
   const featureCoverage = snapshot.overview.candidateEvents ? snapshot.overview.featureSnapshots / snapshot.overview.candidateEvents * 100 : 0;
 
   return (
@@ -651,6 +660,14 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
       <section className="model-hero-band">
         <div><span className="eyebrow">Model governance</span><h2>{allGatesPassed ? "模型符合候選升級門檻" : latestModel ? "影子模型運作中，尚未允許接管排名" : "模型資料仍在建立"}</h2><p>{latestModel ? `${latestModel.version} · 訓練區間 ${latestModel.trainingStart} 至 ${latestModel.trainingEnd}` : "尚無可用模型版本"}</p></div>
         <div className={`governance-state ${allGatesPassed ? "ready" : "shadow"}`}><Bot size={20} /><span>{allGatesPassed ? "PROMOTION REVIEW" : "SHADOW ONLY"}</span></div>
+      </section>
+
+      <section className="metrics-grid metrics-grid-five">
+        <Metric label="候選回測覆蓋" value={`${decimal.format(research.outcomeCoveragePct)}%`} detail={`${snapshot.overview.candidateOutcomes}/${snapshot.overview.candidateEvents} 筆`} tone={research.outcomeCoveragePct >= 90 ? "positive" : "warning"} icon={Database} />
+        <Metric label="落選對照組" value={number.format(research.matureRejectedOutcomes)} detail="驗證篩選是否增值" tone={research.matureRejectedOutcomes >= 250 ? "positive" : "warning"} icon={SlidersHorizontal} />
+        <Metric label="正式策略淨報酬" value={pct(research.formalMeanNetReturn3d)} detail={`超額 ${pct(research.formalMeanExcessReturn3d)}`} tone={economicEdge ? "positive" : "danger"} icon={TrendingUp} />
+        <Metric label="選股增值" value={pct(research.selectionNetLift3d)} detail={`落選組 ${pct(research.rejectedMeanNetReturn3d)}`} tone={selectionLift > 0 ? "positive" : "danger"} icon={Target} />
+        <Metric label="獨立交易日" value={number.format(research.uniqueTradeDates)} detail={research.executionVersion} tone={research.uniqueTradeDates >= 120 ? "positive" : "warning"} icon={Clock3} />
       </section>
 
       <section className="pipeline-board panel">
@@ -662,16 +679,21 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
         <div className="panel gate-panel">
           <PanelHeader eyebrow="Promotion gates" title="模型升級門檻" description="全部通過後仍需人工審查，不會自動接管正式策略" />
           <div className="gate-list">
-            <GateRow label="成熟訓練樣本" value={samples} target={150} display={`${samples} 筆`} passed={samples >= 150} />
-            <GateRow label="成功正樣本" value={positives} target={30} display={`${positives} 筆`} passed={positives >= 30} />
+            <GateRow label="成熟全候選結果" value={research.matureCandidateOutcomes} target={500} display={`${research.matureCandidateOutcomes} 筆`} passed={research.matureCandidateOutcomes >= 500} />
+            <GateRow label="成熟落選對照組" value={research.matureRejectedOutcomes} target={250} display={`${research.matureRejectedOutcomes} 筆`} passed={research.matureRejectedOutcomes >= 250} />
+            <GateRow label="獨立交易日" value={research.uniqueTradeDates} target={120} display={`${research.uniqueTradeDates} 日`} passed={research.uniqueTradeDates >= 120} />
+            <GateRow label="模型訓練樣本" value={samples} target={500} display={`${samples} 筆`} passed={samples >= 500} />
+            <GateRow label="成功正樣本" value={positives} target={50} display={`${positives} 筆`} passed={positives >= 50} />
             <GateRow label="時序驗證 AUC" value={auc} target={0.6} display={auc ? decimal.format(auc) : "NA"} passed={auc >= 0.6} />
             <GateRow label="超額報酬 MAE" value={mae} target={3} display={mae < 99 ? pct(mae) : "NA"} passed={mae <= 3} lowerIsBetter />
             <GateRow label="成熟前瞻預測" value={matureProspective} target={150} display={`${matureProspective} 筆`} passed={matureProspective >= 150} />
+            <GateRow label="選股相對落選組增值" value={selectionLift} target={0} display={Number.isFinite(selectionLift) ? pct(selectionLift) : "NA"} passed={selectionLift > 0} />
+            <GateRow label="樣本外經濟優勢" value={economicEdge ? 1 : 0} target={1} display={economicEdge ? "淨報酬與超額為正" : "尚未通過"} passed={economicEdge} />
           </div>
         </div>
         <div className="panel model-panel">
           <PanelHeader eyebrow="Latest challenger" title="目前影子模型" description="模型只提供平行排名，正式名單仍由版本化規則控制" />
-          {latestModel ? <div className="model-spec"><div className="model-version"><Bot size={22} /><div><strong>{latestModel.modelName}</strong><span>{latestModel.version}</span></div></div><dl className="detail-list"><div><dt>狀態</dt><dd>{latestModel.status}</dd></div><div><dt>特徵版本</dt><dd>{latestModel.featureVersion}</dd></div><div><dt>訓練樣本</dt><dd>{samples}</dd></div><div><dt>驗證樣本</dt><dd>{latestModel.metrics.validation_samples ?? "--"}</dd></div><div><dt>Brier Score</dt><dd>{latestModel.metrics.validation_brier == null ? "--" : decimal.format(latestModel.metrics.validation_brier)}</dd></div><div><dt>回撤 MAE</dt><dd>{pct(latestModel.metrics.validation_drawdown_mae)}</dd></div><div><dt>新聞證據</dt><dd>{snapshot.overview.newsEvidence}</dd></div><div><dt>前瞻預測</dt><dd>{prospective}</dd></div></dl></div> : <div className="empty-state">尚未建立模型版本。</div>}
+          {latestModel ? <div className="model-spec"><div className="model-version"><Bot size={22} /><div><strong>{latestModel.modelName}</strong><span>{latestModel.version}</span></div></div><dl className="detail-list"><div><dt>狀態</dt><dd>{latestModel.status}</dd></div><div><dt>結果來源</dt><dd>{latestModel.metrics.outcome_source ?? "legacy"}</dd></div><div><dt>特徵版本</dt><dd>{latestModel.featureVersion}</dd></div><div><dt>訓練樣本</dt><dd>{samples}</dd></div><div><dt>驗證樣本</dt><dd>{latestModel.metrics.validation_samples ?? "--"}</dd></div><div><dt>獨立日期</dt><dd>{latestModel.metrics.unique_trade_dates ?? "--"}</dd></div><div><dt>Brier Score</dt><dd>{latestModel.metrics.validation_brier == null ? "--" : decimal.format(latestModel.metrics.validation_brier)}</dd></div><div><dt>回撤 MAE</dt><dd>{pct(latestModel.metrics.validation_drawdown_mae)}</dd></div><div><dt>新聞證據</dt><dd>{snapshot.overview.newsEvidence}</dd></div><div><dt>前瞻預測</dt><dd>{prospective}</dd></div></dl></div> : <div className="empty-state">尚未建立模型版本。</div>}
         </div>
       </section>
 

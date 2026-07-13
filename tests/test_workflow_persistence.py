@@ -45,6 +45,12 @@ class WorkflowPersistenceTests(unittest.TestCase):
             self.assertEqual(workflow.count(f"cron: '{cron}'"), 1)
         self.assertIn('EVENT_SCHEDULE: ${{ github.event.schedule }}', workflow)
 
+    def test_daily_workflow_backtests_all_candidates_before_training(self):
+        workflow = (ROOT / ".github" / "workflows" / "daily_scan.yml").read_text()
+        candidate_index = workflow.index("python candidate_backtest.py --limit 400")
+        training_index = workflow.index("python ai_pipeline.py --no-news --no-predict")
+        self.assertLess(candidate_index, training_index)
+
     def test_automated_data_commits_use_conventional_english_messages(self):
         for workflow_name in ("intraday_scan.yml", "daily_scan.yml"):
             workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()

@@ -5,6 +5,9 @@ export type Overview = {
   scanRuns: number;
   signals: number;
   candidateEvents: number;
+  candidateOutcomes: number;
+  candidateMatureT3: number;
+  candidateRejectedMatureT3: number;
   featureSnapshots: number;
   predictions: number;
   prospectivePredictions: number;
@@ -19,6 +22,25 @@ export type Overview = {
   formalCompleteT20: number;
   matureT3: number;
   completeT20: number;
+};
+
+export type ResearchQuality = {
+  executionVersion: string;
+  outcomeCoveragePct: number;
+  matureCandidateOutcomes: number;
+  matureRejectedOutcomes: number;
+  matureSelectedOutcomes: number;
+  uniqueTradeDates: number;
+  meanNetReturn3d: number | null;
+  meanExcessReturn3d: number | null;
+  positiveRate3d: number | null;
+  successRateT3: number | null;
+  formalMeanNetReturn3d: number | null;
+  formalMeanExcessReturn3d: number | null;
+  rejectedMeanNetReturn3d: number | null;
+  rejectedMeanExcessReturn3d: number | null;
+  selectionNetLift3d: number | null;
+  selectionExcessLift3d: number | null;
 };
 
 export type Candidate = {
@@ -136,6 +158,9 @@ export type AiModel = {
     validation_drawdown_mae?: number;
     validation_start?: string;
     validation_end?: string;
+    unique_trade_dates?: number;
+    embargo_trade_dates?: string[];
+    outcome_source?: string;
   };
 };
 
@@ -144,6 +169,7 @@ export type DashboardSnapshot = {
   generatedAt: string;
   candidateDetailDays: number;
   overview: Overview;
+  researchQuality: ResearchQuality;
   candidates: Candidate[];
   dailyCandidates: DailyCandidate[];
   statusCounts: { status: string; count: number; label: string }[];

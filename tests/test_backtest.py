@@ -156,6 +156,7 @@ class BacktestDatabaseTests(unittest.TestCase):
             }
         self.assertIn("feature_snapshots", tables)
         self.assertIn("candidate_events", tables)
+        self.assertIn("candidate_outcomes", tables)
         self.assertIn("news_evidence", tables)
         self.assertIn("predictions", tables)
         self.assertIn("prediction_outcomes", tables)

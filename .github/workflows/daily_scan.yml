@@ -16,7 +16,7 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 55
 
     steps:
     - name: Checkout repository
@@ -45,6 +45,11 @@ jobs:
       continue-on-error: true
       run: |
         python backtest.py --selection-scope formal --limit 200
+
+    - name: Update all candidate counterfactual outcomes
+      continue-on-error: true
+      run: |
+        python candidate_backtest.py --limit 400
 
     - name: Backfill non-formal research outcomes
       continue-on-error: true

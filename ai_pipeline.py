@@ -9,7 +9,14 @@ from pathlib import Path
 
 import pandas as pd
 
-from database import DB_PATH, get_connection, get_git_commit, get_taipei_now, init_db
+from database import (
+    CANDIDATE_EXECUTION_VERSION,
+    DB_PATH,
+    get_connection,
+    get_git_commit,
+    get_taipei_now,
+    init_db,
+)
 from llm_agent import analyze_news_evidence_claude, fetch_google_news_evidence
 
 
@@ -18,6 +25,8 @@ MODEL_NAME = "shadow_logistic_t3"
 MODEL_FAMILY_VERSION = "shadow_logistic_t3_v1"
 MIN_TRAINING_SAMPLES = 80
 MIN_POSITIVE_SAMPLES = 10
+VALIDATION_FRACTION = 0.20
+EMBARGO_TRADE_DATES = 3
 MAX_NEWS_CANDIDATES = 3
 MIN_SHADOW_PROBABILITY = 0.35
 MIN_SHADOW_EXPECTED_EXCESS = 0.0
@@ -192,7 +201,42 @@ def build_feature_snapshots(db_path=DB_PATH, run_id=None, missing_only=True):
     return len(records)
 
 
-def _load_training_frame(conn):
+def _load_candidate_training_frame(conn):
+    columns = ", ".join(f"fs.{name}" for name in MODEL_FEATURES)
+    return pd.read_sql_query(
+        f"""
+        WITH canonical AS (
+            SELECT ce.id AS candidate_id, ce.run_id, ce.code, ce.as_of,
+                   sr.trade_date,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY sr.trade_date, ce.code
+                       ORDER BY ce.as_of ASC, ce.id ASC
+                   ) AS day_code_rank
+            FROM candidate_events ce
+            JOIN scan_runs sr ON sr.id=ce.run_id
+        )
+        SELECT fs.id AS feature_id, fs.run_id, fs.signal_id, fs.code, fs.as_of,
+               canonical.trade_date, {columns}, co.success_t3,
+               co.excess_return_3d, co.max_drawdown_3d
+        FROM canonical
+        JOIN candidate_outcomes co ON co.candidate_id=canonical.candidate_id
+        JOIN feature_snapshots fs
+          ON fs.run_id=canonical.run_id AND fs.code=canonical.code
+        WHERE canonical.day_code_rank=1
+          AND fs.feature_version=?
+          AND co.execution_version=?
+          AND co.matured_horizon >= 3
+          AND co.success_t3 IS NOT NULL
+          AND co.excess_return_3d IS NOT NULL
+          AND co.max_drawdown_3d IS NOT NULL
+        ORDER BY canonical.trade_date, fs.as_of, fs.id
+        """,
+        conn,
+        params=(FEATURE_VERSION, CANDIDATE_EXECUTION_VERSION),
+    )
+
+
+def _load_legacy_training_frame(conn):
     columns = ", ".join(f"fs.{name}" for name in MODEL_FEATURES)
     return pd.read_sql_query(
         f"""
@@ -214,6 +258,46 @@ def _load_training_frame(conn):
     )
 
 
+def _load_training_frame(
+    conn,
+    min_candidate_samples=MIN_TRAINING_SAMPLES,
+    min_candidate_positives=MIN_POSITIVE_SAMPLES,
+):
+    candidate_frame = _load_candidate_training_frame(conn)
+    positives = int(candidate_frame["success_t3"].sum()) if not candidate_frame.empty else 0
+    negatives = len(candidate_frame) - positives
+    if (
+        len(candidate_frame) >= min_candidate_samples
+        and positives >= min_candidate_positives
+        and negatives >= min_candidate_positives
+    ):
+        candidate_frame.attrs["outcome_source"] = CANDIDATE_EXECUTION_VERSION
+        return candidate_frame
+    legacy = _load_legacy_training_frame(conn)
+    legacy.attrs["outcome_source"] = "legacy_signal_backtest"
+    return legacy
+
+
+def _purged_date_split(
+    frame,
+    validation_fraction=VALIDATION_FRACTION,
+    embargo_trade_dates=EMBARGO_TRADE_DATES,
+):
+    dates = sorted(str(value) for value in frame["trade_date"].dropna().unique())
+    if len(dates) < 3:
+        return frame.iloc[0:0].copy(), frame.iloc[0:0].copy(), []
+
+    validation_date_count = max(1, int(math.ceil(len(dates) * validation_fraction)))
+    validation_start = len(dates) - validation_date_count
+    train_end = max(0, validation_start - int(embargo_trade_dates))
+    training_dates = set(dates[:train_end])
+    embargo_dates = dates[train_end:validation_start]
+    validation_dates = set(dates[validation_start:])
+    train = frame[frame["trade_date"].astype(str).isin(training_dates)].copy()
+    validation = frame[frame["trade_date"].astype(str).isin(validation_dates)].copy()
+    return train, validation, embargo_dates
+
+
 def train_shadow_model(
     db_path=DB_PATH,
     artifact_dir="data/models",
@@ -232,7 +316,12 @@ def train_shadow_model(
 
     with get_connection(db_path) as conn:
         init_db(conn)
-        frame = _load_training_frame(conn)
+        frame = _load_training_frame(
+            conn,
+            min_candidate_samples=min_samples,
+            min_candidate_positives=min_positives,
+        )
+    outcome_source = frame.attrs.get("outcome_source", "unknown")
 
     positives = int(frame["success_t3"].sum()) if not frame.empty else 0
     if len(frame) < min_samples or positives < min_positives or len(frame) - positives < min_positives:
@@ -245,10 +334,15 @@ def train_shadow_model(
         }
 
     minimum_training_size = max(10, min_samples // 2)
-    validation_size = max(5, int(math.ceil(len(frame) * 0.2)))
-    validation_size = min(validation_size, len(frame) - minimum_training_size)
-    train = frame.iloc[:-validation_size].copy()
-    validation = frame.iloc[-validation_size:].copy()
+    train, validation, embargo_dates = _purged_date_split(frame)
+    if len(train) < minimum_training_size or validation.empty:
+        return {
+            "status": "insufficient_time_split",
+            "samples": len(frame),
+            "positives": positives,
+            "message": "日期分組與隔離區套用後，訓練或驗證樣本不足",
+            "model": None,
+        }
     if train["success_t3"].nunique() < 2:
         return {
             "status": "insufficient_training_classes",
@@ -302,6 +396,9 @@ def train_shadow_model(
         "positive_samples": positives,
         "training_samples": int(len(train)),
         "validation_samples": int(len(validation)),
+        "unique_trade_dates": int(frame["trade_date"].nunique()),
+        "embargo_trade_dates": list(embargo_dates),
+        "outcome_source": outcome_source,
         "validation_auc": auc,
         "validation_brier": float(brier_score_loss(validation["success_t3"], probabilities)),
         "validation_excess_mae": float(mean_absolute_error(validation["excess_return_3d"], excess_predictions)),
@@ -350,7 +447,9 @@ def train_shadow_model(
                         "features": MODEL_FEATURES,
                         "classifier": "balanced_logistic_regression",
                         "regression": "ridge",
-                        "time_split": True,
+                        "time_split": "purged_trade_date_groups",
+                        "embargo_trade_dates": EMBARGO_TRADE_DATES,
+                        "outcome_source": outcome_source,
                         "git_commit": get_git_commit(),
                     },
                     sort_keys=True,
@@ -556,7 +655,51 @@ def update_prediction_outcomes(db_path=DB_PATH):
     now = get_taipei_now().isoformat(timespec="seconds")
     with get_connection(db_path) as conn:
         init_db(conn)
-        rows = conn.execute(
+        candidate_rows = conn.execute(
+            """
+            WITH canonical_candidate AS (
+                SELECT id, run_id, code
+                FROM (
+                    SELECT ce.id, ce.run_id, ce.code,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY ce.run_id, ce.code
+                               ORDER BY ce.id DESC
+                           ) AS candidate_order
+                    FROM candidate_events ce
+                )
+                WHERE candidate_order=1
+            )
+            SELECT
+                p.id AS prediction_id,
+                co.entry_at AS entry_date,
+                co.entry_price,
+                co.entry_method,
+                co.fixed_net_return_1d AS net_return_1d,
+                co.net_return_3d,
+                co.fixed_net_return_5d AS net_return_5d,
+                co.benchmark_return_3d,
+                co.excess_return_3d,
+                co.max_return_3d,
+                co.max_drawdown_3d,
+                CASE WHEN co.defense_triggered=1 THEN co.exit_at END AS stop_loss_date,
+                co.defense_triggered AS stop_loss_hit,
+                co.success_t3,
+                co.matured_horizon,
+                co.outcome_status,
+                co.evaluated_at AS tested_at
+            FROM predictions p
+            JOIN canonical_candidate ce
+              ON ce.run_id=p.run_id AND ce.code=p.code
+            JOIN candidate_outcomes co
+              ON co.candidate_id=ce.id AND co.execution_version=?
+            WHERE p.is_prospective=1
+            """,
+            (CANDIDATE_EXECUTION_VERSION,),
+        ).fetchall()
+        candidate_prediction_ids = {
+            int(row["prediction_id"]) for row in candidate_rows
+        }
+        legacy_rows = conn.execute(
             """
             SELECT p.id AS prediction_id, br.*
             FROM predictions p
@@ -564,6 +707,11 @@ def update_prediction_outcomes(db_path=DB_PATH):
             WHERE p.is_prospective=1
             """
         ).fetchall()
+        rows = list(candidate_rows) + [
+            row
+            for row in legacy_rows
+            if int(row["prediction_id"]) not in candidate_prediction_ids
+        ]
         conn.execute(
             """
             DELETE FROM prediction_outcomes

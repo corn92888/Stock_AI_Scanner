@@ -7,16 +7,39 @@ from unittest.mock import patch
 
 from ai_pipeline import (
     FEATURE_VERSION,
+    _purged_date_split,
     build_feature_snapshots,
     candidate_to_feature,
     save_shadow_predictions,
     train_shadow_model,
     update_prediction_outcomes,
 )
-from database import get_connection, init_db, save_backtest_result, save_candidate_events
+from database import (
+    CANDIDATE_EXECUTION_VERSION,
+    get_connection,
+    init_db,
+    save_backtest_result,
+    save_candidate_events,
+    save_candidate_outcome,
+)
 
 
 class AiPipelineTests(unittest.TestCase):
+    def test_time_split_groups_dates_and_embargoes_the_boundary(self):
+        import pandas as pd
+
+        frame = pd.DataFrame(
+            {
+                "trade_date": [f"2026-01-{day:02d}" for day in range(1, 21)],
+                "success_t3": [day % 2 for day in range(20)],
+            }
+        )
+        train, validation, embargo = _purged_date_split(frame)
+        self.assertTrue(set(train["trade_date"]).isdisjoint(validation["trade_date"]))
+        self.assertEqual(len(embargo), 3)
+        self.assertLess(train["trade_date"].max(), min(embargo))
+        self.assertLess(max(embargo), validation["trade_date"].min())
+
     def test_candidate_snapshot_becomes_point_in_time_features(self):
         feature = candidate_to_feature(
             {
@@ -177,6 +200,116 @@ class AiPipelineTests(unittest.TestCase):
                     "SELECT matured_horizon, success_t3 FROM prediction_outcomes"
                 ).fetchone()
                 self.assertEqual(outcome["matured_horizon"], 3)
+
+    def test_prediction_outcome_prefers_versioned_candidate_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "scanner.db"
+            with get_connection(db_path) as conn:
+                init_db(conn)
+                conn.execute(
+                    """
+                    INSERT INTO scan_runs (
+                        id, run_at, trade_date, mode, source, strategy_version
+                    ) VALUES (1, '2026-07-01T10:00:00+08:00', '2026-07-01',
+                              'intraday', 'test', 'v1')
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO stock_signals (
+                        id, run_id, trade_date, mode, strategy, code,
+                        name, signal_price, created_at
+                    ) VALUES (1, 1, '2026-07-01', 'intraday', 'trend', '2330',
+                              '台積電', 1000, '2026-07-01T10:00:00+08:00')
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO predictions (
+                        run_id, signal_id, code, predicted_at, model_version,
+                        is_prospective, is_selected, created_at
+                    ) VALUES (1, 1, '2330', '2026-07-01T10:05:00+08:00',
+                              'test-model', 1, 1, '2026-07-01T10:05:00+08:00')
+                    """
+                )
+                conn.commit()
+
+            save_candidate_events(
+                1,
+                [
+                    {
+                        "signal_id": 1,
+                        "code": "2330",
+                        "name": "台積電",
+                        "as_of": "2026-07-01T10:00:00+08:00",
+                        "strategies_json": '["trend"]',
+                        "strategy_count": 1,
+                        "tradable": True,
+                        "is_first_eligible_event": True,
+                        "is_selected": True,
+                        "selection_status": "selected",
+                        "policy_version": "test-v1",
+                    }
+                ],
+                db_path=db_path,
+            )
+            with get_connection(db_path) as conn:
+                candidate_id = conn.execute(
+                    "SELECT id FROM candidate_events"
+                ).fetchone()["id"]
+            save_candidate_outcome(
+                candidate_id,
+                CANDIDATE_EXECUTION_VERSION,
+                {
+                    "entry_at": "2026-07-02",
+                    "entry_price": 1010,
+                    "entry_method": "next_day_open",
+                    "exit_at": "2026-07-03",
+                    "exit_price": 990,
+                    "exit_reason": "defense_close",
+                    "fixed_net_return_1d": -0.5,
+                    "fixed_net_return_3d": 2.0,
+                    "fixed_net_return_5d": 3.0,
+                    "net_return_3d": -2.2,
+                    "benchmark_return_3d": -0.4,
+                    "excess_return_3d": -1.8,
+                    "max_return_3d": 0.8,
+                    "max_drawdown_3d": -2.5,
+                    "defense_triggered": True,
+                    "success_t3": False,
+                    "matured_horizon": 5,
+                    "outcome_status": "complete",
+                },
+                db_path=db_path,
+            )
+            save_backtest_result(
+                1,
+                {
+                    "entry_date": "2026-07-02",
+                    "entry_price": 1010,
+                    "entry_method": "legacy_next_open",
+                    "net_return_3d": 9.9,
+                    "matured_horizon": 3,
+                    "outcome_status": "partial",
+                },
+                db_path=db_path,
+            )
+
+            self.assertEqual(update_prediction_outcomes(db_path=db_path), 1)
+            with get_connection(db_path) as conn:
+                outcome = conn.execute(
+                    """
+                    SELECT entry_method, net_return_3d, first_barrier, stop_hit_at,
+                           matured_horizon, outcome_status
+                    FROM prediction_outcomes
+                    """
+                ).fetchone()
+            self.assertEqual(outcome["entry_method"], "next_day_open")
+            self.assertEqual(outcome["net_return_3d"], -2.2)
+            self.assertEqual(outcome["first_barrier"], "stop")
+            self.assertEqual(outcome["stop_hit_at"], "2026-07-03")
+            self.assertEqual(outcome["matured_horizon"], 5)
+            self.assertEqual(outcome["outcome_status"], "complete")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from database import CANDIDATE_EXECUTION_VERSION
+
 
 TAIPEI_TZ = dt.timezone(dt.timedelta(hours=8), name="Asia/Taipei")
 SCHEMA_VERSION = "dashboard_v2"
@@ -134,6 +136,82 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
                 ).fetchone()[0]
             ),
         }
+        has_candidate_outcomes = _table_exists(conn, "candidate_outcomes")
+        overview["candidateOutcomes"] = (
+            int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM candidate_outcomes WHERE execution_version=?",
+                    (CANDIDATE_EXECUTION_VERSION,),
+                ).fetchone()[0]
+            )
+            if has_candidate_outcomes
+            else 0
+        )
+        if has_candidate_outcomes:
+            quality = conn.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN co.matured_horizon >= 3 THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN co.matured_horizon >= 3 AND ce.is_selected=0 THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN co.matured_horizon >= 3 AND ce.is_selected=1 THEN 1 ELSE 0 END),
+                    COUNT(DISTINCT CASE WHEN co.matured_horizon >= 3 THEN sr.trade_date END),
+                    AVG(CASE WHEN co.matured_horizon >= 3 THEN co.net_return_3d END),
+                    AVG(CASE WHEN co.matured_horizon >= 3 THEN co.excess_return_3d END),
+                    AVG(CASE WHEN co.matured_horizon >= 3 THEN
+                        CASE WHEN co.net_return_3d > 0 THEN 1.0 ELSE 0.0 END END) * 100,
+                    AVG(CASE WHEN co.matured_horizon >= 3 THEN co.success_t3 END) * 100,
+                    AVG(CASE WHEN co.matured_horizon >= 3 AND ce.is_selected=1
+                        THEN co.net_return_3d END),
+                    AVG(CASE WHEN co.matured_horizon >= 3 AND ce.is_selected=1
+                        THEN co.excess_return_3d END),
+                    AVG(CASE WHEN co.matured_horizon >= 3 AND ce.is_selected=0
+                        THEN co.net_return_3d END),
+                    AVG(CASE WHEN co.matured_horizon >= 3 AND ce.is_selected=0
+                        THEN co.excess_return_3d END)
+                FROM candidate_outcomes co
+                JOIN candidate_events ce ON ce.id=co.candidate_id
+                JOIN scan_runs sr ON sr.id=ce.run_id
+                WHERE co.execution_version=?
+                """,
+                (CANDIDATE_EXECUTION_VERSION,),
+            ).fetchone()
+        else:
+            quality = (0, 0, 0, 0, None, None, None, None, None, None, None, None)
+        candidate_events = overview["candidateEvents"]
+        selection_net_lift = (
+            quality[8] - quality[10]
+            if quality[8] is not None and quality[10] is not None
+            else None
+        )
+        selection_excess_lift = (
+            quality[9] - quality[11]
+            if quality[9] is not None and quality[11] is not None
+            else None
+        )
+        research_quality = {
+            "executionVersion": CANDIDATE_EXECUTION_VERSION,
+            "outcomeCoveragePct": (
+                overview["candidateOutcomes"] / candidate_events * 100
+                if candidate_events
+                else 0.0
+            ),
+            "matureCandidateOutcomes": int(quality[0] or 0),
+            "matureRejectedOutcomes": int(quality[1] or 0),
+            "matureSelectedOutcomes": int(quality[2] or 0),
+            "uniqueTradeDates": int(quality[3] or 0),
+            "meanNetReturn3d": quality[4],
+            "meanExcessReturn3d": quality[5],
+            "positiveRate3d": quality[6],
+            "successRateT3": quality[7],
+            "formalMeanNetReturn3d": quality[8],
+            "formalMeanExcessReturn3d": quality[9],
+            "rejectedMeanNetReturn3d": quality[10],
+            "rejectedMeanExcessReturn3d": quality[11],
+            "selectionNetLift3d": selection_net_lift,
+            "selectionExcessLift3d": selection_excess_lift,
+        }
+        overview["candidateMatureT3"] = research_quality["matureCandidateOutcomes"]
+        overview["candidateRejectedMatureT3"] = research_quality["matureRejectedOutcomes"]
         overview["maturePredictionOutcomes"] = (
             int(
                 conn.execute(
@@ -407,6 +485,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "generatedAt": dt.datetime.now(TAIPEI_TZ).isoformat(timespec="seconds"),
             "candidateDetailDays": CANDIDATE_DETAIL_DAYS,
             "overview": overview,
+            "researchQuality": research_quality,
             "candidates": candidates,
             "dailyCandidates": daily_candidates,
             "statusCounts": status_counts,
