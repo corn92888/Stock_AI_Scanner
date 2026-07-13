@@ -2,9 +2,9 @@ name: Intraday Stock AI Scanner
 
 on:
   schedule:
-    # GitHub cron 可能延遲。提早並每 30 分鐘探測，程式只會在三個台北盤中窗口真正執行一次。
-    - cron: '0,30 23 * * 0-4'
-    - cron: '0,30 0-5 * * 1-5'
+    # 避開整點高峰並每 30 分鐘探測；程式只會在三個台北盤中窗口真正執行一次。
+    - cron: '17,47 23 * * 0-4'
+    - cron: '17,47 0-5 * * 1-5'
   workflow_dispatch:
     inputs:
       trigger_source:
