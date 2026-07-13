@@ -119,6 +119,31 @@ class IntradaySafetyTests(unittest.TestCase):
         self.assertEqual(result["status"], "skipped")
         self.assertEqual(result["scan_path"], "")
 
+    def test_report_pipeline_passes_scanner_market_context_to_monitor(self):
+        market_context = {"realtime": {"2330": {"Close": 100}}}
+        scanner_result = {
+            "status": "completed",
+            "reason": "",
+            "message": "completed",
+            "report_path": "Reports/盤中日報_2026-07-10_1000.xlsx",
+            "market_context": market_context,
+        }
+        with patch(
+            "intraday_scanner.run_intraday_scanner",
+            return_value=scanner_result,
+        ), patch("market_monitor.run_market_monitor", return_value=None) as monitor:
+            with self.assertRaisesRegex(RuntimeError, "全市場監控沒有產生"):
+                generate_intraday_analysis_report(
+                    run_scanner=True,
+                    run_market_monitor=True,
+                    send_telegram=False,
+                )
+
+        monitor.assert_called_once_with(
+            send_telegram=False,
+            market_context=market_context,
+        )
+
     def test_report_pair_rejects_different_dates_or_stale_skew(self):
         with self.assertRaisesRegex(RuntimeError, "日期"):
             validate_report_freshness(

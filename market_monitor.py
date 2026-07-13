@@ -194,19 +194,45 @@ def build_ticker_maps():
     return codes, tickers, yf_to_code
 
 
-def build_market_snapshot():
-    now = get_taipei_now()
-    today_ts = pd.Timestamp(now.date())
-    codes, tickers, yf_to_code = build_ticker_maps()
+def _scanner_realtime_context(market_context):
+    realtime = {}
+    for code, quote in market_context["realtime"].items():
+        price = safe_float(quote.get("Close"), 0.0)
+        if price <= 0:
+            continue
+        realtime[code] = {
+            "open": safe_float(quote.get("Open"), 0.0),
+            "high": safe_float(quote.get("High"), 0.0),
+            "low": safe_float(quote.get("Low"), 0.0),
+            "price": price,
+            "volume_lots": safe_float(quote.get("Volume"), 0.0),
+        }
+    return realtime
 
-    hist_data = batch_download_recent(list(yf_to_code.keys()), period="3mo", chunk_size=200)
-    realtime = fetch_realtime_prices(tickers, chunk_size=20)
-    yf_realtime = build_yfinance_realtime_fallback(hist_data, yf_to_code, now)
-    if yf_realtime:
-        missing_count = len([code for code in yf_realtime if code not in realtime])
-        realtime.update({code: data for code, data in yf_realtime.items() if code not in realtime})
-        if missing_count:
-            print(f"⚠️ 已用 yfinance 當日資料補足 {missing_count} 檔即時報價")
+
+def build_market_snapshot(market_context=None):
+    now = market_context.get("captured_at") if market_context else get_taipei_now()
+    now = now or get_taipei_now()
+    today_ts = pd.Timestamp(now.date())
+    if market_context:
+        codes = market_context["codes"]
+        yf_to_code = market_context["yf_to_code"]
+        hist_data = market_context["history"]
+        realtime = _scanner_realtime_context(market_context)
+        print(
+            f"♻️ 重用掃描器行情快照：歷史 {len(hist_data)} 檔、"
+            f"即時 {len(realtime)} 檔"
+        )
+    else:
+        codes, tickers, yf_to_code = build_ticker_maps()
+        hist_data = batch_download_recent(list(yf_to_code.keys()), period="3mo", chunk_size=200)
+        realtime = fetch_realtime_prices(tickers, chunk_size=20)
+        yf_realtime = build_yfinance_realtime_fallback(hist_data, yf_to_code, now)
+        if yf_realtime:
+            missing_count = len([code for code in yf_realtime if code not in realtime])
+            realtime.update({code: data for code, data in yf_realtime.items() if code not in realtime})
+            if missing_count:
+                print(f"⚠️ 已用 yfinance 當日資料補足 {missing_count} 檔即時報價")
 
     rows = []
     for yf_ticker, code in yf_to_code.items():
@@ -339,9 +365,9 @@ def send_telegram_summary(summary_lines):
     requests.post(url, data=payload, timeout=20)
 
 
-def run_market_monitor(send_telegram=False):
+def run_market_monitor(send_telegram=False, market_context=None):
     start = time.time()
-    df, industry, summary, now = build_market_snapshot()
+    df, industry, summary, now = build_market_snapshot(market_context=market_context)
     if df.empty:
         print("❌ 無法取得有效市場即時資料。")
         return None

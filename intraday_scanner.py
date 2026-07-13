@@ -26,6 +26,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TAIPEI_TZ = datetime.timezone(datetime.timedelta(hours=8), name="Asia/Taipei")
 TWSTOCK_TIMEOUT_SECONDS = 8
 MIN_REALTIME_COVERAGE = 0.65
+DEFAULT_REALTIME_WORKERS = 6
 
 def send_telegram_message(msg_lines):
     try:
@@ -51,9 +52,9 @@ def add_url_column(df, col_name='代號'):
     df_link['K線圖'] = df_link[col_name].apply(lambda x: f'https://tw.stock.yahoo.com/quote/{x}')
     return df_link
 
-def batch_download(ticker_list, period="2y", chunk_size=200):
+def batch_download(ticker_list, period="1y", chunk_size=200):
     all_data = {}
-    for i in tqdm(range(0, len(ticker_list), chunk_size), desc="📥 下載歷史基準(2y)"):
+    for i in tqdm(range(0, len(ticker_list), chunk_size), desc=f"📥 下載歷史基準({period})"):
         chunk = ticker_list[i:i+chunk_size]
         try:
             raw = yf.download(chunk, period=period, progress=False, auto_adjust=False, threads=True)
@@ -200,42 +201,65 @@ def twstock_realtime_get_with_timeout(chunk, timeout=TWSTOCK_TIMEOUT_SECONDS):
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
-def fetch_realtime_prices(ticker_list, chunk_size=20):
+def _parse_realtime_batch(data, chunk):
     result = {}
-    for i in tqdm(range(0, len(ticker_list), chunk_size), desc="📡 盤中即時報價"):
-        chunk = ticker_list[i:i+chunk_size]
-        try:
-            data = twstock_realtime_get_with_timeout(chunk)
-            if not data: continue
-            
-            if len(chunk) == 1:
-                if data.get('success') and 'realtime' in data:
-                    rt = data['realtime']
-                    price = _parse_realtime_price(rt)
-                    if price > 0:
-                        result[chunk[0]] = {
-                            'Open': _safe_float(rt.get('open')),
-                            'High': _safe_float(rt.get('high')),
-                            'Low': _safe_float(rt.get('low')),
-                            'Close': price,
-                            'Volume': _safe_float(rt.get('accumulate_trade_volume'))
-                        }
-            else:
-                for code, info in data.items():
-                    if code == 'success': continue
-                    if isinstance(info, dict) and info.get('success') and 'realtime' in info:
-                        rt = info['realtime']
-                        price = _parse_realtime_price(rt)
-                        if price > 0:
-                            result[code] = {
-                                'Open': _safe_float(rt.get('open')),
-                                'High': _safe_float(rt.get('high')),
-                                'Low': _safe_float(rt.get('low')),
-                                'Close': price,
-                                'Volume': _safe_float(rt.get('accumulate_trade_volume'))
-                            }
-            time.sleep(0.3)
-        except: pass
+    if not data:
+        return result
+    if len(chunk) == 1:
+        if data.get('success') and 'realtime' in data:
+            rt = data['realtime']
+            price = _parse_realtime_price(rt)
+            if price > 0:
+                result[chunk[0]] = {
+                    'Open': _safe_float(rt.get('open')),
+                    'High': _safe_float(rt.get('high')),
+                    'Low': _safe_float(rt.get('low')),
+                    'Close': price,
+                    'Volume': _safe_float(rt.get('accumulate_trade_volume'))
+                }
+    else:
+        for code, info in data.items():
+            if code == 'success':
+                continue
+            if isinstance(info, dict) and info.get('success') and 'realtime' in info:
+                rt = info['realtime']
+                price = _parse_realtime_price(rt)
+                if price > 0:
+                    result[code] = {
+                        'Open': _safe_float(rt.get('open')),
+                        'High': _safe_float(rt.get('high')),
+                        'Low': _safe_float(rt.get('low')),
+                        'Close': price,
+                        'Volume': _safe_float(rt.get('accumulate_trade_volume'))
+                    }
+    return result
+
+
+def fetch_realtime_prices(ticker_list, chunk_size=20, max_workers=None):
+    chunks = [ticker_list[i:i + chunk_size] for i in range(0, len(ticker_list), chunk_size)]
+    if not chunks:
+        return {}
+
+    configured_workers = max_workers or int(
+        os.getenv("INTRADAY_REALTIME_WORKERS", DEFAULT_REALTIME_WORKERS)
+    )
+    worker_count = max(1, min(configured_workers, len(chunks), 12))
+    result = {}
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(twstock_realtime_get_with_timeout, chunk): chunk
+            for chunk in chunks
+        }
+        for future in tqdm(
+            as_completed(futures),
+            total=len(futures),
+            desc=f"📡 盤中即時報價({worker_count}併發)",
+        ):
+            chunk = futures[future]
+            try:
+                result.update(_parse_realtime_batch(future.result(), chunk))
+            except Exception:
+                continue
     return result
 
 def run_intraday_scanner(send_telegram=True, now=None):
@@ -260,13 +284,17 @@ def run_intraday_scanner(send_telegram=True, now=None):
     all_yf_tickers = list(yf_to_code.keys())
     
     # 1. 批次下載歷史 K 線 (扣除今日)
-    all_stock_data = batch_download(all_yf_tickers, period="2y", chunk_size=200)
+    history_started = time.perf_counter()
+    all_stock_data = batch_download(all_yf_tickers, period="1y", chunk_size=200)
+    history_seconds = time.perf_counter() - history_started
     print(f"📊 歷史基準下載: {len(all_stock_data)} 檔")
+    print(f"⏱️  歷史資料階段: {history_seconds:.1f} 秒")
     
     # 2. 抓取即時報價並推算預估量
     is_realtime_mode = False
     if is_market_open(started_at):
         print("\n📡 台股盤中！正在抓取即時報價並結合歷史資料...")
+        realtime_started = time.perf_counter()
         rt_prices = fetch_realtime_prices(tickers, chunk_size=20)
         missing_yf_tickers = [
             yf_ticker
@@ -282,6 +310,9 @@ def run_intraday_scanner(send_telegram=True, now=None):
             rt_prices.update(yf_prices)
             if yf_prices:
                 print(f"✅ yfinance 當日資料補足 {len(yf_prices)} 檔")
+        realtime_seconds = time.perf_counter() - realtime_started
+        quote_captured_at = datetime.datetime.now(TAIPEI_TZ)
+        print(f"⏱️  即時報價階段: {realtime_seconds:.1f} 秒")
         
         if rt_prices:
             today_ts = pd.Timestamp(datetime.datetime.now(TAIPEI_TZ).date())
@@ -371,6 +402,7 @@ def run_intraday_scanner(send_telegram=True, now=None):
         except:
             return None
     
+    analysis_started = time.perf_counter()
     cpu_workers = min(os.cpu_count() or 4, 8)
     with ThreadPoolExecutor(max_workers=cpu_workers) as executor:
         futures = {executor.submit(process_stock, yt, df): yt for yt, df in all_stock_data.items()}
@@ -380,6 +412,8 @@ def run_intraday_scanner(send_telegram=True, now=None):
                 if res[0]: list_trend.append(res[0])
                 if res[1]: list_reversal.append(res[1])
                 if res[2]: list_wave.append(res[2])
+    analysis_seconds = time.perf_counter() - analysis_started
+    print(f"⏱️  指標與策略階段: {analysis_seconds:.1f} 秒")
             
     if not os.path.exists('Reports'): os.makedirs('Reports')
     now = datetime.datetime.now(TAIPEI_TZ)
@@ -447,6 +481,9 @@ def run_intraday_scanner(send_telegram=True, now=None):
             "github_run_id": os.getenv("GITHUB_RUN_ID", ""),
             "github_run_attempt": os.getenv("GITHUB_RUN_ATTEMPT", ""),
             "realtime_coverage": round(coverage, 4),
+            "history_seconds": round(history_seconds, 2),
+            "realtime_seconds": round(realtime_seconds, 2),
+            "analysis_seconds": round(analysis_seconds, 2),
         }.items()
         if value not in (None, "")
     }
@@ -474,6 +511,19 @@ def run_intraday_scanner(send_telegram=True, now=None):
         "run_id": db_result["run_id"],
         "signal_count": db_result["signals"],
         "realtime_coverage": coverage,
+        "stage_seconds": {
+            "history": round(history_seconds, 2),
+            "realtime": round(realtime_seconds, 2),
+            "analysis": round(analysis_seconds, 2),
+            "total": round(elapsed, 2),
+        },
+        "market_context": {
+            "codes": codes,
+            "yf_to_code": yf_to_code,
+            "history": all_stock_data,
+            "realtime": rt_prices,
+            "captured_at": quote_captured_at,
+        },
     }
 
 if __name__ == "__main__":

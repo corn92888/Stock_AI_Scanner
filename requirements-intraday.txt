@@ -1,0 +1,10 @@
+yfinance
+pandas
+numpy
+twstock
+tqdm
+requests
+python-dotenv
+openpyxl
+scikit-learn
+joblib

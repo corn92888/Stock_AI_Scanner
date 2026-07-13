@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   ArrowDown,
@@ -21,6 +21,7 @@ import {
   Filter,
   Gauge,
   Layers3,
+  LoaderCircle,
   Menu,
   RefreshCw,
   RotateCcw,
@@ -132,6 +133,163 @@ function statusTone(run: WorkflowRun) {
   if (run.conclusion === "success") return "success";
   if (run.conclusion === "skipped" || run.conclusion === "cancelled") return "neutral";
   return "danger";
+}
+
+type DirectScanRun = {
+  id: number;
+  status: string;
+  conclusion: string | null;
+  createdAt: string;
+  updatedAt: string;
+  url: string;
+};
+
+type DirectScanState = {
+  tone: "neutral" | "running" | "success" | "danger";
+  message: string;
+  tracking: boolean;
+  run: DirectScanRun | null;
+  requestedAt: string | null;
+};
+
+function DirectIntradayControl() {
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [state, setState] = useState<DirectScanState>({
+    tone: "neutral",
+    message: "正在檢查站內執行權限",
+    tracking: false,
+    run: null,
+    requestedAt: null,
+  });
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    const initialize = async () => {
+      try {
+        const response = await fetch("/api/scans/intraday", { cache: "no-store" });
+        const payload = await response.json() as {
+          configured?: boolean;
+          active?: DirectScanRun | null;
+        };
+        const ready = Boolean(payload.configured);
+        setConfigured(ready);
+        if (payload.active) {
+          setState({
+            tone: "running",
+            message: payload.active.status === "queued" ? "已排入執行佇列" : "盤中掃描執行中",
+            tracking: true,
+            run: payload.active,
+            requestedAt: payload.active.createdAt,
+          });
+        } else {
+          setState((current) => ({
+            ...current,
+            tone: ready ? "neutral" : "danger",
+            message: ready ? "待命" : "站內執行授權待設定",
+          }));
+        }
+      } catch {
+        setConfigured(false);
+        setState((current) => ({ ...current, tone: "danger", message: "站內掃描 API 無法連線" }));
+      }
+    };
+    void initialize();
+  }, []);
+
+  useEffect(() => {
+    if (!state.tracking) return;
+    const poll = async () => {
+      try {
+        const response = await fetch("/api/scans/intraday", { cache: "no-store" });
+        const payload = await response.json() as {
+          active?: DirectScanRun | null;
+          latest?: DirectScanRun | null;
+        };
+        const run = payload.active ?? payload.latest ?? null;
+        if (!run) return;
+        const requestedAt = state.requestedAt ? new Date(state.requestedAt).valueOf() : 0;
+        const runCreatedAt = new Date(run.createdAt).valueOf();
+        if (requestedAt && runCreatedAt < requestedAt - 5_000) {
+          setState((current) => ({ ...current, message: "等待 GitHub 建立執行批次" }));
+          return;
+        }
+        if (run.status === "queued") {
+          setState((current) => ({ ...current, tone: "running", message: "已排入執行佇列", tracking: true, run }));
+        } else if (run.status === "in_progress") {
+          setState((current) => ({ ...current, tone: "running", message: "盤中掃描執行中", tracking: true, run }));
+        } else if (run.conclusion === "success") {
+          setState((current) => ({ ...current, tone: "success", message: "盤中掃描完成", tracking: false, run }));
+        } else if (run.conclusion) {
+          setState((current) => ({ ...current, tone: "danger", message: `掃描${run.conclusion}`, tracking: false, run }));
+        }
+      } catch {
+        setState((current) => ({ ...current, message: "狀態更新暫時中斷" }));
+      }
+    };
+    void poll();
+    const timer = window.setInterval(poll, 10_000);
+    return () => window.clearInterval(timer);
+  }, [state.requestedAt, state.tracking]);
+
+  const trigger = async () => {
+    let secret = window.sessionStorage.getItem("scan-trigger-secret") ?? "";
+    if (!secret) {
+      secret = window.prompt("請輸入掃描控制碼")?.trim() ?? "";
+      if (!secret) return;
+      window.sessionStorage.setItem("scan-trigger-secret", secret);
+    }
+
+    setSubmitting(true);
+    setState({ tone: "running", message: "正在送出掃描要求", tracking: false, run: null, requestedAt: null });
+    try {
+      const response = await fetch("/api/scans/intraday", {
+        method: "POST",
+        headers: { "x-scan-trigger-secret": secret },
+      });
+      const payload = await response.json() as {
+        error?: string;
+        run?: DirectScanRun | null;
+        requestedAt?: string;
+      };
+      if (response.status === 401) {
+        window.sessionStorage.removeItem("scan-trigger-secret");
+      }
+      if (!response.ok && response.status !== 409) {
+        setState({ tone: "danger", message: payload.error ?? "無法啟動掃描", tracking: false, run: null, requestedAt: null });
+        return;
+      }
+      setState({
+        tone: "running",
+        message: response.status === 409 ? "已有盤中掃描正在執行" : "掃描要求已送出",
+        tracking: true,
+        run: payload.run ?? null,
+        requestedAt: payload.requestedAt ?? payload.run?.createdAt ?? new Date().toISOString(),
+      });
+    } catch {
+      setState({ tone: "danger", message: "站內掃描 API 無法連線", tracking: false, run: null, requestedAt: null });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const busy = submitting || state.tracking;
+  const disabled = busy || configured !== true;
+  return (
+    <>
+      <button className="action-link primary-action scan-trigger" type="button" onClick={trigger} disabled={disabled} aria-busy={busy}>
+        <span>
+          {busy ? <LoaderCircle className="spin-icon" size={19} /> : <RefreshCw size={19} />}
+          <span><strong>{busy ? "盤中掃描處理中" : configured === false ? "站內掃描待授權" : "執行盤中掃描"}</strong><small>即時行情、候選政策、AI 影子預測與 Telegram</small></span>
+        </span>
+        <Zap size={18} />
+      </button>
+      <div className={`scan-trigger-status ${state.tone}`}>
+        <span />
+        <strong>{state.message}</strong>
+        {state.run && <time>{formatDateTime(state.run.updatedAt || state.run.createdAt)}</time>}
+      </div>
+    </>
+  );
 }
 
 function candidateRisk(row: Candidate) {
@@ -524,7 +682,6 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
 }
 
 function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: DashboardSnapshot; workflowRuns: WorkflowRun[]; snapshotFresh: boolean }) {
-  const intradayUrl = "https://github.com/corn92888/Stock_AI_Scanner/actions/workflows/intraday_scan.yml";
   const dailyUrl = "https://github.com/corn92888/Stock_AI_Scanner/actions/workflows/daily_scan.yml";
   const latestSuccess = workflowRuns.find((run) => run.conclusion === "success");
   const latestFailed = workflowRuns.find((run) => run.conclusion === "failure");
@@ -549,10 +706,10 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
 
       <section className="operations-grid">
         <div className="panel action-panel">
-          <PanelHeader eyebrow="Manual control" title="受控執行入口" description="操作權限由 GitHub 登入保護，瀏覽器不保存管理員憑證" />
-          <a className="action-link primary-action" href={intradayUrl} target="_blank" rel="noreferrer"><span><RefreshCw size={19} /><span><strong>執行盤中掃描</strong><small>即時行情、候選政策、AI 影子預測與 Telegram</small></span></span><ArrowUpRight size={18} /></a>
+          <PanelHeader eyebrow="Manual control" title="受控執行入口" description="站內控制碼授權；GitHub 憑證只保留在伺服器端" />
+          <DirectIntradayControl />
           <a className="action-link" href={dailyUrl} target="_blank" rel="noreferrer"><span><Clock3 size={19} /><span><strong>執行盤後結算</strong><small>盤後訊號、T+3/T+20 回測與模型結果更新</small></span></span><ArrowUpRight size={18} /></a>
-          <div className="permission-note"><ShieldCheck size={17} /><p>手動執行仍會套用交易時段、防重複與資料覆蓋率檢查。</p></div>
+          <div className="permission-note"><ShieldCheck size={17} /><p>站內觸發由伺服器端授權，仍會套用交易時段、防重複與資料覆蓋率檢查。</p></div>
         </div>
         <div className="panel health-panel">
           <PanelHeader eyebrow="System checks" title="服務健康檢查" description="部署、資料、特徵與回測四個必要面向" />

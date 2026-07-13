@@ -617,6 +617,7 @@ def generate_intraday_analysis_report(
     save_report=True,
     db_path=DB_PATH,
 ):
+    market_context = None
     if send_raw_scanner_telegram is None:
         send_raw_scanner_telegram = bool(run_scanner and send_telegram)
 
@@ -632,11 +633,15 @@ def generate_intraday_analysis_report(
                 scanner_result.get("message", "盤中掃描未產生新報表。"),
             )
         scan_path = scanner_result["report_path"]
+        market_context = scanner_result.get("market_context")
 
     if run_market_monitor:
         import market_monitor
 
-        generated_market_path = market_monitor.run_market_monitor(send_telegram=False)
+        generated_market_path = market_monitor.run_market_monitor(
+            send_telegram=False,
+            market_context=market_context,
+        )
         if not generated_market_path:
             raise RuntimeError("全市場監控沒有產生新報表，停止產生盤中分析，避免混用舊市場快照。")
         market_path = generated_market_path

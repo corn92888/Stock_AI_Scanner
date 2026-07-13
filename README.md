@@ -200,7 +200,13 @@
   npm install
   npm run dev
   ```
-  本機預設網址為 `http://localhost:3000`。線上正式版為 [https://stock-ai-control.vercel.app](https://stock-ai-control.vercel.app)，包含決策總覽、回測績效、資料管線與操作中心；操作中心目前以 GitHub Actions 登入權限保護手動執行，不會將管理員 Token 放在瀏覽器。
+  本機預設網址為 `http://localhost:3000`。線上正式版為 [https://stock-ai-control.vercel.app](https://stock-ai-control.vercel.app)，包含決策總覽、回測績效、資料管線與操作中心。操作中心的盤中按鈕會透過站內 API 直接觸發 GitHub Actions，並在原頁追蹤執行狀態；不會把 GitHub Token 傳到瀏覽器。
+
+  若要啟用站內盤中按鈕，請在 Vercel 專案的 Production Environment Variables 設定：
+  - `GITHUB_ACTIONS_TOKEN`：只授權此 repository，且具備 GitHub Actions 讀寫權限的 fine-grained token。
+  - `SCAN_TRIGGER_SECRET`：自訂的掃描控制碼。瀏覽器第一次執行時輸入，僅保留在該分頁的 session storage。
+
+  本機開發可參考 `web/.env.example`。未設定這兩個伺服器端變數時，儀表板仍可讀取資料與工作流狀態，但會拒絕站內觸發掃描。
 
 * **開啟戰情室 (Dashboard)：**
   ```bash

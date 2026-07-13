@@ -21,6 +21,11 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertLess(pull_index, export_index)
         self.assertLess(export_index, commit_index)
 
+    def test_intraday_workflow_installs_only_runtime_dependencies(self):
+        workflow = (ROOT / ".github" / "workflows" / "intraday_scan.yml").read_text()
+        self.assertIn("pip install --prefer-binary -r requirements-intraday.txt", workflow)
+        self.assertNotIn("pip install -r requirements.txt", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

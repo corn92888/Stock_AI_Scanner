@@ -226,12 +226,26 @@ a { color: inherit; text-decoration: none; }
 .action-link { min-height: 68px; display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 14px 16px 0; padding: 13px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; transition: border-color .15s, background .15s; }
 .action-link:hover { background: var(--surface-3); border-color: #546473; }
 .action-link.primary-action { border-color: rgba(59,201,157,.38); background: rgba(59,201,157,.06); }
+button.action-link { width: calc(100% - 32px); color: inherit; text-align: left; cursor: pointer; }
+button.action-link:disabled { cursor: not-allowed; opacity: .72; }
+button.action-link[aria-busy="true"]:disabled { cursor: wait; }
 .action-link > span { display: flex; align-items: center; gap: 11px; min-width: 0; }
 .action-link > span > svg { flex: 0 0 auto; color: var(--blue); }
 .action-link.primary-action > span > svg { color: var(--green); }
 .action-link > span > span { min-width: 0; display: flex; flex-direction: column; }
 .action-link strong { font-size: 11px; }
 .action-link small { margin-top: 3px; color: var(--faint); font-size: 9px; overflow-wrap: anywhere; }
+.spin-icon { animation: spin 1s linear infinite; }
+.scan-trigger-status { min-height: 25px; display: flex; align-items: center; gap: 7px; margin: 7px 16px 0; color: var(--faint); font-size: 9px; }
+.scan-trigger-status > span { width: 6px; height: 6px; flex: 0 0 auto; background: var(--faint); border-radius: 50%; }
+.scan-trigger-status strong { color: var(--muted); font-weight: 500; }
+.scan-trigger-status time { margin-left: auto; }
+.scan-trigger-status.running > span { background: var(--blue); box-shadow: 0 0 0 3px rgba(95,179,217,.12); }
+.scan-trigger-status.running strong { color: var(--blue); }
+.scan-trigger-status.success > span { background: var(--green); }
+.scan-trigger-status.success strong { color: var(--green); }
+.scan-trigger-status.danger > span { background: var(--red); }
+.scan-trigger-status.danger strong { color: var(--red); }
 .permission-note { display: flex; gap: 9px; margin: 14px 16px 0; color: var(--green); }
 .permission-note svg { flex: 0 0 auto; margin-top: 2px; }
 .permission-note p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.55; }
@@ -484,6 +498,8 @@ a { color: inherit; text-decoration: none; }
   .workflow-row > svg { display: none; }
   .workflow-status { min-width: 34px; }
   .action-link { margin-left: 12px; margin-right: 12px; }
+  button.action-link { width: calc(100% - 24px); }
+  .scan-trigger-status { margin-left: 12px; margin-right: 12px; }
   .permission-note { margin-left: 12px; margin-right: 12px; }
   .model-hero-band { align-items: flex-start; flex-direction: column; }
   .governance-state { min-width: 0; }
