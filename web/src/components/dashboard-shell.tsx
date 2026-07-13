@@ -55,7 +55,7 @@ import type { Candidate, DashboardSnapshot, Performance, WorkflowRun } from "@/l
 
 type ViewId = "decision" | "performance" | "pipeline" | "operations";
 type Scope = "selected" | "all" | "rejected";
-type CandidateSort = "rank" | "score" | "turnover" | "volume" | "ai";
+type CandidateSort = "rank" | "score" | "turnover" | "volume" | "ai" | "excess";
 type SortDirection = "asc" | "desc";
 
 const navItems: Array<{ id: ViewId; label: string; hint: string; icon: typeof Gauge }> = [
@@ -297,7 +297,7 @@ function candidateRisk(row: Candidate) {
 }
 
 function downloadCandidates(rows: Candidate[], date: string) {
-  const header = ["日期", "排名", "代號", "名稱", "產業", "策略", "分數", "訊號價", "漲跌幅", "量比5", "成交值億", "AI_T3機率", "AI預期超額", "AI預期回撤", "狀態", "風險"];
+  const header = ["日期", "排名", "代號", "名稱", "產業", "策略", "分數", "訊號價", "禁止追價線", "漲跌幅", "量比5", "成交值億", "AI_T3機率", "AI預期超額", "AI預期回撤", "狀態", "風險"];
   const escape = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
   const lines = rows.map((row) => [
     row.tradeDate,
@@ -308,6 +308,7 @@ function downloadCandidates(rows: Candidate[], date: string) {
     row.strategies.map((item) => strategyLabels[item] ?? item).join(" / "),
     row.score,
     row.signalPrice,
+    row.chaseLimit ?? "",
     row.pctChange,
     row.volumeRatio5,
     row.turnoverBillion,
@@ -395,7 +396,7 @@ function CandidateDrawer({ candidate, onClose }: { candidate: Candidate; onClose
           <dl className="detail-list">
             <div><dt>訊號價格</dt><dd>{decimal.format(candidate.signalPrice)}</dd></div>
             <div><dt>隔日觀察價</dt><dd>{candidate.observationPrice == null ? "--" : decimal.format(candidate.observationPrice)}</dd></div>
-            <div><dt>追價上限</dt><dd>{candidate.chaseLimit == null ? "--" : decimal.format(candidate.chaseLimit)}</dd></div>
+            <div><dt>禁止追價線</dt><dd>{candidate.chaseLimit == null ? "--" : decimal.format(candidate.chaseLimit)}</dd></div>
             <div><dt>防守距離</dt><dd>{pct(candidate.stopDistancePct)}</dd></div>
             <div><dt>五日量比</dt><dd>{decimal.format(candidate.volumeRatio5)}x</dd></div>
             <div><dt>成交值</dt><dd>{decimal.format(candidate.turnoverBillion)} 億</dd></div>
@@ -430,10 +431,11 @@ function CandidateTable({ rows, sort, direction, onSort, onSelect }: { rows: Can
           <th><SortHeader label="排名" field="rank" activeField={sort} direction={direction} onSort={onSort} /></th>
           <th>標的</th><th>策略</th>
           <th><SortHeader label="分數" field="score" activeField={sort} direction={direction} onSort={onSort} /></th>
-          <th>訊號價</th><th>漲跌</th>
+          <th>訊號價</th><th>禁止追價線</th><th>漲跌</th>
           <th><SortHeader label="量比" field="volume" activeField={sort} direction={direction} onSort={onSort} /></th>
           <th><SortHeader label="成交值" field="turnover" activeField={sort} direction={direction} onSort={onSort} /></th>
           <th><SortHeader label="AI T+3" field="ai" activeField={sort} direction={direction} onSort={onSort} /></th>
+          <th><SortHeader label="預期超額" field="excess" activeField={sort} direction={direction} onSort={onSort} /></th>
           <th>規則 / AI</th><th>風險</th>
         </tr></thead>
         <tbody>{rows.map((row, index) => {
@@ -445,10 +447,12 @@ function CandidateTable({ rows, sort, direction, onSort, onSelect }: { rows: Can
             <td><div className="tag-row">{row.strategies.map((item) => <span className={`tag ${strategyColors[item] ?? ""}`} key={item}>{strategyLabels[item] ?? item}</span>)}</div></td>
             <td><strong>{decimal.format(row.score)}</strong></td>
             <td>{decimal.format(row.signalPrice)}</td>
+            <td>{row.chaseLimit == null ? <span className="muted-inline">--</span> : <strong className="price-limit">{decimal.format(row.chaseLimit)}</strong>}</td>
             <td className={row.pctChange >= 0 ? "positive-text" : "negative-text"}>{pct(row.pctChange)}</td>
             <td>{decimal.format(row.volumeRatio5)}x</td>
             <td>{decimal.format(row.turnoverBillion)} 億</td>
             <td>{row.aiProbabilityT3 == null ? <span className="muted-inline">--</span> : <div className="ai-cell"><strong>{decimal.format(row.aiProbabilityT3 * 100)}%</strong><small>{row.aiProspective ? "前瞻" : "試跑"}</small></div>}</td>
+            <td className={(row.aiExpectedExcess3d ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.aiExpectedExcess3d)}</td>
             <td><div className="consensus-cell"><span className={`status-pill ${row.isSelected ? "selected" : row.tradable ? "eligible" : "blocked"}`}>{row.statusLabel}</span>{agreement && <span className="agreement-mark"><Zap size={11} />共識</span>}</div></td>
             <td className="risk-cell" title={risks.join("、") || undefined}>{risks.length ? <span className="risk-count"><TriangleAlert size={12} />{risks.slice(0, 2).join("、")}</span> : <span className="clean-mark"><CheckCircle2 size={12} />清潔</span>}</td>
           </tr>;
@@ -486,6 +490,7 @@ function DecisionView({ snapshot }: { snapshot: DashboardSnapshot }) {
       turnover: [a.turnoverBillion, b.turnoverBillion],
       volume: [a.volumeRatio5, b.volumeRatio5],
       ai: [a.aiProbabilityT3 ?? -1, b.aiProbabilityT3 ?? -1],
+      excess: [a.aiExpectedExcess3d ?? Number.NEGATIVE_INFINITY, b.aiExpectedExcess3d ?? Number.NEGATIVE_INFINITY],
     };
     const delta = values[sort][0] - values[sort][1];
     return direction === "asc" ? delta : -delta;

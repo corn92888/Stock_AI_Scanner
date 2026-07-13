@@ -313,7 +313,7 @@ button.action-link[aria-busy="true"]:disabled { cursor: wait; }
 /* Candidate decision desk */
 .decision-toolbar { flex-wrap: wrap; }
 .decision-toolbar .search-control { min-width: 220px; }
-.candidate-table { min-width: 1280px; }
+.candidate-table { min-width: 1480px; }
 .candidate-table-scroll { max-height: 660px; }
 .candidate-table thead { position: sticky; top: 0; z-index: 2; }
 .sort-button { min-height: 30px; display: inline-flex; gap: 5px; align-items: center; padding: 0; color: var(--faint); background: transparent; border: 0; cursor: pointer; font-size: 10px; }
@@ -329,6 +329,7 @@ button.action-link[aria-busy="true"]:disabled { cursor: wait; }
 .ai-cell { display: flex; flex-direction: column; }
 .ai-cell strong { color: var(--text); font-family: var(--font-geist-mono), monospace; }
 .ai-cell small { color: var(--faint); font-size: 8px; }
+.price-limit { color: var(--amber); font-family: var(--font-geist-mono), monospace; font-weight: 600; }
 .consensus-cell { display: flex; gap: 6px; align-items: center; }
 .agreement-mark { display: inline-flex; gap: 3px; align-items: center; color: var(--amber); font-size: 8px; }
 .risk-count { display: inline-flex; gap: 5px; align-items: center; color: var(--muted); }
