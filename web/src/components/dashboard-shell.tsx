@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Activity,
   ArrowDown,
@@ -736,12 +737,27 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
 }
 
 export default function DashboardShell({ snapshot, workflowRuns, snapshotFresh }: { snapshot: DashboardSnapshot; workflowRuns: WorkflowRun[]; snapshotFresh: boolean }) {
+  const router = useRouter();
   const [view, setView] = useState<ViewId>("decision");
   const [mobileMenu, setMobileMenu] = useState(false);
   const active = navItems.find((item) => item.id === view) ?? navItems[0];
   const latestModel = (snapshot.aiModels ?? [])[0];
   const aiState = (snapshot.overview.prospectivePredictions ?? 0) > 0 ? "AI 前瞻運作" : latestModel ? "AI 影子就緒" : "AI 尚未就緒";
   const selectView = (next: ViewId) => { setView(next); setMobileMenu(false); };
+
+  useEffect(() => {
+    const refresh = () => router.refresh();
+    const timer = window.setInterval(refresh, 60_000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [router]);
+
   return (
     <main className="app-shell">
       <aside className={`sidebar ${mobileMenu ? "open" : ""}`}>

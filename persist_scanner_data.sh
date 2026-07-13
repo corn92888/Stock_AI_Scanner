@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-commit_message="${1:-Record scanner signals}"
+commit_message="${1:-chore(data): record scanner signals}"
 
 if [ ! -f data/stock_scanner.db ]; then
   echo "No signal database found."

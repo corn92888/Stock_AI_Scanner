@@ -14,12 +14,20 @@ class ScanSlot:
     name: str
     start: dt.time
     end: dt.time
+    cron: str
 
 
 INTRADAY_SLOTS = (
-    ScanSlot("morning", dt.time(9, 35), dt.time(10, 35)),
-    ScanSlot("midday", dt.time(11, 10), dt.time(12, 10)),
-    ScanSlot("closing", dt.time(12, 40), dt.time(13, 20)),
+    ScanSlot("09:00", dt.time(9, 0), dt.time(9, 29, 59), "0 1 * * 1-5"),
+    ScanSlot("09:30", dt.time(9, 30), dt.time(9, 59, 59), "30 1 * * 1-5"),
+    ScanSlot("10:00", dt.time(10, 0), dt.time(10, 29, 59), "0 2 * * 1-5"),
+    ScanSlot("10:30", dt.time(10, 30), dt.time(10, 59, 59), "30 2 * * 1-5"),
+    ScanSlot("11:00", dt.time(11, 0), dt.time(11, 29, 59), "0 3 * * 1-5"),
+    ScanSlot("11:30", dt.time(11, 30), dt.time(11, 59, 59), "30 3 * * 1-5"),
+    ScanSlot("12:00", dt.time(12, 0), dt.time(12, 29, 59), "0 4 * * 1-5"),
+    ScanSlot("12:30", dt.time(12, 30), dt.time(12, 59, 59), "30 4 * * 1-5"),
+    ScanSlot("13:00", dt.time(13, 0), dt.time(13, 29, 59), "0 5 * * 1-5"),
+    ScanSlot("13:30", dt.time(13, 30), dt.time(13, 59, 59), "30 5 * * 1-5"),
 )
 
 
@@ -36,6 +44,14 @@ def find_intraday_slot(now, slots=INTRADAY_SLOTS):
         return None
     for slot in slots:
         if slot.start <= now.time().replace(tzinfo=None) <= slot.end:
+            return slot
+    return None
+
+
+def find_scheduled_slot(cron, slots=INTRADAY_SLOTS):
+    normalized = " ".join(str(cron or "").split())
+    for slot in slots:
+        if slot.cron == normalized:
             return slot
     return None
 
@@ -97,19 +113,36 @@ def slot_already_completed(db_path, trade_date, slot):
     return False
 
 
-def evaluate_intraday_run(now=None, db_path="data/stock_scanner.db", ignore_existing=False):
+def evaluate_intraday_run(
+    now=None,
+    db_path="data/stock_scanner.db",
+    ignore_existing=False,
+    scheduled_cron=None,
+):
     now = now or get_taipei_now()
     if now.tzinfo is None:
         now = now.replace(tzinfo=TAIPEI_TZ)
     else:
         now = now.astimezone(TAIPEI_TZ)
 
-    slot = find_intraday_slot(now)
+    if now.weekday() >= 5:
+        slot = None
+    elif scheduled_cron:
+        slot = find_scheduled_slot(scheduled_cron)
+        if slot is None:
+            return {
+                "run": False,
+                "slot": "",
+                "reason": "unknown_scheduled_cron",
+                "now": now.isoformat(timespec="seconds"),
+            }
+    else:
+        slot = find_intraday_slot(now)
     if slot is None:
         return {
             "run": False,
             "slot": "",
-            "reason": "outside_intraday_windows",
+            "reason": "outside_intraday_slots",
             "now": now.isoformat(timespec="seconds"),
         }
     if not ignore_existing and slot_already_completed(db_path, now.date().isoformat(), slot):
@@ -143,6 +176,7 @@ def main():
     parser.add_argument("--db-path", default="data/stock_scanner.db")
     parser.add_argument("--github-output")
     parser.add_argument("--ignore-existing", action="store_true")
+    parser.add_argument("--scheduled-cron")
     parser.add_argument("--now", help="ISO timestamp used for deterministic checks")
     args = parser.parse_args()
 
@@ -151,6 +185,7 @@ def main():
         now=now,
         db_path=args.db_path,
         ignore_existing=args.ignore_existing,
+        scheduled_cron=args.scheduled_cron,
     )
     write_github_output(args.github_output, decision)
     print(json.dumps(decision, ensure_ascii=False, sort_keys=True))

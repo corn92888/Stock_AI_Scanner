@@ -7,16 +7,18 @@ from pathlib import Path
 from unittest.mock import patch
 
 from automation_guard import (
+    INTRADAY_SLOTS,
     TAIPEI_TZ,
     evaluate_intraday_run,
     find_intraday_slot,
+    find_scheduled_slot,
     slot_already_completed,
 )
 from intraday_analysis_report import (
     generate_intraday_analysis_report,
     validate_report_freshness,
 )
-from intraday_scanner import run_intraday_scanner
+from intraday_scanner import is_intraday_scan_window, run_intraday_scanner
 
 
 class AutomationGuardTests(unittest.TestCase):
@@ -41,14 +43,30 @@ class AutomationGuardTests(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_slot_windows_use_taipei_time_and_skip_weekends(self):
-        morning = dt.datetime(2026, 7, 10, 10, 0, tzinfo=TAIPEI_TZ)
+    def test_half_hour_slots_use_taipei_time_and_skip_weekends(self):
+        morning = dt.datetime(2026, 7, 10, 10, 5, tzinfo=TAIPEI_TZ)
         weekend = dt.datetime(2026, 7, 11, 10, 0, tzinfo=TAIPEI_TZ)
-        outside = dt.datetime(2026, 7, 10, 10, 50, tzinfo=TAIPEI_TZ)
+        outside = dt.datetime(2026, 7, 10, 8, 59, tzinfo=TAIPEI_TZ)
 
-        self.assertEqual(find_intraday_slot(morning).name, "morning")
+        self.assertEqual(find_intraday_slot(morning).name, "10:00")
         self.assertIsNone(find_intraday_slot(weekend))
         self.assertIsNone(find_intraday_slot(outside))
+        self.assertEqual(
+            [slot.name for slot in INTRADAY_SLOTS],
+            ["09:00", "09:30", "10:00", "10:30", "11:00", "11:30", "12:00", "12:30", "13:00", "13:30"],
+        )
+
+    def test_scheduled_cron_preserves_slot_when_github_starts_late(self):
+        now = dt.datetime(2026, 7, 10, 9, 22, tzinfo=TAIPEI_TZ)
+        decision = evaluate_intraday_run(
+            now=now,
+            db_path=self.db_path,
+            scheduled_cron="0 1 * * 1-5",
+        )
+
+        self.assertTrue(decision["run"])
+        self.assertEqual(decision["slot"], "09:00")
+        self.assertEqual(find_scheduled_slot("30 5 * * 1-5").name, "13:30")
 
     def test_completed_slot_is_detected_from_structured_notes(self):
         conn = sqlite3.connect(self.db_path)
@@ -58,16 +76,16 @@ class AutomationGuardTests(unittest.TestCase):
             VALUES (?, ?, ?, ?)
             """,
             (
-                "2026-07-10T10:50:00+08:00",
+                "2026-07-10T09:42:00+08:00",
                 "2026-07-10",
                 "intraday",
-                json.dumps({"automation_slot": "morning"}),
+                json.dumps({"automation_slot": "09:30"}),
             ),
         )
         conn.commit()
         conn.close()
 
-        now = dt.datetime(2026, 7, 10, 10, 0, tzinfo=TAIPEI_TZ)
+        now = dt.datetime(2026, 7, 10, 9, 45, tzinfo=TAIPEI_TZ)
         decision = evaluate_intraday_run(now=now, db_path=self.db_path)
         self.assertFalse(decision["run"])
         self.assertEqual(decision["reason"], "slot_already_completed")
@@ -87,10 +105,17 @@ class AutomationGuardTests(unittest.TestCase):
             ignore_existing=True,
         )
         self.assertTrue(decision["run"])
-        self.assertEqual(decision["slot"], "midday")
+        self.assertEqual(decision["slot"], "11:30")
 
 
 class IntradaySafetyTests(unittest.TestCase):
+    def test_scheduled_closing_slot_allows_github_queue_delay(self):
+        delayed = dt.datetime(2026, 7, 10, 13, 48, tzinfo=TAIPEI_TZ)
+        expired = dt.datetime(2026, 7, 10, 14, 11, tzinfo=TAIPEI_TZ)
+
+        self.assertTrue(is_intraday_scan_window(delayed, "13:30"))
+        self.assertFalse(is_intraday_scan_window(expired, "13:30"))
+
     def test_scanner_skips_before_downloading_outside_market_hours(self):
         outside = dt.datetime(2026, 7, 10, 15, 0, tzinfo=TAIPEI_TZ)
         with patch("intraday_scanner.batch_download") as download:

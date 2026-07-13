@@ -158,6 +158,18 @@ def is_market_open(now=None):
     if now.weekday() >= 5: return False
     return datetime.time(9, 0) <= now.time() <= datetime.time(13, 30)
 
+
+def is_intraday_scan_window(now=None, automation_slot=None):
+    now = now or datetime.datetime.now(TAIPEI_TZ)
+    if is_market_open(now):
+        return True
+    automation_slot = automation_slot or os.getenv("INTRADAY_AUTOMATION_SLOT", "")
+    return (
+        now.weekday() < 5
+        and automation_slot == "13:30"
+        and datetime.time(13, 30) < now.time() <= datetime.time(14, 10)
+    )
+
 def _parse_realtime_price(rt):
     raw_price = rt.get('latest_trade_price', '-')
     if raw_price and raw_price != '-':
@@ -265,10 +277,12 @@ def fetch_realtime_prices(ticker_list, chunk_size=20, max_workers=None):
 def run_intraday_scanner(send_telegram=True, now=None):
     start_time = time.time()
     started_at = now or datetime.datetime.now(TAIPEI_TZ)
+    automation_slot = os.getenv("INTRADAY_AUTOMATION_SLOT", "")
+    scan_window_open = is_intraday_scan_window(started_at, automation_slot)
     print("⚡️ 啟動: 盤中即時策略全掃描 (A/B/C 三合一)")
     print("-" * 40)
 
-    if not is_market_open(started_at):
+    if not scan_window_open:
         reason = "目前非交易時段，盤中掃描安全略過。"
         print(f"\nℹ️ {reason}")
         return {
@@ -292,7 +306,7 @@ def run_intraday_scanner(send_telegram=True, now=None):
     
     # 2. 抓取即時報價並推算預估量
     is_realtime_mode = False
-    if is_market_open(started_at):
+    if scan_window_open:
         print("\n📡 台股盤中！正在抓取即時報價並結合歷史資料...")
         realtime_started = time.perf_counter()
         rt_prices = fetch_realtime_prices(tickers, chunk_size=20)

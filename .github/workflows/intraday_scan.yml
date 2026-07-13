@@ -2,9 +2,19 @@ name: Intraday Stock AI Scanner
 
 on:
   schedule:
-    # 避開整點高峰並每 30 分鐘探測；程式只會在三個台北盤中窗口真正執行一次。
-    - cron: '17,47 23 * * 0-4'
-    - cron: '17,47 0-5 * * 1-5'
+    # UTC schedule mapped to Asia/Taipei 09:00-13:30 every 30 minutes.
+    # Separate expressions let the guard retain the intended slot even when
+    # GitHub queues a scheduled run several minutes late.
+    - cron: '0 1 * * 1-5'   # 09:00
+    - cron: '30 1 * * 1-5'  # 09:30
+    - cron: '0 2 * * 1-5'   # 10:00
+    - cron: '30 2 * * 1-5'  # 10:30
+    - cron: '0 3 * * 1-5'   # 11:00
+    - cron: '30 3 * * 1-5'  # 11:30
+    - cron: '0 4 * * 1-5'   # 12:00
+    - cron: '30 4 * * 1-5'  # 12:30
+    - cron: '0 5 * * 1-5'   # 13:00
+    - cron: '30 5 * * 1-5'  # 13:30
   workflow_dispatch:
     inputs:
       trigger_source:
@@ -43,10 +53,13 @@ jobs:
       id: gate
       env:
         EVENT_NAME: ${{ github.event_name }}
+        EVENT_SCHEDULE: ${{ github.event.schedule }}
       run: |
         args=()
         if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
           args+=(--ignore-existing)
+        elif [ -n "$EVENT_SCHEDULE" ]; then
+          args+=(--scheduled-cron "$EVENT_SCHEDULE")
         fi
         python automation_guard.py --github-output "$GITHUB_OUTPUT" "${args[@]}"
 
@@ -75,7 +88,7 @@ jobs:
     - name: Persist signal database
       if: always() && steps.gate.outputs.run == 'true'
       run: |
-        bash persist_scanner_data.sh "Record intraday scanner signals"
+        bash persist_scanner_data.sh "chore(data): record intraday scanner signals"
 
     - name: Upload Excel Reports
       if: always() && steps.gate.outputs.run == 'true'
