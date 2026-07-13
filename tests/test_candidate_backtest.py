@@ -59,6 +59,7 @@ class CandidateOutcomeCalculationTests(unittest.TestCase):
             config=self.config,
         )
         self.assertTrue(result["defense_triggered"])
+        self.assertEqual(result["entry_adjustment_factor"], 1.0)
         self.assertEqual(result["exit_reason"], "defense_close")
         self.assertEqual(result["exit_at"], "2026-01-05")
         self.assertEqual(result["net_return_3d"], -2.0)

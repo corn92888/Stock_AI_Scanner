@@ -8,6 +8,7 @@ from pathlib import Path
 DB_PATH = Path("data/stock_scanner.db")
 STRATEGY_VERSION = "strict_v1"
 CANDIDATE_EXECUTION_VERSION = "next_day_open_defense_close_t3_v1"
+PAPER_POLICY_VERSION = "paper_portfolio_v1"
 
 
 def get_taipei_now():
@@ -315,6 +316,7 @@ def _create_quant_tables(conn):
             execution_version TEXT NOT NULL,
             entry_at TEXT,
             entry_price REAL,
+            entry_adjustment_factor REAL,
             entry_method TEXT NOT NULL,
             exit_at TEXT,
             exit_price REAL,
@@ -340,6 +342,102 @@ def _create_quant_tables(conn):
             updated_at TEXT NOT NULL,
             FOREIGN KEY (candidate_id) REFERENCES candidate_events(id),
             UNIQUE (candidate_id, execution_version)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS paper_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_key TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            strategy_kind TEXT NOT NULL,
+            evidence_mode TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            execution_version TEXT NOT NULL,
+            starting_cash REAL NOT NULL,
+            cash REAL NOT NULL,
+            equity REAL NOT NULL,
+            total_return_pct REAL NOT NULL DEFAULT 0,
+            max_drawdown_pct REAL NOT NULL DEFAULT 0,
+            closed_trades INTEGER NOT NULL DEFAULT 0,
+            winning_trades INTEGER NOT NULL DEFAULT 0,
+            open_positions INTEGER NOT NULL DEFAULT 0,
+            pending_orders INTEGER NOT NULL DEFAULT 0,
+            skipped_orders INTEGER NOT NULL DEFAULT 0,
+            first_signal_at TEXT,
+            last_equity_at TEXT,
+            status TEXT NOT NULL DEFAULT 'shadow',
+            config_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS paper_trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL,
+            source_type TEXT NOT NULL,
+            source_id INTEGER NOT NULL,
+            candidate_id INTEGER,
+            prediction_id INTEGER,
+            signal_date TEXT NOT NULL,
+            signal_at TEXT NOT NULL,
+            code TEXT NOT NULL,
+            name TEXT,
+            industry TEXT,
+            rank_order INTEGER,
+            model_version TEXT,
+            entry_at TEXT,
+            entry_price REAL,
+            entry_fee REAL,
+            quantity INTEGER,
+            invested_amount REAL,
+            chase_limit REAL,
+            stop_price REAL,
+            exit_at TEXT,
+            exit_price REAL,
+            exit_cost REAL,
+            exit_proceeds REAL,
+            exit_reason TEXT,
+            net_return_pct REAL,
+            realized_pnl REAL,
+            mark_at TEXT,
+            mark_price REAL,
+            market_value REAL,
+            unrealized_pnl REAL,
+            max_return_pct REAL,
+            max_drawdown_pct REAL,
+            status TEXT NOT NULL,
+            skip_reason TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (account_id) REFERENCES paper_accounts(id),
+            FOREIGN KEY (candidate_id) REFERENCES candidate_events(id),
+            FOREIGN KEY (prediction_id) REFERENCES predictions(id),
+            UNIQUE (account_id, source_type, source_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS paper_equity_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL,
+            as_of TEXT NOT NULL,
+            cash REAL NOT NULL,
+            market_value REAL NOT NULL,
+            equity REAL NOT NULL,
+            total_return_pct REAL NOT NULL,
+            peak_equity REAL NOT NULL,
+            drawdown_pct REAL NOT NULL,
+            open_positions INTEGER NOT NULL,
+            closed_trades INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (account_id) REFERENCES paper_accounts(id),
+            UNIQUE (account_id, as_of)
         )
         """
     )
@@ -479,8 +577,21 @@ def _migrate_quant_tables(conn):
     )
     _ensure_columns(
         conn,
+        "candidate_outcomes",
+        {"entry_adjustment_factor": "REAL"},
+    )
+    _ensure_columns(
+        conn,
         "predictions",
         {"is_prospective": "INTEGER NOT NULL DEFAULT 1"},
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_paper_trades_account_status "
+        "ON paper_trades(account_id, status, signal_date)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_paper_equity_account_date "
+        "ON paper_equity_snapshots(account_id, as_of)"
     )
 
 
@@ -743,6 +854,7 @@ def save_candidate_outcome(candidate_id, execution_version, result, db_path=DB_P
         "execution_version",
         "entry_at",
         "entry_price",
+        "entry_adjustment_factor",
         "entry_method",
         "exit_at",
         "exit_price",

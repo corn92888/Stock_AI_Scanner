@@ -162,6 +162,9 @@ class BacktestDatabaseTests(unittest.TestCase):
         self.assertIn("prediction_outcomes", tables)
         self.assertIn("model_versions", tables)
         self.assertIn("backtest_runs", tables)
+        self.assertIn("paper_accounts", tables)
+        self.assertIn("paper_trades", tables)
+        self.assertIn("paper_equity_snapshots", tables)
         self.assertIn("excess_return_3d", backtest_columns)
         self.assertIn("outcome_status", backtest_columns)
 

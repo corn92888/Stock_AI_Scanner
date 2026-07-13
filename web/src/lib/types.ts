@@ -22,6 +22,9 @@ export type Overview = {
   formalCompleteT20: number;
   matureT3: number;
   completeT20: number;
+  paperAccounts: number;
+  paperClosedTrades: number;
+  paperProspectiveClosedTrades: number;
 };
 
 export type ResearchQuality = {
@@ -164,6 +167,88 @@ export type AiModel = {
   };
 };
 
+export type PaperAccount = {
+  accountKey: string;
+  name: string;
+  strategyKind: "rule" | "ai";
+  evidenceMode: string;
+  policyVersion: string;
+  executionVersion: string;
+  startingCash: number;
+  cash: number;
+  equity: number;
+  totalReturnPct: number;
+  maxDrawdownPct: number;
+  closedTrades: number;
+  winningTrades: number;
+  winRate: number | null;
+  openPositions: number;
+  pendingOrders: number;
+  skippedOrders: number;
+  firstSignalAt: string | null;
+  lastEquityAt: string | null;
+  comparisonStartAt: string | null;
+  comparisonReturnPct: number | null;
+  status: string;
+  updatedAt: string;
+  avgReturnPct: number | null;
+  grossProfit: number;
+  grossLoss: number;
+  profitFactor: number | null;
+  config: {
+    starting_cash?: number;
+    max_positions?: number;
+    position_size_pct?: number;
+    cash_buffer_pct?: number;
+    min_trade_value?: number;
+    costs_bps?: number;
+  };
+};
+
+export type PaperEquityPoint = {
+  accountKey: string;
+  asOf: string;
+  cash: number;
+  marketValue: number;
+  equity: number;
+  totalReturnPct: number;
+  drawdownPct: number;
+  openPositions: number;
+  closedTrades: number;
+};
+
+export type PaperTrade = {
+  accountKey: string;
+  sourceType: string;
+  sourceId: number;
+  signalDate: string;
+  signalAt: string;
+  code: string;
+  name: string;
+  industry: string;
+  rankOrder: number | null;
+  modelVersion: string | null;
+  entryAt: string | null;
+  entryPrice: number | null;
+  quantity: number | null;
+  investedAmount: number | null;
+  chaseLimit: number | null;
+  stopPrice: number | null;
+  exitAt: string | null;
+  exitPrice: number | null;
+  exitReason: string | null;
+  netReturnPct: number | null;
+  realizedPnl: number | null;
+  markAt: string | null;
+  markPrice: number | null;
+  marketValue: number | null;
+  unrealizedPnl: number | null;
+  maxReturnPct: number | null;
+  maxDrawdownPct: number | null;
+  status: "pending" | "open" | "closed" | "skipped";
+  skipReason: string | null;
+};
+
 export type DashboardSnapshot = {
   schemaVersion: string;
   generatedAt: string;
@@ -177,6 +262,9 @@ export type DashboardSnapshot = {
   scanRuns: ScanRun[];
   backtestRuns: BacktestRun[];
   aiModels: AiModel[];
+  paperAccounts: PaperAccount[];
+  paperEquity: PaperEquityPoint[];
+  paperTrades: PaperTrade[];
 };
 
 export type WorkflowRun = {

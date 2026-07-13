@@ -402,6 +402,27 @@ button.action-link[aria-busy="true"]:disabled { cursor: wait; }
 .model-version strong { color: var(--text); font-size: 12px; }
 .model-version span { overflow: hidden; color: var(--faint); font-family: var(--font-geist-mono), monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Paper capital */
+.paper-chart-panel .chart-frame { height: 330px; }
+.paper-account-list { padding: 4px 18px 12px; }
+.paper-account-row { display: grid; grid-template-columns: minmax(120px, .7fr) minmax(0, 1.8fr); gap: 14px; align-items: center; padding: 15px 0; border-bottom: 1px solid var(--border); }
+.paper-account-row:last-child { border-bottom: 0; }
+.paper-account-row > div:first-child { display: flex; gap: 9px; align-items: center; }
+.paper-account-row > div:first-child > div { min-width: 0; display: flex; flex-direction: column; }
+.paper-account-row strong { font-size: 11px; }
+.paper-account-row small { margin-top: 3px; color: var(--faint); font-size: 9px; }
+.paper-account-row dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border: 1px solid var(--border); }
+.paper-account-row dl > div { min-width: 0; padding: 9px 10px; border-right: 1px solid var(--border); }
+.paper-account-row dl > div:last-child { border-right: 0; }
+.paper-account-row dt { color: var(--faint); font-size: 8px; }
+.paper-account-row dd { margin: 5px 0 0; overflow-wrap: anywhere; font-family: var(--font-geist-mono), monospace; font-size: 10px; }
+.paper-table { min-width: 1160px; }
+.paper-policy-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); margin: 0; }
+.paper-policy-grid > div { min-width: 0; padding: 16px 17px; border-right: 1px solid var(--border); }
+.paper-policy-grid > div:last-child { border-right: 0; }
+.paper-policy-grid dt { color: var(--faint); font-size: 9px; }
+.paper-policy-grid dd { margin: 7px 0 0; overflow-wrap: anywhere; color: var(--text); font-family: var(--font-geist-mono), monospace; font-size: 11px; }
+
 /* Operations */
 .health-list { padding: 8px 17px 12px; }
 .health-row { min-height: 59px; display: grid; grid-template-columns: 24px 1fr auto; gap: 10px; align-items: center; border-bottom: 1px solid #25282a; }
@@ -427,6 +448,9 @@ button.action-link[aria-busy="true"]:disabled { cursor: wait; }
   .pipeline-stage:nth-child(-n+3) { border-bottom: 1px solid var(--border); }
   .stage-arrow { display: none; }
   .operations-grid { grid-template-columns: 1fr; }
+  .paper-policy-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .paper-policy-grid > div:nth-child(3) { border-right: 0; }
+  .paper-policy-grid > div:nth-child(-n+3) { border-bottom: 1px solid var(--border); }
   .decision-toolbar .search-control { width: 100%; margin-left: 0; }
 }
 
@@ -457,6 +481,10 @@ button.action-link[aria-busy="true"]:disabled { cursor: wait; }
   .workflow-grid { grid-template-columns: 1fr; }
   .workflow-grid .workflow-row:nth-child(odd) { border-right: 0; padding-right: 0; }
   .workflow-grid .workflow-row:nth-child(even) { padding-left: 0; }
+  .paper-account-row { grid-template-columns: minmax(120px, .7fr) minmax(0, 1.8fr); }
+  .paper-account-row dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .paper-account-row dl > div:nth-child(2) { border-right: 0; }
+  .paper-account-row dl > div:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
 }
 
 @media (max-width: 560px) {
@@ -504,6 +532,12 @@ button.action-link[aria-busy="true"]:disabled { cursor: wait; }
   .permission-note { margin-left: 12px; margin-right: 12px; }
   .model-hero-band { align-items: flex-start; flex-direction: column; }
   .governance-state { min-width: 0; }
+  .paper-chart-panel .chart-frame { height: 260px; }
+  .paper-account-row { grid-template-columns: 1fr; }
+  .paper-policy-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .paper-policy-grid > div:nth-child(3) { border-right: 1px solid var(--border); }
+  .paper-policy-grid > div:nth-child(2n) { border-right: 0; }
+  .paper-policy-grid > div:nth-child(-n+4) { border-bottom: 1px solid var(--border); }
   .candidate-drawer { width: 100%; }
   .drawer-header { padding-left: 16px; padding-right: 16px; }
   .drawer-section { padding-left: 16px; padding-right: 16px; }

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from database import get_connection, init_db
 from export_dashboard_snapshot import build_dashboard_snapshot, write_dashboard_snapshot
 
 
@@ -82,6 +83,8 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertEqual(payload["overview"]["maturePredictionOutcomes"], 0)
             self.assertEqual(payload["overview"]["prospectivePredictions"], 0)
             self.assertEqual(payload["overview"]["candidateOutcomes"], 0)
+            self.assertEqual(payload["overview"]["paperAccounts"], 0)
+            self.assertEqual(payload["paperAccounts"], [])
             self.assertEqual(payload["researchQuality"]["matureRejectedOutcomes"], 0)
             self.assertIsNone(payload["researchQuality"]["selectionNetLift3d"])
             self.assertEqual(payload["candidates"][0]["strategies"], ["trend"])
@@ -90,3 +93,58 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertTrue(payload["performance"][0]["isFormalSelection"])
             for private_key in ("email", "portfolio", "supabase", "private_code", "chat_id"):
                 self.assertNotIn(private_key, serialized)
+
+    def test_snapshot_exports_paper_account_ledger(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scanner.db"
+            with get_connection(database) as conn:
+                init_db(conn)
+                conn.execute(
+                    """
+                    INSERT INTO scan_runs (
+                        run_at, trade_date, mode, source, strategy_version
+                    ) VALUES ('2026-07-13T14:00:00+08:00', '2026-07-13',
+                              'eod', 'test', 'v1')
+                    """
+                )
+                account_id = conn.execute(
+                    """
+                    INSERT INTO paper_accounts (
+                        account_key, name, strategy_kind, evidence_mode,
+                        policy_version, execution_version, starting_cash,
+                        cash, equity, total_return_pct, max_drawdown_pct,
+                        closed_trades, winning_trades, open_positions,
+                        pending_orders, skipped_orders, first_signal_at,
+                        status, config_json,
+                        created_at, updated_at
+                    ) VALUES (
+                        'ai_shadow_v1', 'AI Shadow', 'ai', 'prospective_only',
+                        'paper_v1', 'execution_v1', 1000000, 990000, 1010000,
+                        1, -2, 10, 6, 1, 2, 3,
+                        '2026-07-13T14:00:00+08:00', 'shadow', '{}',
+                        '2026-07-13T14:00:00+08:00',
+                        '2026-07-13T14:00:00+08:00'
+                    )
+                    """
+                ).lastrowid
+                conn.execute(
+                    """
+                    INSERT INTO paper_equity_snapshots (
+                        account_id, as_of, cash, market_value, equity,
+                        total_return_pct, peak_equity, drawdown_pct,
+                        open_positions, closed_trades, created_at
+                    ) VALUES (?, '2026-07-13', 990000, 20000, 1010000,
+                              1, 1020000, -0.98, 1, 10,
+                              '2026-07-13T14:00:00+08:00')
+                    """,
+                    (account_id,),
+                )
+
+            snapshot = build_dashboard_snapshot(database)
+            self.assertEqual(snapshot["overview"]["paperAccounts"], 1)
+            self.assertEqual(snapshot["overview"]["paperProspectiveClosedTrades"], 10)
+            self.assertEqual(snapshot["paperAccounts"][0]["accountKey"], "ai_shadow_v1")
+            self.assertEqual(snapshot["paperAccounts"][0]["winRate"], 60)
+            self.assertEqual(snapshot["paperAccounts"][0]["comparisonStartAt"], "2026-07-13")
+            self.assertEqual(snapshot["paperAccounts"][0]["comparisonReturnPct"], 0)
+            self.assertEqual(snapshot["paperEquity"][0]["equity"], 1010000)

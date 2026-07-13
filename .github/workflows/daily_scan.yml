@@ -64,6 +64,10 @@ jobs:
       run: |
         python ai_pipeline.py --no-news --no-predict
 
+    - name: Settle rule and AI paper portfolios
+      run: |
+        python paper_trading.py
+
     - name: Export dashboard snapshot
       run: |
         python export_dashboard_snapshot.py

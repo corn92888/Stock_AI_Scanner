@@ -92,6 +92,7 @@ def calculate_candidate_result(candidate, price_df, benchmark_df=None, config=No
     result = {
         "entry_at": entry_at.strftime("%Y-%m-%d"),
         "entry_price": round(entry_price, 4),
+        "entry_adjustment_factor": round(entry_factor, 8),
         "entry_method": "next_day_open",
         "exit_at": None,
         "exit_price": None,

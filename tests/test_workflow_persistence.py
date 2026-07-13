@@ -49,7 +49,9 @@ class WorkflowPersistenceTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "daily_scan.yml").read_text()
         candidate_index = workflow.index("python candidate_backtest.py --limit 400")
         training_index = workflow.index("python ai_pipeline.py --no-news --no-predict")
+        paper_index = workflow.index("python paper_trading.py")
         self.assertLess(candidate_index, training_index)
+        self.assertLess(training_index, paper_index)
 
     def test_automated_data_commits_use_conventional_english_messages(self):
         for workflow_name in ("intraday_scan.yml", "daily_scan.yml"):

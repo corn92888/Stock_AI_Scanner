@@ -39,12 +39,22 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
       candidateRejectedMatureT3: snapshot.overview.candidateRejectedMatureT3 ?? 0,
       maturePredictionOutcomes: snapshot.overview.maturePredictionOutcomes ?? 0,
       prospectivePredictions: snapshot.overview.prospectivePredictions ?? 0,
+      paperAccounts: snapshot.overview.paperAccounts ?? 0,
+      paperClosedTrades: snapshot.overview.paperClosedTrades ?? 0,
+      paperProspectiveClosedTrades: snapshot.overview.paperProspectiveClosedTrades ?? 0,
     },
     researchQuality: {
       ...EMPTY_RESEARCH_QUALITY,
       ...(snapshot.researchQuality ?? {}),
     },
     aiModels: snapshot.aiModels ?? [],
+    paperAccounts: (snapshot.paperAccounts ?? []).map((account) => ({
+      ...account,
+      comparisonStartAt: account.comparisonStartAt ?? null,
+      comparisonReturnPct: account.comparisonReturnPct ?? null,
+    })),
+    paperEquity: snapshot.paperEquity ?? [],
+    paperTrades: snapshot.paperTrades ?? [],
   };
 }
 

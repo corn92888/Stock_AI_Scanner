@@ -480,6 +480,141 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             for row in ai_models:
                 row["metrics"] = _decode_object(row.pop("metricsJson", ""))
 
+        paper_accounts = []
+        paper_equity = []
+        paper_trades = []
+        if _table_exists(conn, "paper_accounts"):
+            paper_accounts = _read_records(
+                conn,
+                """
+                SELECT
+                    pa.account_key AS accountKey,
+                    pa.name,
+                    pa.strategy_kind AS strategyKind,
+                    pa.evidence_mode AS evidenceMode,
+                    pa.policy_version AS policyVersion,
+                    pa.execution_version AS executionVersion,
+                    pa.starting_cash AS startingCash,
+                    pa.cash,
+                    pa.equity,
+                    pa.total_return_pct AS totalReturnPct,
+                    pa.max_drawdown_pct AS maxDrawdownPct,
+                    pa.closed_trades AS closedTrades,
+                    pa.winning_trades AS winningTrades,
+                    CASE WHEN pa.closed_trades > 0
+                         THEN pa.winning_trades * 100.0 / pa.closed_trades END AS winRate,
+                    pa.open_positions AS openPositions,
+                    pa.pending_orders AS pendingOrders,
+                    pa.skipped_orders AS skippedOrders,
+                    pa.first_signal_at AS firstSignalAt,
+                    pa.last_equity_at AS lastEquityAt,
+                    pa.status,
+                    pa.config_json AS configJson,
+                    pa.updated_at AS updatedAt,
+                    AVG(CASE WHEN pt.status='closed' THEN pt.net_return_pct END) AS avgReturnPct,
+                    SUM(CASE WHEN pt.status='closed' AND pt.realized_pnl > 0
+                             THEN pt.realized_pnl ELSE 0 END) AS grossProfit,
+                    SUM(CASE WHEN pt.status='closed' AND pt.realized_pnl < 0
+                             THEN ABS(pt.realized_pnl) ELSE 0 END) AS grossLoss
+                FROM paper_accounts pa
+                LEFT JOIN paper_trades pt ON pt.account_id=pa.id
+                GROUP BY pa.id
+                ORDER BY CASE pa.strategy_kind WHEN 'rule' THEN 0 ELSE 1 END, pa.id
+                """,
+            )
+            for row in paper_accounts:
+                row["config"] = _decode_object(row.pop("configJson", ""))
+                gross_loss = row.get("grossLoss") or 0
+                row["profitFactor"] = (
+                    (row.get("grossProfit") or 0) / gross_loss if gross_loss else None
+                )
+            paper_equity = _read_records(
+                conn,
+                """
+                SELECT pa.account_key AS accountKey, pes.as_of AS asOf,
+                       pes.cash, pes.market_value AS marketValue, pes.equity,
+                       pes.total_return_pct AS totalReturnPct,
+                       pes.drawdown_pct AS drawdownPct,
+                       pes.open_positions AS openPositions,
+                       pes.closed_trades AS closedTrades
+                FROM paper_equity_snapshots pes
+                JOIN paper_accounts pa ON pa.id=pes.account_id
+                ORDER BY pes.as_of, pa.id
+                """,
+            )
+            ai_account = next(
+                (
+                    row
+                    for row in paper_accounts
+                    if row.get("evidenceMode") == "prospective_only"
+                ),
+                None,
+            )
+            comparison_start = (
+                (ai_account.get("firstSignalAt") or "")[:10]
+                if ai_account
+                else ""
+            )
+            for account in paper_accounts:
+                account_points = [
+                    point
+                    for point in paper_equity
+                    if point.get("accountKey") == account.get("accountKey")
+                ]
+                baseline_points = [
+                    point
+                    for point in account_points
+                    if comparison_start and point.get("asOf", "") <= comparison_start
+                ]
+                baseline = baseline_points[-1] if baseline_points else None
+                latest = account_points[-1] if account_points else None
+                baseline_equity = (baseline or {}).get("equity")
+                account["comparisonStartAt"] = (
+                    baseline.get("asOf") if baseline else None
+                )
+                account["comparisonReturnPct"] = (
+                    (latest["equity"] / baseline_equity - 1) * 100
+                    if latest and baseline_equity
+                    else None
+                )
+            paper_trades = _read_records(
+                conn,
+                """
+                SELECT pa.account_key AS accountKey,
+                       pt.source_type AS sourceType, pt.source_id AS sourceId,
+                       pt.signal_date AS signalDate, pt.signal_at AS signalAt,
+                       pt.code, pt.name, pt.industry, pt.rank_order AS rankOrder,
+                       pt.model_version AS modelVersion,
+                       pt.entry_at AS entryAt, pt.entry_price AS entryPrice,
+                       pt.quantity, pt.invested_amount AS investedAmount,
+                       pt.chase_limit AS chaseLimit, pt.stop_price AS stopPrice,
+                       pt.exit_at AS exitAt, pt.exit_price AS exitPrice,
+                       pt.exit_reason AS exitReason,
+                       pt.net_return_pct AS netReturnPct,
+                       pt.realized_pnl AS realizedPnl,
+                       pt.mark_at AS markAt, pt.mark_price AS markPrice,
+                       pt.market_value AS marketValue,
+                       pt.unrealized_pnl AS unrealizedPnl,
+                       pt.max_return_pct AS maxReturnPct,
+                       pt.max_drawdown_pct AS maxDrawdownPct,
+                       pt.status, pt.skip_reason AS skipReason
+                FROM paper_trades pt
+                JOIN paper_accounts pa ON pa.id=pt.account_id
+                ORDER BY pt.signal_at DESC, pt.rank_order, pt.id DESC
+                LIMIT 300
+                """,
+            )
+
+        overview["paperAccounts"] = len(paper_accounts)
+        overview["paperClosedTrades"] = sum(
+            int(row.get("closedTrades") or 0) for row in paper_accounts
+        )
+        overview["paperProspectiveClosedTrades"] = sum(
+            int(row.get("closedTrades") or 0)
+            for row in paper_accounts
+            if row.get("evidenceMode") == "prospective_only"
+        )
+
         return {
             "schemaVersion": SCHEMA_VERSION,
             "generatedAt": dt.datetime.now(TAIPEI_TZ).isoformat(timespec="seconds"),
@@ -493,6 +628,9 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "scanRuns": scan_runs,
             "backtestRuns": backtest_runs,
             "aiModels": ai_models,
+            "paperAccounts": paper_accounts,
+            "paperEquity": paper_equity,
+            "paperTrades": paper_trades,
         }
     finally:
         conn.close()

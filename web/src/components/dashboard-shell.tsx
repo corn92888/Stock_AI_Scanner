@@ -33,6 +33,7 @@ import {
   TrendingDown,
   TrendingUp,
   TriangleAlert,
+  WalletCards,
   Workflow,
   X,
   Zap,
@@ -52,9 +53,9 @@ import {
   YAxis,
 } from "recharts";
 
-import type { Candidate, DashboardSnapshot, Performance, WorkflowRun } from "@/lib/types";
+import type { Candidate, DashboardSnapshot, PaperTrade, Performance, WorkflowRun } from "@/lib/types";
 
-type ViewId = "decision" | "performance" | "pipeline" | "operations";
+type ViewId = "decision" | "performance" | "paper" | "pipeline" | "operations";
 type Scope = "latest" | "selected" | "all" | "rejected";
 type CandidateSort = "rank" | "score" | "turnover" | "volume" | "ai" | "excess";
 type SortDirection = "asc" | "desc";
@@ -62,6 +63,7 @@ type SortDirection = "asc" | "desc";
 const navItems: Array<{ id: ViewId; label: string; hint: string; icon: typeof Gauge }> = [
   { id: "decision", label: "決策工作台", hint: "候選、共識與風險", icon: Gauge },
   { id: "performance", label: "策略驗證", hint: "報酬、回撤與穩定性", icon: BarChart3 },
+  { id: "paper", label: "模擬資金", hint: "規則與 AI 資金競賽", icon: WalletCards },
   { id: "pipeline", label: "AI 與資料", hint: "模型門檻與學習進度", icon: Database },
   { id: "operations", label: "自動化維運", hint: "排程、批次與異常", icon: Workflow },
 ];
@@ -111,6 +113,16 @@ function formatDateTime(value: string | null | undefined) {
 function pct(value: number | null | undefined) {
   if (value == null) return "--";
   return `${value > 0 ? "+" : ""}${decimal.format(value)}%`;
+}
+
+function rate(value: number | null | undefined) {
+  if (value == null) return "--";
+  return `${decimal.format(value)}%`;
+}
+
+function money(value: number | null | undefined) {
+  if (value == null) return "--";
+  return `NT$${formatNumeric(value, 0, 0)}`;
 }
 
 function avg(values: Array<number | null | undefined>) {
@@ -646,13 +658,22 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const mae = latestModel?.metrics.validation_excess_mae ?? 99;
   const prospective = snapshot.overview.prospectivePredictions ?? 0;
   const matureProspective = snapshot.overview.maturePredictionOutcomes ?? 0;
+  const rulePaper = snapshot.paperAccounts.find((account) => account.strategyKind === "rule");
+  const aiPaper = snapshot.paperAccounts.find((account) => account.strategyKind === "ai");
+  const paperClosed = aiPaper?.closedTrades ?? 0;
+  const paperEdge = paperClosed >= 100
+    && aiPaper?.comparisonReturnPct != null
+    && rulePaper?.comparisonReturnPct != null
+    ? aiPaper.comparisonReturnPct - rulePaper.comparisonReturnPct
+    : -Infinity;
   const selectionLift = research.selectionNetLift3d ?? -Infinity;
   const economicEdge = (research.formalMeanNetReturn3d ?? -Infinity) > 0
     && (research.formalMeanExcessReturn3d ?? -Infinity) > 0
     && selectionLift > 0;
   const allGatesPassed = samples >= 500 && positives >= 50 && auc >= 0.6 && mae <= 3
     && research.matureCandidateOutcomes >= 500 && research.matureRejectedOutcomes >= 250
-    && research.uniqueTradeDates >= 120 && matureProspective >= 150 && economicEdge;
+    && research.uniqueTradeDates >= 120 && matureProspective >= 150 && economicEdge
+    && paperClosed >= 100 && paperEdge > 0;
   const featureCoverage = snapshot.overview.candidateEvents ? snapshot.overview.featureSnapshots / snapshot.overview.candidateEvents * 100 : 0;
 
   return (
@@ -687,6 +708,8 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
             <GateRow label="時序驗證 AUC" value={auc} target={0.6} display={auc ? decimal.format(auc) : "NA"} passed={auc >= 0.6} />
             <GateRow label="超額報酬 MAE" value={mae} target={3} display={mae < 99 ? pct(mae) : "NA"} passed={mae <= 3} lowerIsBetter />
             <GateRow label="成熟前瞻預測" value={matureProspective} target={150} display={`${matureProspective} 筆`} passed={matureProspective >= 150} />
+            <GateRow label="AI 模擬結案交易" value={paperClosed} target={100} display={`${paperClosed} 筆`} passed={paperClosed >= 100} />
+            <GateRow label="AI 模擬相對規則" value={paperEdge} target={0} display={Number.isFinite(paperEdge) ? pct(paperEdge) : "待滿 100 筆"} passed={paperEdge > 0} />
             <GateRow label="選股相對落選組增值" value={selectionLift} target={0} display={Number.isFinite(selectionLift) ? pct(selectionLift) : "NA"} passed={selectionLift > 0} />
             <GateRow label="樣本外經濟優勢" value={economicEdge ? 1 : 0} target={1} display={economicEdge ? "淨報酬與超額為正" : "尚未通過"} passed={economicEdge} />
           </div>
@@ -706,6 +729,102 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
           <PanelHeader eyebrow="Recent ingestion" title="最近資料寫入" description="盤中與盤後掃描的資料版本與來源" />
           <div className="run-list">{snapshot.scanRuns.slice(0, 8).map((run) => <div className="run-row" key={run.id}><span className={`run-dot ${run.mode}`} /><div><strong>{modeLabel(run.mode)}掃描 · {run.tradeDate}</strong><small>{run.source} · {run.strategyVersion}</small></div><time>{formatDateTime(run.runAt)}</time></div>)}</div>
         </div>
+      </section>
+    </div>
+  );
+}
+
+const paperStatusLabels: Record<PaperTrade["status"], string> = {
+  pending: "等待成交",
+  open: "持有中",
+  closed: "已結案",
+  skipped: "未成交",
+};
+
+const paperReasonLabels: Record<string, string> = {
+  awaiting_next_open: "等待下一交易日開盤",
+  outcome_backfill_pending: "等待行情回填",
+  awaiting_exit_data: "等待退出資料",
+  above_chase_limit: "開盤超過禁止追價線",
+  duplicate_open_position: "已有同一標的持倉",
+  max_positions_reached: "已達五檔持倉上限",
+  insufficient_cash: "可用資金不足",
+  defense_close: "防守價出場",
+  time_exit_t3: "T+3 到期出場",
+};
+
+function paperStatusTone(status: PaperTrade["status"]) {
+  if (status === "open") return "selected";
+  if (status === "pending") return "eligible";
+  if (status === "skipped") return "blocked";
+  return "neutral";
+}
+
+function PaperTradingView({ snapshot }: { snapshot: DashboardSnapshot }) {
+  const rule = snapshot.paperAccounts.find((account) => account.strategyKind === "rule");
+  const ai = snapshot.paperAccounts.find((account) => account.strategyKind === "ai");
+  const aiEdge = ai && rule && ai.closedTrades >= 100
+    && ai.comparisonReturnPct != null && rule.comparisonReturnPct != null
+    ? ai.comparisonReturnPct - rule.comparisonReturnPct
+    : null;
+  const promotionReady = Boolean(
+    ai && rule && ai.closedTrades >= 100 && aiEdge != null && aiEdge > 0
+    && ai.maxDrawdownPct >= -10,
+  );
+  const curve = Array.from(
+    snapshot.paperEquity.reduce((map, point) => {
+      const current = map.get(point.asOf) ?? { asOf: point.asOf };
+      if (point.accountKey === "rule_baseline_v1") current.rule = point.equity;
+      if (point.accountKey === "ai_shadow_v1") current.ai = point.equity;
+      map.set(point.asOf, current);
+      return map;
+    }, new Map<string, { asOf: string; rule?: number; ai?: number }>()).values(),
+  ).sort((a, b) => a.asOf.localeCompare(b.asOf));
+  const active = snapshot.paperTrades.filter((trade) => trade.status === "open" || trade.status === "pending");
+  const recent = snapshot.paperTrades.filter((trade) => trade.status === "closed" || trade.status === "skipped").slice(0, 30);
+  const config = rule?.config ?? ai?.config ?? {};
+
+  return (
+    <div className="view-stack">
+      <section className="model-hero-band">
+        <div><span className="eyebrow">Paper capital governance</span><h2>{promotionReady ? "模擬資金達到實盤候選審查門檻" : "模擬競賽運作中，目前不可照單實盤"}</h2><p>規則基準採歷史點時訊號重播；AI 帳戶只接受當時真正產生的前瞻入選</p></div>
+        <div className={`governance-state ${promotionReady ? "ready" : "shadow"}`}><WalletCards size={20} /><span>{promotionReady ? "REVIEW READY" : "PAPER ONLY"}</span></div>
+      </section>
+
+      <section className="metrics-grid metrics-grid-five">
+        <Metric label="規則帳戶權益" value={money(rule?.equity)} detail={`報酬 ${pct(rule?.totalReturnPct)}`} tone={(rule?.totalReturnPct ?? 0) > 0 ? "positive" : "danger"} icon={Activity} />
+        <Metric label="AI 帳戶權益" value={money(ai?.equity)} detail={`報酬 ${pct(ai?.totalReturnPct)}`} tone={(ai?.totalReturnPct ?? 0) > 0 ? "positive" : "warning"} icon={Bot} />
+        <Metric label="AI 前瞻結案" value={number.format(ai?.closedTrades ?? 0)} detail={`升級門檻 100 筆`} tone={(ai?.closedTrades ?? 0) >= 100 ? "positive" : "warning"} icon={CheckCircle2} />
+        <Metric label="AI 勝率" value={rate(ai?.winRate)} detail={`持有 ${ai?.openPositions ?? 0} · 等待 ${ai?.pendingOrders ?? 0}`} tone={(ai?.winRate ?? 0) >= 50 ? "positive" : "info"} icon={Target} />
+        <Metric label="AI 相對規則" value={pct(aiEdge)} detail={aiEdge == null ? "滿 100 筆後比較同期間" : `同期間自 ${ai?.comparisonStartAt ?? "--"}`} tone={aiEdge == null ? "warning" : aiEdge > 0 ? "positive" : "danger"} icon={TrendingUp} />
+      </section>
+
+      <section className="analysis-grid equal-grid">
+        <div className="panel chart-panel paper-chart-panel">
+          <PanelHeader eyebrow="Equity curve" title="模擬資產曲線" description="每日以收盤可變現價值計算，已包含手續費、稅與滑價" />
+          <div className="chart-frame"><ResponsiveContainer width="100%" height="100%"><LineChart data={curve} margin={{ top: 16, right: 18, left: 8, bottom: 4 }}><CartesianGrid stroke="#2b2e31" vertical={false} /><XAxis dataKey="asOf" stroke="#777d82" tickLine={false} axisLine={false} minTickGap={30} /><YAxis stroke="#777d82" tickLine={false} axisLine={false} tickFormatter={(value) => `${Math.round(value / 1000)}k`} /><Tooltip contentStyle={tooltipStyle} formatter={(value) => money(Number(value))} /><Line type="monotone" dataKey="rule" name="規則基準" stroke="#5fb3d9" strokeWidth={2} dot={false} connectNulls /><Line type="monotone" dataKey="ai" name="AI 影子" stroke="#55c29a" strokeWidth={2} dot={false} connectNulls /></LineChart></ResponsiveContainer></div>
+        </div>
+        <div className="panel paper-account-panel">
+          <PanelHeader eyebrow="Account comparison" title="帳戶實證比較" description="兩個帳戶使用相同本金與部位限制，證據性質分開標示" />
+          <div className="paper-account-list">{[rule, ai].map((account) => account ? <div className="paper-account-row" key={account.accountKey}><div><span className={`run-dot ${account.strategyKind === "ai" ? "success" : "intraday"}`} /><div><strong>{account.name}</strong><small>{account.evidenceMode === "prospective_only" ? "真正前瞻紀錄" : "歷史點時訊號重播"}</small></div></div><dl><div><dt>總報酬</dt><dd className={account.totalReturnPct >= 0 ? "positive-text" : "negative-text"}>{pct(account.totalReturnPct)}</dd></div><div><dt>最大回撤</dt><dd>{pct(account.maxDrawdownPct)}</dd></div><div><dt>結案 / 勝率</dt><dd>{account.closedTrades} / {rate(account.winRate)}</dd></div><div><dt>跳過</dt><dd>{account.skippedOrders}</dd></div></dl></div> : null)}</div>
+        </div>
+      </section>
+
+      <div className="validation-banner"><TriangleAlert size={18} /><div><strong>模擬績效不是實際獲利保證</strong><p>目前 AI 前瞻結案僅 {ai?.closedTrades ?? 0} 筆；至少 100 筆、跨越 120 個交易日、扣除成本後勝過規則基準，才進入人工實盤審查。</p></div></div>
+
+      <section className="panel">
+        <PanelHeader eyebrow="Pending and open" title="目前模擬委託與持倉" description="等待成交不會預先占用資金；超過禁止追價線會留下未成交紀錄" trailing={<span className="record-count">{active.length} 筆</span>} />
+        <div className="table-scroll"><table className="data-table compact-table paper-table"><thead><tr><th>帳戶</th><th>訊號日</th><th>標的</th><th>狀態</th><th>進場</th><th>股數</th><th>禁止追價</th><th>防守價</th><th>目前價值</th><th>原因</th></tr></thead><tbody>{active.length ? active.map((trade) => <tr key={`${trade.accountKey}-${trade.sourceType}-${trade.sourceId}`}><td>{trade.accountKey === "ai_shadow_v1" ? "AI" : "規則"}</td><td>{trade.signalDate}</td><td><div className="symbol-cell"><strong>{trade.code}</strong><span>{trade.name}</span></div></td><td><span className={`status-pill ${paperStatusTone(trade.status)}`}>{paperStatusLabels[trade.status]}</span></td><td>{trade.entryAt ? `${trade.entryAt} · ${formatNumeric(trade.entryPrice ?? 0, 0, 2)}` : "--"}</td><td>{trade.quantity ?? "--"}</td><td>{trade.chaseLimit == null ? "--" : formatNumeric(trade.chaseLimit, 0, 2)}</td><td>{trade.stopPrice == null ? "--" : formatNumeric(trade.stopPrice, 0, 2)}</td><td>{money(trade.marketValue)}</td><td>{paperReasonLabels[trade.skipReason ?? ""] ?? "正常持有"}</td></tr>) : <tr><td colSpan={10}>目前沒有等待成交或持有中的模擬部位。</td></tr>}</tbody></table></div>
+      </section>
+
+      <section className="panel">
+        <PanelHeader eyebrow="Execution ledger" title="最近模擬交易紀錄" description="未成交也保留原因，避免只統計成功進場造成倖存者偏誤" trailing={<span className="record-count">{recent.length} 筆</span>} />
+        <div className="table-scroll"><table className="data-table compact-table paper-table"><thead><tr><th>帳戶</th><th>訊號日</th><th>標的</th><th>狀態</th><th>進場 / 出場</th><th>股數</th><th>報酬</th><th>損益</th><th>最大漲幅</th><th>最大回撤</th><th>結果</th></tr></thead><tbody>{recent.length ? recent.map((trade) => <tr key={`${trade.accountKey}-${trade.sourceType}-${trade.sourceId}`}><td>{trade.accountKey === "ai_shadow_v1" ? "AI" : "規則"}</td><td>{trade.signalDate}</td><td><div className="symbol-cell"><strong>{trade.code}</strong><span>{trade.name}</span></div></td><td><span className={`status-pill ${paperStatusTone(trade.status)}`}>{paperStatusLabels[trade.status]}</span></td><td>{trade.entryAt ?? "--"} / {trade.exitAt ?? "--"}</td><td>{trade.quantity ?? "--"}</td><td className={(trade.netReturnPct ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(trade.netReturnPct)}</td><td className={(trade.realizedPnl ?? 0) >= 0 ? "positive-text" : "negative-text"}>{money(trade.realizedPnl)}</td><td>{pct(trade.maxReturnPct)}</td><td>{pct(trade.maxDrawdownPct)}</td><td>{paperReasonLabels[trade.skipReason ?? ""] ?? paperReasonLabels[trade.exitReason ?? ""] ?? "--"}</td></tr>) : <tr><td colSpan={11}>尚無已結案或未成交紀錄。</td></tr>}</tbody></table></div>
+      </section>
+
+      <section className="panel paper-policy-panel">
+        <PanelHeader eyebrow="Capital policy" title="固定模擬規則" description="規則版本化後鎖定，避免看到結果再修改成交假設" />
+        <dl className="paper-policy-grid"><div><dt>起始資金</dt><dd>{money(config.starting_cash ?? 1_000_000)}</dd></div><div><dt>單檔上限</dt><dd>{decimal.format((config.position_size_pct ?? .2) * 100)}%</dd></div><div><dt>最多持股</dt><dd>{config.max_positions ?? 5} 檔</dd></div><div><dt>現金保留</dt><dd>{decimal.format((config.cash_buffer_pct ?? .05) * 100)}%</dd></div><div><dt>最低交易值</dt><dd>{money(config.min_trade_value ?? 10_000)}</dd></div><div><dt>成交方式</dt><dd>隔日開盤，禁止追價</dd></div></dl>
       </section>
     </div>
   );
@@ -800,6 +919,7 @@ export default function DashboardShell({ snapshot, workflowRuns, snapshotFresh }
         <div className="main-content">
           {view === "decision" && <DecisionView snapshot={snapshot} />}
           {view === "performance" && <PerformanceView snapshot={snapshot} />}
+          {view === "paper" && <PaperTradingView snapshot={snapshot} />}
           {view === "pipeline" && <PipelineView snapshot={snapshot} />}
           {view === "operations" && <OperationsView snapshot={snapshot} workflowRuns={workflowRuns} snapshotFresh={snapshotFresh} />}
         </div>
