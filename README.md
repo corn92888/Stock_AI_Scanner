@@ -117,6 +117,18 @@
   ```
   策略競賽以成本後超額報酬、Probabilistic Sharpe、最大回撤及時間順序分折穩定度作為升級門檻，結果會出現在 Next.js 儀表板「AI 與資料」頁。完整契約見 [`docs/research_execution_v2.md`](docs/research_execution_v2.md)。
 
+  建立不污染正式訊號表的歷史逐日重播證據：
+  ```bash
+  venv/bin/python3 historical_replay.py --start 2025-01-01 --end 2025-12-31
+  ```
+  重播會逐日限制技術指標與市場廣度只能看到決策日以前的資料，盤後訊號採下一交易日開盤成交，並保存禁止追價、成本、T+3 超額報酬與最大回撤。重跑相同日期與版本時需加 `--replace`；可用 `--codes 2330,2454` 做小範圍驗證，或到 GitHub Actions 手動執行 `Historical Point-in-Time Replay`。目前重播證據與正式 `scan_runs`、即時前瞻預測及模擬帳戶完全隔離，尚未直接加入模型訓練。
+
+  檢查前瞻預測是否依交易日正確成熟，以及歷史重播資料是否可用：
+  ```bash
+  venv/bin/python3 research_monitor.py
+  ```
+  每次盤中與盤後自動化都會執行這項檢查，再把 cohort 數量、理應成熟 T+3、實際成熟、逾期標註與歷史重播覆蓋輸出到控制中心。完整資料契約與限制見 [`docs/historical_replay.md`](docs/historical_replay.md)。
+
   回測會計算 1 / 3 / 5 / 10 / 20 個交易日後的毛報酬、成本後報酬、大盤報酬與超額報酬，並保存 3 / 20 日最大漲幅、最大回撤及防守價觸發狀態。預設採標準手續費、交易稅與每邊 0.1% 滑價，合計保守成本約 78.5 bps。
 
   舊盤中訊號缺乏歷史分鐘線，因此會明確標記為 `legacy_next_day_open_intraday` 並使用隔日開盤回測；盤後訊號標記為 `next_day_open_eod`。結果會由 `partial` 持續更新到 20 個交易日資料成熟後的 `complete`，不會因先寫入 T+1 就停止補齊後續資料。

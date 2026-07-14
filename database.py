@@ -10,6 +10,8 @@ STRATEGY_VERSION = "strict_v1"
 LEGACY_CANDIDATE_EXECUTION_VERSION = "next_day_open_defense_close_t3_v1"
 CANDIDATE_EXECUTION_VERSION = "mode_aligned_after_costs_t3_v2"
 PAPER_POLICY_VERSION = "risk_budget_portfolio_v2"
+HISTORICAL_REPLAY_VERSION = "point_in_time_eod_replay_v1"
+HISTORICAL_REPLAY_EXECUTION_VERSION = "next_open_after_costs_t3_v1"
 
 
 def get_taipei_now():
@@ -153,6 +155,7 @@ def init_db(conn):
     _migrate_backtest_results(conn)
     _create_quant_tables(conn)
     _create_research_tables(conn)
+    _create_historical_replay_tables(conn)
     _create_global_market_tables(conn)
     _migrate_quant_tables(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_trade_date ON stock_signals(trade_date)")
@@ -183,6 +186,18 @@ def init_db(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_model_validation_version_date "
         "ON model_validation_predictions(model_version, trade_date, fold_index)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_historical_replay_events_day "
+        "ON historical_replay_events(replay_run_id, trade_date, is_selected)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_historical_replay_outcomes_status "
+        "ON historical_replay_outcomes(execution_version, matured_horizon, outcome_status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_research_health_time "
+        "ON research_health_snapshots(checked_at DESC)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_market_observations_key_time "
@@ -704,6 +719,136 @@ def _create_research_tables(conn):
             metrics_json TEXT NOT NULL,
             FOREIGN KEY (experiment_id) REFERENCES research_experiments(id),
             UNIQUE (experiment_id, evaluation_version)
+        )
+        """
+    )
+
+
+def _create_historical_replay_tables(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS historical_replay_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            replay_key TEXT NOT NULL UNIQUE,
+            replay_version TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            execution_version TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            status TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            universe_source TEXT NOT NULL,
+            universe_size INTEGER NOT NULL DEFAULT 0,
+            available_symbols INTEGER NOT NULL DEFAULT 0,
+            trading_days INTEGER NOT NULL DEFAULT 0,
+            signal_events INTEGER NOT NULL DEFAULT 0,
+            candidate_events INTEGER NOT NULL DEFAULT 0,
+            selected_events INTEGER NOT NULL DEFAULT 0,
+            matured_t3 INTEGER NOT NULL DEFAULT 0,
+            config_json TEXT NOT NULL,
+            data_warnings_json TEXT NOT NULL DEFAULT '[]',
+            git_commit TEXT,
+            error_text TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS historical_replay_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            replay_run_id INTEGER NOT NULL,
+            trade_date TEXT NOT NULL,
+            decision_at TEXT NOT NULL,
+            code TEXT NOT NULL,
+            name TEXT,
+            industry TEXT,
+            strategies_json TEXT NOT NULL,
+            strategy_count INTEGER NOT NULL DEFAULT 0,
+            raw_rank INTEGER,
+            score REAL,
+            signal_price REAL,
+            pct_change REAL,
+            turnover_billion REAL,
+            volume_ratio_5 REAL,
+            volume_ratio_20 REAL,
+            intraday_position REAL,
+            observation_price REAL,
+            chase_limit REAL,
+            stop_distance_pct REAL,
+            tradable INTEGER NOT NULL DEFAULT 0,
+            block_reasons_json TEXT NOT NULL DEFAULT '[]',
+            risk_flags_json TEXT NOT NULL DEFAULT '[]',
+            is_selected INTEGER NOT NULL DEFAULT 0,
+            selection_rank INTEGER,
+            selection_status TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (replay_run_id) REFERENCES historical_replay_runs(id),
+            UNIQUE (replay_run_id, trade_date, code)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS historical_replay_outcomes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            replay_event_id INTEGER NOT NULL,
+            execution_version TEXT NOT NULL,
+            entry_status TEXT NOT NULL,
+            skip_reason TEXT,
+            entry_at TEXT,
+            entry_price REAL,
+            entry_method TEXT,
+            exit_at TEXT,
+            exit_price REAL,
+            exit_reason TEXT,
+            fixed_net_return_1d REAL,
+            fixed_net_return_3d REAL,
+            fixed_net_return_5d REAL,
+            net_return_3d REAL,
+            benchmark_code TEXT,
+            benchmark_entry_price REAL,
+            benchmark_return_3d REAL,
+            excess_return_3d REAL,
+            max_return_3d REAL,
+            max_drawdown_3d REAL,
+            defense_triggered INTEGER NOT NULL DEFAULT 0,
+            success_t3 INTEGER,
+            matured_horizon INTEGER NOT NULL DEFAULT 0,
+            outcome_status TEXT NOT NULL DEFAULT 'pending',
+            price_data_end TEXT,
+            costs_bps REAL,
+            config_json TEXT NOT NULL,
+            evaluated_at TEXT NOT NULL,
+            FOREIGN KEY (replay_event_id) REFERENCES historical_replay_events(id),
+            UNIQUE (replay_event_id, execution_version)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS research_health_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            checked_at TEXT NOT NULL,
+            latest_trade_date TEXT,
+            status TEXT NOT NULL,
+            prospective_cohorts INTEGER NOT NULL DEFAULT 0,
+            pending_cohorts INTEGER NOT NULL DEFAULT 0,
+            mature_t3_cohorts INTEGER NOT NULL DEFAULT 0,
+            expected_mature_t3 INTEGER NOT NULL DEFAULT 0,
+            stale_outcomes INTEGER NOT NULL DEFAULT 0,
+            oldest_pending_sessions INTEGER NOT NULL DEFAULT 0,
+            replay_runs INTEGER NOT NULL DEFAULT 0,
+            completed_replay_runs INTEGER NOT NULL DEFAULT 0,
+            latest_replay_at TEXT,
+            replay_events INTEGER NOT NULL DEFAULT 0,
+            replay_selected INTEGER NOT NULL DEFAULT 0,
+            replay_mature_t3 INTEGER NOT NULL DEFAULT 0,
+            warnings_json TEXT NOT NULL,
+            metrics_json TEXT NOT NULL
         )
         """
     )

@@ -765,6 +765,7 @@ function GateRow({ label, value, target, display, passed, lowerIsBetter = false 
 
 function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const research = snapshot.researchQuality;
+  const health = snapshot.researchHealth;
   const experiments = snapshot.researchExperiments ?? [];
   const stages = [
     { label: "掃描訊號", value: snapshot.overview.signals, icon: Activity, note: "原始策略命中" },
@@ -829,8 +830,17 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
       </section>
 
       <section className="pipeline-board panel">
-        <PanelHeader eyebrow="Data lineage" title="量化學習資料鏈" description={`特徵覆蓋率 ${decimal.format(featureCoverage)}%，所有階段保留版本與時間點`} trailing={<span className={`health-badge ${allGatesPassed ? "healthy" : "building"}`}>{allGatesPassed ? "可審查升級" : latestModel ? "影子測試" : "累積中"}</span>} />
+        <PanelHeader eyebrow="Data lineage" title="量化學習資料鏈" description={`特徵覆蓋率 ${decimal.format(featureCoverage)}%，所有階段保留版本與時間點`} trailing={<span className={`health-badge ${health.status === "healthy" ? "healthy" : "building"}`}>{health.status === "critical" ? "標註逾期" : health.status === "healthy" ? "資料健康" : "證據累積中"}</span>} />
         <div className="pipeline-grid">{stages.map((stage, index) => { const Icon = stage.icon; return <div className="pipeline-stage" key={stage.label}><div className="stage-icon"><Icon size={18} /></div><span>{stage.label}</span><strong>{number.format(stage.value)}</strong><small>{stage.note}</small><div className="progress"><i style={{ width: `${Math.max(stage.value ? 3 : 0, stage.value / max * 100)}%` }} /></div>{index < stages.length - 1 && <ChevronRight className="stage-arrow" size={16} />}</div>; })}</div>
+        <div className="readiness-callout"><Database size={19} /><div><strong>歷史重播：{health.latestReplayStatus === "completed" ? `${number.format(health.replayTradingDays)} 個交易日、${number.format(health.replayMatureT3)} 筆成熟 T+3` : "尚未完成第一輪"}</strong><p>{health.latestReplayStart && health.latestReplayEnd ? `${health.latestReplayStart} 至 ${health.latestReplayEnd} · ${number.format(health.replayAvailableSymbols)} 檔可用股票 · 入選淨報酬 ${pct(health.replaySelectedMeanNetReturn3d)} · 相對落選增值 ${pct(health.replaySelectionNetLift3d)}。` : "重播資料與正式即時預測完全隔離，完成後才作為研究證據。"} {health.warnings.join(" ")}</p></div></div>
+      </section>
+
+      <section className="metrics-grid metrics-grid-five">
+        <Metric label="前瞻 Cohort" value={number.format(health.prospectiveCohorts)} detail="同 run / 股票只計最早預測" tone="info" icon={Bot} />
+        <Metric label="理應成熟 T+3" value={number.format(health.expectedMatureT3)} detail={`最久等待 ${health.oldestPendingSessions} 個交易日`} tone="info" icon={Clock3} />
+        <Metric label="實際成熟 T+3" value={number.format(health.matureT3Cohorts)} detail={`覆蓋 ${decimal.format(health.maturityCoveragePct)}%`} tone={health.staleOutcomes === 0 ? "positive" : "warning"} icon={CheckCircle2} />
+        <Metric label="逾期未標註" value={number.format(health.staleOutcomes)} detail={health.staleOutcomes ? "資料管線需要處理" : "沒有成熟度缺口"} tone={health.staleOutcomes ? "danger" : "positive"} icon={TriangleAlert} />
+        <Metric label="歷史重播樣本" value={number.format(health.replayEvents)} detail={`入選超額 ${pct(health.replaySelectedMeanExcessReturn3d)} · 增值 ${pct(health.replaySelectionExcessLift3d)}`} tone={(health.replaySelectionExcessLift3d ?? -Infinity) > 0 ? "positive" : health.completedReplayRuns ? "danger" : "warning"} icon={Database} />
       </section>
 
       <section className="analysis-grid equal-grid">
@@ -980,6 +990,8 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
     { label: "GitHub Actions API", ok: workflowRuns.length > 0, detail: `${workflowRuns.length} 筆執行紀錄` },
     { label: "特徵資料完整", ok: snapshot.overview.featureSnapshots >= snapshot.overview.candidateEvents, detail: `${snapshot.overview.featureSnapshots}/${snapshot.overview.candidateEvents}` },
     { label: "回測批次可追溯", ok: Boolean(lastBacktest), detail: lastBacktest ? formatDateTime(lastBacktest.startedAt) : "尚無紀錄" },
+    { label: "前瞻標註未逾期", ok: snapshot.researchHealth.staleOutcomes === 0, detail: `${snapshot.researchHealth.staleOutcomes} 筆逾期` },
+    { label: "歷史重播證據", ok: snapshot.researchHealth.completedReplayRuns > 0, detail: snapshot.researchHealth.latestReplayAt ? formatDateTime(snapshot.researchHealth.latestReplayAt) : "尚未執行" },
   ];
   return (
     <div className="view-stack">
@@ -999,7 +1011,7 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
           <div className="permission-note"><ShieldCheck size={17} /><p>站內觸發由伺服器端授權，仍會套用交易時段、防重複與資料覆蓋率檢查。</p></div>
         </div>
         <div className="panel health-panel">
-          <PanelHeader eyebrow="System checks" title="服務健康檢查" description="部署、資料、特徵與回測四個必要面向" />
+          <PanelHeader eyebrow="System checks" title="服務健康檢查" description="部署、資料、特徵、回測與前瞻成熟度" />
           <div className="health-list">{healthChecks.map((check) => <div className="health-row" key={check.label}><span className={check.ok ? "ok" : "warn"}>{check.ok ? <CircleCheck size={16} /> : <TriangleAlert size={16} />}</span><div><strong>{check.label}</strong><small>{check.detail}</small></div><span>{check.ok ? "正常" : "注意"}</span></div>)}</div>
         </div>
       </section>

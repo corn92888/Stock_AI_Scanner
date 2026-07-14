@@ -1,0 +1,94 @@
+# Historical Replay and Research Health
+
+## Purpose
+
+`historical_replay.py` reconstructs the existing EOD scanner on each historical
+decision date. It creates research evidence without pretending those rows were
+live recommendations and without changing the rule or AI paper portfolios.
+
+The first version answers three questions:
+
+1. How often did the frozen technical strategies produce candidates?
+2. Did the current ranking and tradability policy add value over rejected candidates?
+3. What happened after a realistic next-session open entry with costs and risk rules?
+
+## Isolation contract
+
+Historical rows are written only to:
+
+- `historical_replay_runs`
+- `historical_replay_events`
+- `historical_replay_outcomes`
+
+They never enter `scan_runs`, `candidate_events`, `predictions`, or
+`paper_trades`. The current AI training loader therefore cannot consume replay
+rows accidentally. A later model experiment may opt into them only after replay
+quality and out-of-sample behavior are reviewed.
+
+## Point-in-time contract
+
+For decision date `D`:
+
+- Technical indicators and strategy checks receive bars no later than `D`.
+- Market breadth, industry heat, volume ratios, and previous close use bars before
+  `D`, plus the completed EOD bar for `D` as the decision snapshot.
+- Entry is the next available session open.
+- The existing chase limit, gap-below-defense rejection, transaction costs,
+  T+3 defense close, benchmark excess return, and drawdown rules are reused.
+- Outcome bars after `D` are available only to the execution evaluator, never to
+  signal generation or ranking.
+
+## Known limitations
+
+The default universe comes from the current `twstock` listing. Replaying older
+dates with it has survivorship bias because delisted securities are absent and
+later IPOs may be overrepresented in the universe definition. Use a versioned
+CSV with `code,name,industry,market` columns when a historically accurate
+universe becomes available.
+
+Yahoo Finance history can include later corrections and adjustment metadata.
+Version 1 also excludes historical point-in-time fundamentals and news. These
+limitations are stored on every replay run and must be considered before using
+the evidence for model training or promotion.
+
+## Running a replay
+
+```bash
+venv/bin/python3 historical_replay.py \
+  --start 2025-01-01 \
+  --end 2025-12-31
+```
+
+Useful scoped runs:
+
+```bash
+venv/bin/python3 historical_replay.py \
+  --start 2025-01-01 --end 2025-03-31 \
+  --codes 2330,2454,2303
+
+venv/bin/python3 historical_replay.py \
+  --start 2025-01-01 --end 2025-12-31 \
+  --universe-file data/universe_2025.csv --replace
+```
+
+The GitHub Actions workflow `Historical Point-in-Time Replay` provides the same
+operation without requiring a local process. It is manual because a full-market
+multi-year replay is intentionally separate from the latency-sensitive intraday
+workflow.
+
+## Research health monitor
+
+`research_monitor.py` deduplicates prospective predictions to the earliest row
+for each `(run_id, code)` cohort. It counts distinct later scan trade dates, so a
+prediction becomes expected to mature only after three later trading sessions.
+Weekends and multiple intraday runs on the same day do not advance the clock.
+
+Statuses:
+
+- `healthy`: prospective outcomes are current and at least one replay completed.
+- `building`: prospective cohorts or replay evidence are still accumulating.
+- `warning`: the latest replay did not complete.
+- `critical`: one or more prospective cohorts passed T+3 without a mature label.
+
+Both daily and intraday automation run the monitor before exporting the public
+dashboard snapshot.

@@ -70,6 +70,40 @@ export type ResearchExperiment = {
   rejectionReasons: string[];
 };
 
+export type ResearchHealth = {
+  status: "healthy" | "building" | "warning" | "critical";
+  checkedAt: string;
+  latestTradeDate: string;
+  prospectiveCohorts: number;
+  pendingCohorts: number;
+  matureT3Cohorts: number;
+  expectedMatureT3: number;
+  staleOutcomes: number;
+  oldestPendingSessions: number;
+  maturityCoveragePct: number;
+  replayRuns: number;
+  completedReplayRuns: number;
+  latestReplayAt: string | null;
+  latestReplayStatus: string | null;
+  latestReplayStart: string | null;
+  latestReplayEnd: string | null;
+  replayEvents: number;
+  replaySelected: number;
+  replayMatureT3: number;
+  replayAvailableSymbols: number;
+  replayTradingDays: number;
+  warnings: string[];
+  replayDataWarnings: string[];
+  replaySelectedMeanNetReturn3d: number | null;
+  replaySelectedMeanExcessReturn3d: number | null;
+  replayRejectedMeanNetReturn3d: number | null;
+  replayRejectedMeanExcessReturn3d: number | null;
+  replaySelectionNetLift3d: number | null;
+  replaySelectionExcessLift3d: number | null;
+  replaySelectedSuccessRateT3: number | null;
+  replayRejectedSuccessRateT3: number | null;
+};
+
 export type Candidate = {
   tradeDate: string;
   runAt: string;
@@ -368,6 +402,7 @@ export type DashboardSnapshot = {
   candidateDetailDays: number;
   overview: Overview;
   researchQuality: ResearchQuality;
+  researchHealth: ResearchHealth;
   researchExperiments: ResearchExperiment[];
   candidates: Candidate[];
   dailyCandidates: DailyCandidate[];

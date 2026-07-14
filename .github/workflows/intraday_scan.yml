@@ -86,6 +86,11 @@ jobs:
       run: |
         python global_market.py
 
+    - name: Audit research data maturity
+      if: steps.gate.outputs.run == 'true'
+      run: |
+        python research_monitor.py
+
     - name: Export dashboard snapshot
       if: steps.gate.outputs.run == 'true'
       run: |

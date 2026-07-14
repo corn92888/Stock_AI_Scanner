@@ -1,0 +1,90 @@
+name: Historical Point-in-Time Replay
+run-name: Historical replay (${{ inputs.start_date }} to ${{ inputs.end_date }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: First historical decision date (YYYY-MM-DD)
+        required: true
+        type: string
+      end_date:
+        description: Last historical decision date (YYYY-MM-DD)
+        required: true
+        type: string
+      codes:
+        description: Optional comma-separated stock codes
+        required: false
+        default: ""
+        type: string
+      max_symbols:
+        description: Optional deterministic universe cap; 0 scans all stocks
+        required: false
+        default: "0"
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stock-scanner-automation
+  cancel-in-progress: false
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Synchronize latest research database
+      run: git pull --ff-only origin main
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-intraday.txt
+
+    - name: Run isolated historical replay
+      env:
+        START_DATE: ${{ inputs.start_date }}
+        END_DATE: ${{ inputs.end_date }}
+        CODES: ${{ inputs.codes }}
+        MAX_SYMBOLS: ${{ inputs.max_symbols }}
+      run: |
+        args=(--start "$START_DATE" --end "$END_DATE" --replace)
+        if [ -n "$CODES" ]; then
+          args+=(--codes "$CODES")
+        fi
+        if [ "${MAX_SYMBOLS:-0}" -gt 0 ]; then
+          args+=(--max-symbols "$MAX_SYMBOLS")
+        fi
+        python historical_replay.py "${args[@]}"
+
+    - name: Refresh research health and dashboard
+      run: |
+        python research_monitor.py
+        python export_dashboard_snapshot.py
+
+    - name: Persist replay evidence
+      run: |
+        bash persist_scanner_data.sh "chore(data): record historical replay evidence"
+
+    - name: Upload replay database
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: historical-replay-${{ inputs.start_date }}-${{ inputs.end_date }}
+        path: |
+          data/stock_scanner.db
+          data/dashboard_snapshot.json
+        retention-days: 7
+        if-no-files-found: error

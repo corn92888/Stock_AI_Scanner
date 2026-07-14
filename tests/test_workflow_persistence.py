@@ -7,7 +7,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 class WorkflowPersistenceTests(unittest.TestCase):
     def test_workflows_use_conflict_safe_persistence_script(self):
-        for workflow_name in ("intraday_scan.yml", "daily_scan.yml", "global_market.yml"):
+        for workflow_name in (
+            "intraday_scan.yml",
+            "daily_scan.yml",
+            "global_market.yml",
+            "historical_replay.yml",
+        ):
             workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
             self.assertIn("git pull --ff-only origin main", workflow)
             self.assertIn("bash persist_scanner_data.sh", workflow)
@@ -56,13 +61,22 @@ class WorkflowPersistenceTests(unittest.TestCase):
         training_index = workflow.index("python ai_pipeline.py --no-news")
         evaluation_index = workflow.index("python research_evaluation.py")
         paper_index = workflow.index("python paper_trading.py")
+        monitor_index = workflow.index("python research_monitor.py")
+        export_index = workflow.index("python export_dashboard_snapshot.py")
         self.assertLess(candidate_index, training_index)
         self.assertLess(training_index, evaluation_index)
         self.assertLess(evaluation_index, paper_index)
         self.assertLess(training_index, paper_index)
+        self.assertLess(paper_index, monitor_index)
+        self.assertLess(monitor_index, export_index)
 
     def test_automated_data_commits_use_conventional_english_messages(self):
-        for workflow_name in ("intraday_scan.yml", "daily_scan.yml", "global_market.yml"):
+        for workflow_name in (
+            "intraday_scan.yml",
+            "daily_scan.yml",
+            "global_market.yml",
+            "historical_replay.yml",
+        ):
             workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
             self.assertRegex(
                 workflow,

@@ -286,6 +286,89 @@ def _model_challenger_snapshot(conn):
     return rows
 
 
+def _empty_research_health():
+    return {
+        "status": "building",
+        "checkedAt": "",
+        "latestTradeDate": "",
+        "prospectiveCohorts": 0,
+        "pendingCohorts": 0,
+        "matureT3Cohorts": 0,
+        "expectedMatureT3": 0,
+        "staleOutcomes": 0,
+        "oldestPendingSessions": 0,
+        "maturityCoveragePct": 0,
+        "replayRuns": 0,
+        "completedReplayRuns": 0,
+        "latestReplayAt": None,
+        "latestReplayStatus": None,
+        "latestReplayStart": None,
+        "latestReplayEnd": None,
+        "replayEvents": 0,
+        "replaySelected": 0,
+        "replayMatureT3": 0,
+        "replayAvailableSymbols": 0,
+        "replayTradingDays": 0,
+        "warnings": ["研究健康監控尚未完成第一次執行。"],
+        "replayDataWarnings": [],
+        "replaySelectedMeanNetReturn3d": None,
+        "replaySelectedMeanExcessReturn3d": None,
+        "replayRejectedMeanNetReturn3d": None,
+        "replayRejectedMeanExcessReturn3d": None,
+        "replaySelectionNetLift3d": None,
+        "replaySelectionExcessLift3d": None,
+        "replaySelectedSuccessRateT3": None,
+        "replayRejectedSuccessRateT3": None,
+    }
+
+
+def _research_health_snapshot(conn):
+    if not _table_exists(conn, "research_health_snapshots"):
+        return _empty_research_health()
+    row = conn.execute(
+        """
+        SELECT * FROM research_health_snapshots
+        ORDER BY checked_at DESC, id DESC LIMIT 1
+        """
+    ).fetchone()
+    if not row:
+        return _empty_research_health()
+    metrics = _decode_object(row["metrics_json"])
+    return {
+        "status": row["status"],
+        "checkedAt": row["checked_at"],
+        "latestTradeDate": row["latest_trade_date"] or "",
+        "prospectiveCohorts": int(row["prospective_cohorts"] or 0),
+        "pendingCohorts": int(row["pending_cohorts"] or 0),
+        "matureT3Cohorts": int(row["mature_t3_cohorts"] or 0),
+        "expectedMatureT3": int(row["expected_mature_t3"] or 0),
+        "staleOutcomes": int(row["stale_outcomes"] or 0),
+        "oldestPendingSessions": int(row["oldest_pending_sessions"] or 0),
+        "maturityCoveragePct": metrics.get("maturity_coverage_pct", 0),
+        "replayRuns": int(row["replay_runs"] or 0),
+        "completedReplayRuns": int(row["completed_replay_runs"] or 0),
+        "latestReplayAt": row["latest_replay_at"],
+        "latestReplayStatus": metrics.get("latest_replay_status"),
+        "latestReplayStart": metrics.get("latest_replay_start"),
+        "latestReplayEnd": metrics.get("latest_replay_end"),
+        "replayEvents": int(row["replay_events"] or 0),
+        "replaySelected": int(row["replay_selected"] or 0),
+        "replayMatureT3": int(row["replay_mature_t3"] or 0),
+        "replayAvailableSymbols": int(metrics.get("replay_available_symbols", 0) or 0),
+        "replayTradingDays": int(metrics.get("replay_trading_days", 0) or 0),
+        "warnings": _decode_list(row["warnings_json"]),
+        "replayDataWarnings": metrics.get("replay_data_warnings", []),
+        "replaySelectedMeanNetReturn3d": metrics.get("replay_selected_mean_net_return_3d"),
+        "replaySelectedMeanExcessReturn3d": metrics.get("replay_selected_mean_excess_return_3d"),
+        "replayRejectedMeanNetReturn3d": metrics.get("replay_rejected_mean_net_return_3d"),
+        "replayRejectedMeanExcessReturn3d": metrics.get("replay_rejected_mean_excess_return_3d"),
+        "replaySelectionNetLift3d": metrics.get("replay_selection_net_lift_3d"),
+        "replaySelectionExcessLift3d": metrics.get("replay_selection_excess_lift_3d"),
+        "replaySelectedSuccessRateT3": metrics.get("replay_selected_success_rate_t3"),
+        "replayRejectedSuccessRateT3": metrics.get("replay_rejected_success_rate_t3"),
+    }
+
+
 def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
     db_path = Path(db_path)
     if not db_path.exists():
@@ -820,6 +903,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
         global_market = _global_market_snapshot(conn)
         research_experiments = _research_experiment_snapshot(conn)
         model_challengers = _model_challenger_snapshot(conn)
+        research_health = _research_health_snapshot(conn)
 
         return {
             "schemaVersion": SCHEMA_VERSION,
@@ -827,6 +911,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "candidateDetailDays": CANDIDATE_DETAIL_DAYS,
             "overview": overview,
             "researchQuality": research_quality,
+            "researchHealth": research_health,
             "researchExperiments": research_experiments,
             "candidates": candidates,
             "dailyCandidates": daily_candidates,

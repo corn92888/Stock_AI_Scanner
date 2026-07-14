@@ -87,6 +87,8 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertEqual(payload["paperAccounts"], [])
             self.assertEqual(payload["researchExperiments"], [])
             self.assertEqual(payload["modelChallengers"], [])
+            self.assertEqual(payload["researchHealth"]["status"], "building")
+            self.assertEqual(payload["researchHealth"]["staleOutcomes"], 0)
             self.assertEqual(payload["globalMarket"]["quality"]["status"], "unavailable")
             self.assertFalse(payload["globalMarket"]["quality"]["formalRankingEnabled"])
             self.assertEqual(payload["researchQuality"]["matureRejectedOutcomes"], 0)
