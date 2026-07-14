@@ -85,6 +85,8 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertEqual(payload["overview"]["candidateOutcomes"], 0)
             self.assertEqual(payload["overview"]["paperAccounts"], 0)
             self.assertEqual(payload["paperAccounts"], [])
+            self.assertEqual(payload["globalMarket"]["quality"]["status"], "unavailable")
+            self.assertFalse(payload["globalMarket"]["quality"]["formalRankingEnabled"])
             self.assertEqual(payload["researchQuality"]["matureRejectedOutcomes"], 0)
             self.assertIsNone(payload["researchQuality"]["selectionNetLift3d"])
             self.assertEqual(payload["candidates"][0]["strategies"], ["trend"])

@@ -6,3 +6,4 @@ Reports/
 data/portfolio_holdings.db
 data/*.db-shm
 data/*.db-wal
+data/global_market_latest.json

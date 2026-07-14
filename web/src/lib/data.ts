@@ -3,7 +3,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { DashboardSnapshot, ResearchQuality, WorkflowRun } from "./types";
+import type { DashboardSnapshot, GlobalMarketSnapshot, ResearchQuality, WorkflowRun } from "./types";
 
 const DEFAULT_DATA_URL =
   "https://raw.githubusercontent.com/corn92888/Stock_AI_Scanner/main/data/dashboard_snapshot.json";
@@ -27,6 +27,29 @@ const EMPTY_RESEARCH_QUALITY: ResearchQuality = {
   rejectedMeanExcessReturn3d: null,
   selectionNetLift3d: null,
   selectionExcessLift3d: null,
+};
+
+const EMPTY_GLOBAL_MARKET: GlobalMarketSnapshot = {
+  modelVersion: "global_regime_shadow_v1",
+  snapshotAt: "",
+  score: 50,
+  regimeLabel: "資料建立中",
+  taiwanBiasScore: 50,
+  taiwanBiasLabel: "資料建立中",
+  components: [],
+  drivers: [],
+  instruments: [],
+  history: [],
+  quality: {
+    status: "unavailable",
+    coveragePct: 0,
+    activeFreshPct: 0,
+    available: 0,
+    total: 0,
+    missingKeys: [],
+    warnings: ["跨市場資料尚未完成第一次收集。"],
+    formalRankingEnabled: false,
+  },
 };
 
 function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnapshot {
@@ -55,6 +78,18 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
     })),
     paperEquity: snapshot.paperEquity ?? [],
     paperTrades: snapshot.paperTrades ?? [],
+    globalMarket: {
+      ...EMPTY_GLOBAL_MARKET,
+      ...(snapshot.globalMarket ?? {}),
+      quality: {
+        ...EMPTY_GLOBAL_MARKET.quality,
+        ...(snapshot.globalMarket?.quality ?? {}),
+      },
+      components: snapshot.globalMarket?.components ?? [],
+      drivers: snapshot.globalMarket?.drivers ?? [],
+      instruments: snapshot.globalMarket?.instruments ?? [],
+      history: snapshot.globalMarket?.history ?? [],
+    },
   };
 }
 
@@ -66,6 +101,9 @@ async function localSnapshot(): Promise<DashboardSnapshot> {
 }
 
 export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
+  if (process.env.NODE_ENV !== "production") {
+    return localSnapshot();
+  }
   try {
     const sourceUrl = process.env.DASHBOARD_DATA_URL ?? DEFAULT_DATA_URL;
     const versionedUrl = new URL(sourceUrl);

@@ -151,6 +151,7 @@ def init_db(conn):
     )
     _migrate_backtest_results(conn)
     _create_quant_tables(conn)
+    _create_global_market_tables(conn)
     _migrate_quant_tables(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_trade_date ON stock_signals(trade_date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_strategy ON stock_signals(strategy)")
@@ -168,6 +169,14 @@ def init_db(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_candidate_outcomes_status "
         "ON candidate_outcomes(execution_version, matured_horizon, outcome_status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_market_observations_key_time "
+        "ON market_observations(instrument_key, snapshot_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_market_regime_time "
+        "ON market_regime_snapshots(snapshot_at DESC)"
     )
     conn.commit()
 
@@ -555,6 +564,70 @@ def _create_quant_tables(conn):
             partial_count INTEGER NOT NULL DEFAULT 0,
             skipped_count INTEGER NOT NULL DEFAULT 0,
             error_text TEXT
+        )
+        """
+    )
+
+
+def _create_global_market_tables(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS market_instruments (
+            instrument_key TEXT PRIMARY KEY,
+            symbol TEXT,
+            display_name TEXT NOT NULL,
+            group_name TEXT NOT NULL,
+            region TEXT NOT NULL,
+            asset_class TEXT NOT NULL,
+            currency TEXT,
+            source_name TEXT NOT NULL,
+            source_tier TEXT NOT NULL,
+            impact_direction REAL NOT NULL DEFAULT 0,
+            model_weight REAL NOT NULL DEFAULT 0,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS market_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_at TEXT NOT NULL,
+            instrument_key TEXT NOT NULL,
+            market_at TEXT,
+            price REAL,
+            previous_close REAL,
+            pct_change REAL,
+            return_5d REAL,
+            shock_z REAL,
+            volume REAL,
+            source_name TEXT NOT NULL,
+            source_tier TEXT NOT NULL,
+            data_status TEXT NOT NULL,
+            session_status TEXT NOT NULL,
+            latency_minutes REAL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (instrument_key) REFERENCES market_instruments(instrument_key),
+            UNIQUE (snapshot_at, instrument_key)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS market_regime_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_at TEXT NOT NULL UNIQUE,
+            score REAL NOT NULL,
+            regime_label TEXT NOT NULL,
+            taiwan_bias_score REAL NOT NULL,
+            taiwan_bias_label TEXT NOT NULL,
+            coverage_pct REAL NOT NULL,
+            active_fresh_pct REAL NOT NULL,
+            components_json TEXT NOT NULL,
+            drivers_json TEXT NOT NULL,
+            quality_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
         )
         """
     )

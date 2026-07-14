@@ -34,6 +34,10 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Synchronize latest research database
+      run: |
+        git pull --ff-only origin main
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -73,6 +77,15 @@ jobs:
       run: |
         python intraday_analysis_report.py --run-scanner --run-market-monitor --run-ai --send-telegram --send-raw-scanner-telegram
 
+    - name: Refresh global market context
+      if: steps.gate.outputs.run == 'true'
+      continue-on-error: true
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      run: |
+        python global_market.py
+
     - name: Export dashboard snapshot
       if: steps.gate.outputs.run == 'true'
       run: |
@@ -95,6 +108,7 @@ jobs:
           Reports/盤中候選交叉排名_*.csv
           data/stock_scanner.db
           data/dashboard_snapshot.json
+          data/global_market_latest.json
         retention-days: 5
         if-no-files-found: ignore
 

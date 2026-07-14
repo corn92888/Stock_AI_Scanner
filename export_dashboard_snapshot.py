@@ -96,6 +96,104 @@ def _backtest_scope(config_json):
         return "legacy"
 
 
+def _empty_global_market():
+    return {
+        "modelVersion": "global_regime_shadow_v1",
+        "snapshotAt": "",
+        "score": 50,
+        "regimeLabel": "資料建立中",
+        "taiwanBiasScore": 50,
+        "taiwanBiasLabel": "資料建立中",
+        "components": [],
+        "drivers": [],
+        "instruments": [],
+        "history": [],
+        "quality": {
+            "status": "unavailable",
+            "coveragePct": 0,
+            "activeFreshPct": 0,
+            "available": 0,
+            "total": 0,
+            "missingKeys": [],
+            "warnings": ["跨市場資料尚未完成第一次收集。"],
+            "formalRankingEnabled": False,
+        },
+    }
+
+
+def _global_market_snapshot(conn):
+    required = {"market_instruments", "market_observations", "market_regime_snapshots"}
+    if any(not _table_exists(conn, table) for table in required):
+        return _empty_global_market()
+    latest = conn.execute(
+        """
+        SELECT * FROM market_regime_snapshots
+        ORDER BY snapshot_at DESC, id DESC LIMIT 1
+        """
+    ).fetchone()
+    if not latest:
+        return _empty_global_market()
+
+    instruments = _read_records(
+        conn,
+        """
+        SELECT
+            mi.instrument_key AS key, mi.symbol, mi.display_name AS name,
+            mi.group_name AS `group`, mi.region, mi.asset_class AS assetClass,
+            mi.currency, mo.market_at AS marketAt, mo.price,
+            mo.previous_close AS previousClose, mo.pct_change AS pctChange,
+            mo.return_5d AS return5d, mo.shock_z AS shockZ, mo.volume,
+            mo.source_name AS sourceName, mo.source_tier AS sourceTier,
+            mo.data_status AS dataStatus, mo.session_status AS sessionStatus,
+            mo.latency_minutes AS latencyMinutes,
+            mi.impact_direction AS impactDirection, mi.model_weight AS modelWeight
+        FROM market_observations mo
+        JOIN market_instruments mi ON mi.instrument_key=mo.instrument_key
+        WHERE mo.snapshot_at=?
+        ORDER BY
+            CASE mi.group_name
+                WHEN '台灣市場' THEN 0 WHEN '美股風險' THEN 1
+                WHEN '亞洲科技' THEN 2 WHEN '匯率與利率' THEN 3 ELSE 4
+            END,
+            mi.model_weight DESC, mi.instrument_key
+        """,
+        (latest["snapshot_at"],),
+    )
+    drivers = _decode_list(latest["drivers_json"])
+    driver_points = {row.get("key"): row.get("impactPoints", 0) for row in drivers}
+    for row in instruments:
+        row["impactPoints"] = driver_points.get(row["key"], 0)
+
+    history = _read_records(
+        conn,
+        """
+        SELECT snapshot_at AS snapshotAt, score,
+               taiwan_bias_score AS taiwanBiasScore,
+               coverage_pct AS coveragePct,
+               active_fresh_pct AS activeFreshPct
+        FROM market_regime_snapshots
+        ORDER BY snapshot_at DESC, id DESC
+        LIMIT 192
+        """,
+    )
+    history.reverse()
+    quality = _decode_object(latest["quality_json"])
+    quality.setdefault("coveragePct", latest["coverage_pct"])
+    quality.setdefault("activeFreshPct", latest["active_fresh_pct"])
+    quality.setdefault("formalRankingEnabled", False)
+    return {
+        "modelVersion": "global_regime_shadow_v1",
+        "snapshotAt": latest["snapshot_at"],
+        "score": latest["score"],
+        "regimeLabel": latest["regime_label"],
+        "taiwanBiasScore": latest["taiwan_bias_score"],
+        "taiwanBiasLabel": latest["taiwan_bias_label"],
+        "components": _decode_list(latest["components_json"]),
+        "drivers": drivers,
+        "instruments": instruments,
+        "history": history,
+        "quality": quality,
+    }
 def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
     db_path = Path(db_path)
     if not db_path.exists():
@@ -614,6 +712,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             for row in paper_accounts
             if row.get("evidenceMode") == "prospective_only"
         )
+        global_market = _global_market_snapshot(conn)
 
         return {
             "schemaVersion": SCHEMA_VERSION,
@@ -631,6 +730,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "paperAccounts": paper_accounts,
             "paperEquity": paper_equity,
             "paperTrades": paper_trades,
+            "globalMarket": global_market,
         }
     finally:
         conn.close()

@@ -5,6 +5,7 @@ const API_ROOT = `https://api.github.com/repos/${REPOSITORY}`;
 
 export const INTRADAY_WORKFLOW = "intraday_scan.yml";
 export const DAILY_WORKFLOW = "daily_scan.yml";
+export const MARKET_WORKFLOW = "global_market.yml";
 
 export type GitHubRun = {
   id: number;

@@ -249,6 +249,73 @@ export type PaperTrade = {
   skipReason: string | null;
 };
 
+export type GlobalMarketInstrument = {
+  key: string;
+  symbol: string | null;
+  name: string;
+  group: string;
+  region: string;
+  assetClass: string;
+  currency: string;
+  marketAt: string | null;
+  price: number | null;
+  previousClose: number | null;
+  pctChange: number | null;
+  return5d: number | null;
+  shockZ: number | null;
+  volume: number | null;
+  sourceName: string;
+  sourceTier: string;
+  dataStatus: "fresh" | "delayed" | "closed" | "stale" | "unavailable" | "not_connected";
+  sessionStatus: "open" | "closed";
+  latencyMinutes: number | null;
+  impactDirection: number;
+  modelWeight: number;
+  impactPoints: number;
+};
+
+export type GlobalMarketSnapshot = {
+  modelVersion: string;
+  snapshotAt: string;
+  score: number;
+  regimeLabel: string;
+  taiwanBiasScore: number;
+  taiwanBiasLabel: string;
+  components: Array<{
+    key: string;
+    name: string;
+    score: number;
+    coverage: number;
+    total: number;
+  }>;
+  drivers: Array<{
+    key: string;
+    name: string;
+    impactPoints: number;
+    pctChange: number | null;
+    tone: "positive" | "negative";
+    reason: string;
+  }>;
+  instruments: GlobalMarketInstrument[];
+  history: Array<{
+    snapshotAt: string;
+    score: number;
+    taiwanBiasScore: number;
+    coveragePct: number;
+    activeFreshPct: number;
+  }>;
+  quality: {
+    status: string;
+    coveragePct: number;
+    activeFreshPct: number;
+    available: number;
+    total: number;
+    missingKeys: string[];
+    warnings: string[];
+    formalRankingEnabled: boolean;
+  };
+};
+
 export type DashboardSnapshot = {
   schemaVersion: string;
   generatedAt: string;
@@ -265,6 +332,7 @@ export type DashboardSnapshot = {
   paperAccounts: PaperAccount[];
   paperEquity: PaperEquityPoint[];
   paperTrades: PaperTrade[];
+  globalMarket: GlobalMarketSnapshot;
 };
 
 export type WorkflowRun = {

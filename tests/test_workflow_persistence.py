@@ -7,8 +7,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 class WorkflowPersistenceTests(unittest.TestCase):
     def test_workflows_use_conflict_safe_persistence_script(self):
-        for workflow_name in ("intraday_scan.yml", "daily_scan.yml"):
+        for workflow_name in ("intraday_scan.yml", "daily_scan.yml", "global_market.yml"):
             workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
+            self.assertIn("git pull --ff-only origin main", workflow)
             self.assertIn("bash persist_scanner_data.sh", workflow)
             self.assertNotIn("git pull --rebase origin main\n            git push", workflow)
 
@@ -29,16 +30,19 @@ class WorkflowPersistenceTests(unittest.TestCase):
     def test_vercel_owns_all_automation_schedules(self):
         workflow = (ROOT / ".github" / "workflows" / "intraday_scan.yml").read_text()
         daily_workflow = (ROOT / ".github" / "workflows" / "daily_scan.yml").read_text()
+        market_workflow = (ROOT / ".github" / "workflows" / "global_market.yml").read_text()
         vercel = (ROOT / "web" / "vercel.json").read_text()
 
         self.assertNotIn("schedule:", workflow)
         self.assertNotIn("schedule:", daily_workflow)
+        self.assertNotIn("schedule:", market_workflow)
         self.assertIn('"schedule": "0,30 1-5 * * 1-5"', vercel)
         self.assertIn('"schedule": "17 6 * * 1-5"', vercel)
+        self.assertIn('"schedule": "17 * * * 1-5"', vercel)
         self.assertIn('SCHEDULED_CRON: ${{ inputs.scheduled_cron }}', workflow)
 
     def test_vercel_cron_routes_fail_closed_with_cron_secret(self):
-        for route_name in ("intraday", "daily"):
+        for route_name in ("intraday", "daily", "market"):
             route = (
                 ROOT / "web" / "src" / "app" / "api" / "cron" / route_name / "route.ts"
             ).read_text()
@@ -55,9 +59,12 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertLess(training_index, paper_index)
 
     def test_automated_data_commits_use_conventional_english_messages(self):
-        for workflow_name in ("intraday_scan.yml", "daily_scan.yml"):
+        for workflow_name in ("intraday_scan.yml", "daily_scan.yml", "global_market.yml"):
             workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
-            self.assertIn('bash persist_scanner_data.sh "chore(data): record', workflow)
+            self.assertRegex(
+                workflow,
+                r'bash persist_scanner_data\.sh "chore\(data\): (record|refresh)',
+            )
 
 
 if __name__ == "__main__":

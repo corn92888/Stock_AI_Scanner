@@ -1,7 +1,8 @@
 import DashboardShell from "@/components/dashboard-shell";
 import { getDashboardSnapshot, getWorkflowRuns } from "@/lib/data";
 
-export default async function Home() {
+export default async function Home({ searchParams }: { searchParams: Promise<{ view?: string }> }) {
+  const { view } = await searchParams;
   const [snapshot, workflowRuns] = await Promise.all([
     getDashboardSnapshot(),
     getWorkflowRuns(),
@@ -15,6 +16,7 @@ export default async function Home() {
       snapshot={snapshot}
       workflowRuns={workflowRuns}
       snapshotFresh={snapshotFresh}
+      initialView={view}
     />
   );
 }

@@ -21,6 +21,7 @@ import {
   ExternalLink,
   Filter,
   Gauge,
+  Globe2,
   Layers3,
   LoaderCircle,
   Menu,
@@ -53,15 +54,22 @@ import {
   YAxis,
 } from "recharts";
 
-import type { Candidate, DashboardSnapshot, PaperTrade, Performance, WorkflowRun } from "@/lib/types";
+import type { Candidate, DashboardSnapshot, GlobalMarketInstrument, PaperTrade, Performance, WorkflowRun } from "@/lib/types";
 
-type ViewId = "decision" | "performance" | "paper" | "pipeline" | "operations";
+type ViewId = "decision" | "market" | "performance" | "paper" | "pipeline" | "operations";
 type Scope = "latest" | "selected" | "all" | "rejected";
 type CandidateSort = "rank" | "score" | "turnover" | "volume" | "ai" | "excess";
 type SortDirection = "asc" | "desc";
 
+const viewIds: ViewId[] = ["decision", "market", "performance", "paper", "pipeline", "operations"];
+
+function isViewId(value: string | undefined): value is ViewId {
+  return Boolean(value && viewIds.includes(value as ViewId));
+}
+
 const navItems: Array<{ id: ViewId; label: string; hint: string; icon: typeof Gauge }> = [
   { id: "decision", label: "決策工作台", hint: "候選、共識與風險", icon: Gauge },
+  { id: "market", label: "全球市場", hint: "跨市場脈動與傳導", icon: Globe2 },
   { id: "performance", label: "策略驗證", hint: "報酬、回撤與穩定性", icon: BarChart3 },
   { id: "paper", label: "模擬資金", hint: "規則與 AI 資金競賽", icon: WalletCards },
   { id: "pipeline", label: "AI 與資料", hint: "模型門檻與學習進度", icon: Database },
@@ -139,6 +147,29 @@ function median(values: Array<number | null | undefined>) {
 
 function modeLabel(mode: string) {
   return mode === "intraday" ? "盤中" : mode === "eod" ? "盤後" : mode;
+}
+
+function marketStatusLabel(status: GlobalMarketInstrument["dataStatus"]) {
+  return {
+    fresh: "更新中",
+    delayed: "延遲",
+    closed: "休市",
+    stale: "過期",
+    unavailable: "暫無資料",
+    not_connected: "待接來源",
+  }[status];
+}
+
+function marketStatusTone(status: GlobalMarketInstrument["dataStatus"]) {
+  if (status === "fresh") return "selected";
+  if (status === "delayed" || status === "closed") return "neutral";
+  return "blocked";
+}
+
+function marketPrice(row: GlobalMarketInstrument) {
+  if (row.price == null) return "--";
+  const digits = row.assetClass === "fx" ? 3 : row.price < 100 ? 2 : 1;
+  return formatNumeric(row.price, digits, digits);
 }
 
 function statusTone(run: WorkflowRun) {
@@ -569,6 +600,67 @@ function DecisionView({ snapshot }: { snapshot: DashboardSnapshot }) {
   );
 }
 
+function GlobalMarketView({ snapshot }: { snapshot: DashboardSnapshot }) {
+  const market = snapshot.globalMarket;
+  const groups = ["全部", ...new Set(market.instruments.map((row) => row.group))];
+  const [group, setGroup] = useState("全部");
+  const rows = group === "全部" ? market.instruments : market.instruments.filter((row) => row.group === group);
+  const chartData = market.history.map((point) => ({
+    ...point,
+    label: formatDateTime(point.snapshotAt),
+  }));
+  const riskTone = market.score >= 62 ? "positive" : market.score <= 38 ? "danger" : "warning";
+  const nightMarket = market.instruments.find((row) => row.key === "taifex_night");
+  const connectedNight = Boolean(nightMarket?.price != null);
+
+  return (
+    <div className="view-stack">
+      <section className="metrics-grid metrics-grid-five">
+        <Metric label="全球風險分數" value={decimal.format(market.score)} detail={market.regimeLabel} tone={riskTone} icon={Globe2} />
+        <Metric label="台股傳導偏向" value={market.taiwanBiasLabel} detail={`影子分數 ${decimal.format(market.taiwanBiasScore)}`} tone={riskTone} icon={Activity} />
+        <Metric label="資料覆蓋" value={`${decimal.format(market.quality.coveragePct)}%`} detail={`${market.quality.available} / ${market.quality.total} 個市場`} tone={market.quality.coveragePct >= 85 ? "positive" : "warning"} icon={Database} />
+        <Metric label="開市資料可用" value={`${decimal.format(market.quality.activeFreshPct)}%`} detail="更新中或可接受延遲" tone={market.quality.activeFreshPct >= 80 ? "positive" : "danger"} icon={RefreshCw} />
+        <Metric label="台指期夜盤" value={connectedNight ? "CONNECTED" : "PENDING"} detail={connectedNight ? "已納入風險分數" : "等待授權行情來源"} tone={connectedNight ? "positive" : "warning"} icon={Clock3} />
+      </section>
+
+      <section className="market-policy-band">
+        <div><ShieldCheck size={18} /><div><strong>跨市場脈動目前以影子模式運作</strong><span>先驗證資料穩定性與預測增益，再決定是否加入正式排名，避免用未驗證關聯改寫選股。</span></div></div>
+        <span className="policy-code">{market.modelVersion}</span>
+      </section>
+
+      <section className="analysis-grid market-analysis-grid">
+        <div className="panel chart-panel">
+          <PanelHeader eyebrow="Regime tape" title="全球風險與台股傳導軌跡" description="每次收集保留點時資料；50 為中性，不代表買賣指令" trailing={<span className="record-count">{chartData.length} 筆</span>} />
+          <div className="chart-frame"><ResponsiveContainer width="100%" height="100%"><LineChart data={chartData} margin={{ top: 15, right: 18, left: -17, bottom: 0 }}><CartesianGrid stroke="#2b2e31" vertical={false} /><XAxis dataKey="label" stroke="#777d82" tickLine={false} axisLine={false} minTickGap={38} /><YAxis domain={[0, 100]} stroke="#777d82" tickLine={false} axisLine={false} /><Tooltip contentStyle={tooltipStyle} /><ReferenceLine y={50} stroke="#72787d" strokeDasharray="4 4" /><Line type="monotone" dataKey="score" name="全球風險" stroke="#5fb3d9" strokeWidth={2} dot={chartData.length < 12} isAnimationActive={false} /><Line type="monotone" dataKey="taiwanBiasScore" name="台股傳導" stroke="#e2ae5f" strokeWidth={2} dot={false} isAnimationActive={false} /></LineChart></ResponsiveContainer></div>
+        </div>
+        <div className="panel component-panel">
+          <PanelHeader eyebrow="Transmission map" title="風險構面" description="各群組以自身有效資料標準化，觀察方向與覆蓋" />
+          <div className="component-list">{market.components.length ? market.components.map((component) => <div className="component-row" key={component.key}><div><span>{component.name}</span><strong className={component.score >= 50 ? "positive-text" : "negative-text"}>{decimal.format(component.score)}</strong></div><div className="regime-track"><i className={component.score >= 50 ? "positive" : "negative"} style={{ width: `${Math.max(2, component.score)}%` }} /></div><small>{component.coverage} / {component.total} 個有效市場</small></div>) : <div className="empty-state">完成第一次跨市場收集後，這裡會顯示風險構面。</div>}</div>
+        </div>
+      </section>
+
+      <section className="panel market-board">
+        <PanelHeader eyebrow="Cross-asset monitor" title="跨市場行情矩陣" description="價格時間與來源品質分開顯示，避免把休市收盤價誤認為即時行情" trailing={<span className="record-count">{rows.length} 個市場</span>} />
+        <div className="toolbar market-toolbar"><div className="segmented market-groups" aria-label="市場分類">{groups.map((item) => <button key={item} className={group === item ? "active" : ""} onClick={() => setGroup(item)}>{item}</button>)}</div></div>
+        <div className="table-scroll"><table className="data-table compact-table market-table"><thead><tr><th>市場</th><th>區域</th><th>狀態</th><th>最新價格</th><th>當期漲跌</th><th>5 日</th><th>衝擊 Z</th><th>台股貢獻</th><th>行情時間</th><th>資料來源</th></tr></thead><tbody>{rows.length ? rows.map((row) => <tr key={row.key}><td><div className="symbol-cell"><strong>{row.name}</strong><span>{row.symbol ?? row.key}</span></div></td><td>{row.region}</td><td><span className={`status-pill ${marketStatusTone(row.dataStatus)}`}>{marketStatusLabel(row.dataStatus)}</span></td><td className="mono-cell">{marketPrice(row)}</td><td className={(row.pctChange ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.pctChange)}</td><td className={(row.return5d ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.return5d)}</td><td>{row.shockZ == null ? "--" : decimal.format(row.shockZ)}</td><td className={row.impactPoints >= 0 ? "positive-text" : "negative-text"}>{row.modelWeight ? `${row.impactPoints > 0 ? "+" : ""}${decimal.format(row.impactPoints)}` : "觀察"}</td><td><div className="time-cell"><strong>{formatDateTime(row.marketAt)}</strong><span>{row.latencyMinutes == null ? "--" : `${number.format(row.latencyMinutes)} 分鐘差`}</span></div></td><td><div className="source-cell"><strong>{row.sourceName}</strong><span>{row.sourceTier}</span></div></td></tr>) : <tr><td colSpan={10}>尚無跨市場觀測。</td></tr>}</tbody></table></div>
+      </section>
+
+      <section className="analysis-grid equal-grid">
+        <div className="panel driver-panel">
+          <PanelHeader eyebrow="Top drivers" title="主要傳導因子" description="只解釋目前風險分數，不等於單一因果證明" />
+          <div className="driver-list">{market.drivers.length ? market.drivers.map((driver, index) => <div className="driver-row" key={driver.key}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{driver.name}</strong><small>{driver.reason}</small></div><div><strong className={driver.tone === "positive" ? "positive-text" : "negative-text"}>{driver.impactPoints > 0 ? "+" : ""}{decimal.format(driver.impactPoints)}</strong><small>{pct(driver.pctChange)}</small></div></div>) : <div className="empty-state">目前沒有足夠資料產生驅動因子。</div>}</div>
+        </div>
+        <div className="panel quality-panel">
+          <PanelHeader eyebrow="Data governance" title="資料品質與缺口" description="正式決策前必須知道哪些資料延遲、休市或尚未授權" />
+          <div className="quality-summary"><div><span>資料等級</span><strong>{market.quality.status}</strong></div><div><span>正式排名</span><strong className={market.quality.formalRankingEnabled ? "positive-text" : "warning-text"}>{market.quality.formalRankingEnabled ? "已啟用" : "未啟用"}</strong></div></div>
+          <ul className="quality-warnings">{market.quality.warnings.map((warning) => <li key={warning}><CircleAlert size={15} />{warning}</li>)}</ul>
+          <p className="market-asof">觀測建立：{formatDateTime(market.snapshotAt)}</p>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function PerformanceView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const [mode, setMode] = useState("all");
   const [sampleScope, setSampleScope] = useState<"formal" | "all">("formal");
@@ -885,14 +977,18 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
   );
 }
 
-export default function DashboardShell({ snapshot, workflowRuns, snapshotFresh }: { snapshot: DashboardSnapshot; workflowRuns: WorkflowRun[]; snapshotFresh: boolean }) {
+export default function DashboardShell({ snapshot, workflowRuns, snapshotFresh, initialView }: { snapshot: DashboardSnapshot; workflowRuns: WorkflowRun[]; snapshotFresh: boolean; initialView?: string }) {
   const router = useRouter();
-  const [view, setView] = useState<ViewId>("decision");
+  const [view, setView] = useState<ViewId>(isViewId(initialView) ? initialView : "decision");
   const [mobileMenu, setMobileMenu] = useState(false);
   const active = navItems.find((item) => item.id === view) ?? navItems[0];
   const latestModel = (snapshot.aiModels ?? [])[0];
   const aiState = (snapshot.overview.prospectivePredictions ?? 0) > 0 ? "AI 前瞻運作" : latestModel ? "AI 影子就緒" : "AI 尚未就緒";
-  const selectView = (next: ViewId) => { setView(next); setMobileMenu(false); };
+  const selectView = (next: ViewId) => {
+    setView(next);
+    setMobileMenu(false);
+    router.replace(`/?view=${next}`, { scroll: false });
+  };
 
   useEffect(() => {
     const refresh = () => router.refresh();
@@ -912,7 +1008,7 @@ export default function DashboardShell({ snapshot, workflowRuns, snapshotFresh }
       <aside className={`sidebar ${mobileMenu ? "open" : ""}`}>
         <div className="brand"><div className="brand-mark"><Activity size={21} /></div><div><strong>Stock AI Control</strong><span>Quant research OS</span></div><button className="mobile-close" onClick={() => setMobileMenu(false)} aria-label="關閉選單"><X size={18} /></button></div>
         <div className="workspace-label"><span>Workspace</span><strong>TAIWAN EQUITY</strong></div>
-        <nav>{navItems.map((item) => { const Icon = item.icon; return <button className={view === item.id ? "active" : ""} onClick={() => selectView(item.id)} key={item.id}><Icon size={19} /><span><strong>{item.label}</strong><small>{item.hint}</small></span><ChevronRight size={15} /></button>; })}</nav>
+        <nav>{navItems.map((item) => { const Icon = item.icon; return <a href={`/?view=${item.id}`} className={view === item.id ? "active" : ""} onClick={(event) => { event.preventDefault(); selectView(item.id); }} key={item.id}><Icon size={19} /><span><strong>{item.label}</strong><small>{item.hint}</small></span><ChevronRight size={15} /></a>; })}</nav>
         <div className="sidebar-footer"><div className={`system-indicator ${snapshotFresh ? "online" : "stale"}`}><span /><div><strong>{snapshotFresh ? "資料服務正常" : "資料需要更新"}</strong><small>{formatDateTime(snapshot.generatedAt)}</small></div></div><div className="sidebar-model"><Bot size={15} /><div><strong>{aiState}</strong><small>{latestModel?.version ?? "尚無模型版本"}</small></div></div><a href="https://github.com/corn92888/Stock_AI_Scanner" target="_blank" rel="noreferrer"><Code2 size={16} />查看原始碼<ExternalLink size={13} /></a></div>
       </aside>
       {mobileMenu && <button className="backdrop" onClick={() => setMobileMenu(false)} aria-label="關閉選單遮罩" />}
@@ -924,6 +1020,7 @@ export default function DashboardShell({ snapshot, workflowRuns, snapshotFresh }
         </header>
         <div className="main-content">
           {view === "decision" && <DecisionView snapshot={snapshot} />}
+          {view === "market" && <GlobalMarketView snapshot={snapshot} />}
           {view === "performance" && <PerformanceView snapshot={snapshot} />}
           {view === "paper" && <PaperTradingView snapshot={snapshot} />}
           {view === "pipeline" && <PipelineView snapshot={snapshot} />}
