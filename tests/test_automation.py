@@ -9,6 +9,8 @@ from unittest.mock import patch
 from automation_guard import (
     INTRADAY_SLOTS,
     TAIPEI_TZ,
+    eod_already_completed,
+    evaluate_eod_run,
     evaluate_intraday_run,
     find_intraday_slot,
     find_scheduled_slot,
@@ -61,12 +63,12 @@ class AutomationGuardTests(unittest.TestCase):
         decision = evaluate_intraday_run(
             now=now,
             db_path=self.db_path,
-            scheduled_cron="7 1 * * 1-5",
+            scheduled_cron="0 1 * * 1-5",
         )
 
         self.assertTrue(decision["run"])
         self.assertEqual(decision["slot"], "09:00")
-        self.assertEqual(find_scheduled_slot("37 5 * * 1-5").name, "13:30")
+        self.assertEqual(find_scheduled_slot("30 5 * * 1-5").name, "13:30")
 
     def test_completed_slot_is_detected_from_structured_notes(self):
         conn = sqlite3.connect(self.db_path)
@@ -106,6 +108,21 @@ class AutomationGuardTests(unittest.TestCase):
         )
         self.assertTrue(decision["run"])
         self.assertEqual(decision["slot"], "11:30")
+
+    def test_daily_automation_skips_an_existing_eod_run(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO scan_runs (run_at, trade_date, mode, notes) VALUES (?, ?, ?, ?)",
+            ("2026-07-10T14:20:00+08:00", "2026-07-10", "eod", "{}"),
+        )
+        conn.commit()
+        conn.close()
+
+        now = dt.datetime(2026, 7, 10, 14, 25, tzinfo=TAIPEI_TZ)
+        self.assertTrue(eod_already_completed(self.db_path, "2026-07-10"))
+        decision = evaluate_eod_run(now=now, db_path=self.db_path)
+        self.assertFalse(decision["run"])
+        self.assertEqual(decision["reason"], "eod_already_completed")
 
 
 class IntradaySafetyTests(unittest.TestCase):

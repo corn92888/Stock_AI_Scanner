@@ -192,15 +192,15 @@
   venv/bin/python3 test_telegram.py
   ```
 
-* **設定免開機雲端自動化 (GitHub Actions)：**
-  專案內建兩套 GitHub Actions 自動排程：
-  - `.github/workflows/intraday_scan.yml`: 每 30 分鐘探測一次，但只會在台北時間早盤 `09:35-10:35`、午盤 `11:10-12:10`、尾盤 `12:40-13:20` 各執行一次，降低 GitHub cron 延遲造成整天漏跑的機率；同時發送三策略標的清單與精簡盤中分析報告到 Telegram。
-  - `.github/workflows/daily_scan.yml`: 平日 `14:00` 結算每日盤後高防禦名單。
+* **設定免開機雲端自動化 (Vercel Cron + GitHub Actions)：**
+  專案內建兩套由 Vercel 觸發的 GitHub Actions worker：
+  - `.github/workflows/intraday_scan.yml`: 台北時間 `09:00-13:30` 每 30 分鐘執行，同時發送三策略標的清單與精簡盤中分析報告到 Telegram。
+  - `.github/workflows/daily_scan.yml`: 平日 `14:17` 結算每日盤後高防禦名單。
   只要將程式碼推送至 GitHub，並在專案的（Settings > Secrets and variables > Actions）中新增 `TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID` 與 `ANTHROPIC_API_KEY`，就能達成全自動監控與新聞 AI；`ANTHROPIC_MODEL` 可選擇放在 Actions Variables，未設定時使用程式預設值。
 
-  GitHub Actions 每次掃描後會把 `data/stock_scanner.db` commit 回 `main`，讓歷史選股訊號能跨排程持續累積，日後可直接用 `backtest.py` 驗證策略表現。
+  Vercel Cron 會在台灣交易日 09:00 至 13:30 每 30 分鐘呼叫受保護的站內 API，並在 14:17 觸發盤後工作。API 只負責 dispatch；GitHub Actions 作為 Python worker 執行掃描，完成後把 `data/stock_scanner.db` commit 回 `main`，讓歷史選股訊號能跨排程持續累積，日後可直接用 `backtest.py` 驗證策略表現。GitHub workflow 本身不再使用不穩定的 `schedule` 事件。
 
-  盤中與盤後工作共用 concurrency，不會同時改寫 SQLite。非交易時段會安全略過；當日報價或全市場覆蓋率低於 65%、或盤中日報與市場快照日期/時間不一致時，流程會拒絕產生分析。失敗仍會上傳已取得的 artifacts，並透過 Telegram 發送維運警報。
+  盤中與盤後工作共用 concurrency，不會同時改寫 SQLite。若前一輪超過 30 分鐘，下一個 Vercel 時段仍會 dispatch 並等待 worker；資料庫 gate 會阻止同一時段重複落盤。非交易時段會安全略過；當日報價或全市場覆蓋率低於 65%、或盤中日報與市場快照日期/時間不一致時，流程會拒絕產生分析。失敗仍會上傳已取得的 artifacts，並透過 Telegram 發送維運警報。
 
   每日盤後流程也會增量更新最多 200 筆成熟回測結果。行情來源暫時失敗時不會阻斷當日掃描資料保存，未完成的 `partial` 結果會在後續交易日繼續補齊。
 
@@ -217,8 +217,9 @@
   若要啟用站內盤中按鈕，請在 Vercel 專案的 Production Environment Variables 設定：
   - `GITHUB_ACTIONS_TOKEN`：只授權此 repository，且具備 GitHub Actions 讀寫權限的 fine-grained token。
   - `SCAN_TRIGGER_SECRET`：自訂的掃描控制碼。瀏覽器第一次執行時輸入，僅保留在該分頁的 session storage。
+  - `CRON_SECRET`：至少 16 字元的隨機值。Vercel 會自動以 `Authorization: Bearer ...` 傳給 Cron API，未通過驗證的請求一律拒絕。
 
-  本機開發可參考 `web/.env.example`。未設定這兩個伺服器端變數時，儀表板仍可讀取資料與工作流狀態，但會拒絕站內觸發掃描。
+  本機開發可參考 `web/.env.example`。未設定相關伺服器端變數時，儀表板仍可讀取資料與工作流狀態，但會拒絕站內觸發掃描。
 
 * **開啟戰情室 (Dashboard)：**
   ```bash

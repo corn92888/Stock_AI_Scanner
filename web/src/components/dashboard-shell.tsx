@@ -148,6 +148,12 @@ function statusTone(run: WorkflowRun) {
   return "danger";
 }
 
+function workflowTriggerLabel(run: WorkflowRun) {
+  if (run.displayTitle.includes("vercel-cron")) return "Vercel 排程";
+  if (run.event === "workflow_dispatch") return "手動執行";
+  return "定時排程";
+}
+
 type DirectScanRun = {
   id: number;
   status: string;
@@ -868,7 +874,7 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
 
       <section className="panel workflow-panel">
         <PanelHeader eyebrow="Live automation" title="最近工作流程" description="可直接開啟 GitHub 查看步驟、耗時與錯誤紀錄" trailing={<a className="icon-link" href="https://github.com/corn92888/Stock_AI_Scanner/actions" target="_blank" rel="noreferrer" aria-label="開啟 GitHub Actions" title="開啟 GitHub Actions"><Code2 size={17} /></a>} />
-        <div className="workflow-grid">{workflowRuns.length ? workflowRuns.slice(0, 10).map((run) => <a href={run.url} target="_blank" rel="noreferrer" className="workflow-row" key={run.id}><span className={`run-dot ${statusTone(run)}`} /><div><strong>{run.name}</strong><small>{run.event === "workflow_dispatch" ? "手動執行" : "定時排程"} · {formatDateTime(run.createdAt)}</small></div><span className={`workflow-status ${statusTone(run)}`}>{run.status !== "completed" ? "執行中" : run.conclusion === "success" ? "成功" : run.conclusion === "skipped" ? "略過" : run.conclusion ?? "未知"}</span><ExternalLink size={14} /></a>) : <div className="empty-state">GitHub 狀態暫時無法讀取，掃描入口仍可使用。</div>}</div>
+        <div className="workflow-grid">{workflowRuns.length ? workflowRuns.slice(0, 10).map((run) => <a href={run.url} target="_blank" rel="noreferrer" className="workflow-row" key={run.id}><span className={`run-dot ${statusTone(run)}`} /><div><strong>{run.name}</strong><small>{workflowTriggerLabel(run)} · {formatDateTime(run.createdAt)}</small></div><span className={`workflow-status ${statusTone(run)}`}>{run.status !== "completed" ? "執行中" : run.conclusion === "success" ? "成功" : run.conclusion === "skipped" ? "略過" : run.conclusion ?? "未知"}</span><ExternalLink size={14} /></a>) : <div className="empty-state">GitHub 狀態暫時無法讀取，掃描入口仍可使用。</div>}</div>
       </section>
 
       <section className="panel">

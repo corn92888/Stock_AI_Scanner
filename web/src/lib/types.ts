@@ -270,6 +270,7 @@ export type DashboardSnapshot = {
 export type WorkflowRun = {
   id: number;
   name: string;
+  displayTitle: string;
   event: string;
   status: string;
   conclusion: string | null;

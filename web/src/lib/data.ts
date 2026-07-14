@@ -99,6 +99,7 @@ export async function getWorkflowRuns(): Promise<WorkflowRun[]> {
       workflow_runs?: Array<{
         id: number;
         name: string;
+        display_title: string;
         event: string;
         status: string;
         conclusion: string | null;
@@ -110,6 +111,7 @@ export async function getWorkflowRuns(): Promise<WorkflowRun[]> {
     return (payload.workflow_runs ?? []).map((run) => ({
       id: run.id,
       name: run.name,
+      displayTitle: run.display_title,
       event: run.event,
       status: run.status,
       conclusion: run.conclusion,

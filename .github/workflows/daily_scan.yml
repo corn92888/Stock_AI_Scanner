@@ -1,10 +1,14 @@
 name: Daily Stock AI Scanner
+run-name: Daily scan (${{ inputs.trigger_source || 'workflow-dispatch' }})
 
 on:
-  schedule:
-    # 每週一到週五 UTC 6:17（台灣 14:17）執行，避開整點佇列高峰。
-    - cron: '17 6 * * 1-5'
-  workflow_dispatch: # 保留一個按鈕讓你可以隨時手動點擊觸發
+  workflow_dispatch:
+    inputs:
+      trigger_source:
+        description: Trigger source for audit logs
+        required: false
+        default: github
+        type: string
 
 permissions:
   contents: write
@@ -28,12 +32,26 @@ jobs:
         python-version: '3.10'
         cache: 'pip'
 
+    - name: Decide whether daily automation should run
+      id: gate
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        TRIGGER_SOURCE: ${{ inputs.trigger_source }}
+      run: |
+        args=(--mode eod)
+        if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$TRIGGER_SOURCE" != "vercel-cron" ]; then
+          args+=(--ignore-existing)
+        fi
+        python automation_guard.py --github-output "$GITHUB_OUTPUT" "${args[@]}"
+
     - name: Install dependencies
+      if: steps.gate.outputs.run == 'true'
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
     - name: Run scanner
+      if: steps.gate.outputs.run == 'true'
       env:
         # 將設定在 GitHub 上的秘密金鑰載入環境變數給 scanner.py 使用
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -42,21 +60,25 @@ jobs:
         python scanner.py
 
     - name: Update formal selection outcomes
+      if: steps.gate.outputs.run == 'true'
       continue-on-error: true
       run: |
         python backtest.py --selection-scope formal --limit 200
 
     - name: Update all candidate counterfactual outcomes
+      if: steps.gate.outputs.run == 'true'
       continue-on-error: true
       run: |
         python candidate_backtest.py --limit 400
 
     - name: Backfill non-formal research outcomes
+      if: steps.gate.outputs.run == 'true'
       continue-on-error: true
       run: |
         python backtest.py --selection-scope nonformal --limit 200
 
     - name: Update AI shadow model outcomes
+      if: steps.gate.outputs.run == 'true'
       continue-on-error: true
       env:
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -65,20 +87,22 @@ jobs:
         python ai_pipeline.py --no-news --no-predict
 
     - name: Settle rule and AI paper portfolios
+      if: steps.gate.outputs.run == 'true'
       run: |
         python paper_trading.py
 
     - name: Export dashboard snapshot
+      if: steps.gate.outputs.run == 'true'
       run: |
         python export_dashboard_snapshot.py
 
     - name: Persist signal database
-      if: always()
+      if: always() && steps.gate.outputs.run == 'true'
       run: |
         bash persist_scanner_data.sh "chore(data): record daily scanner signals"
 
     - name: Upload Excel Reports
-      if: always()
+      if: always() && steps.gate.outputs.run == 'true'
       # 將產出的 Excel 報表上傳打包，讓您可以直接從 GitHub 下載
       uses: actions/upload-artifact@v4
       with:
@@ -91,7 +115,7 @@ jobs:
         if-no-files-found: ignore
 
     - name: Send automation failure alert
-      if: failure()
+      if: failure() && steps.gate.outputs.run == 'true'
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -102,3 +126,11 @@ jobs:
             --data-urlencode "text=盤後自動化失敗｜run=${{ github.run_id }}｜請查看 GitHub Actions" \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
         fi
+
+    - name: Write automation summary
+      if: always()
+      run: |
+        echo "### Daily automation decision" >> "$GITHUB_STEP_SUMMARY"
+        echo "- Taipei time: ${{ steps.gate.outputs.now }}" >> "$GITHUB_STEP_SUMMARY"
+        echo "- Run: ${{ steps.gate.outputs.run }}" >> "$GITHUB_STEP_SUMMARY"
+        echo "- Reason: ${{ steps.gate.outputs.reason }}" >> "$GITHUB_STEP_SUMMARY"

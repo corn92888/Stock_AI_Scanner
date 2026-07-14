@@ -26,28 +26,25 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertIn("pip install --prefer-binary -r requirements-intraday.txt", workflow)
         self.assertNotIn("pip install -r requirements.txt", workflow)
 
-    def test_intraday_workflow_has_all_half_hour_market_slots(self):
+    def test_vercel_owns_all_automation_schedules(self):
         workflow = (ROOT / ".github" / "workflows" / "intraday_scan.yml").read_text()
-        expected_crons = (
-            "7 1 * * 1-5",
-            "37 1 * * 1-5",
-            "7 2 * * 1-5",
-            "37 2 * * 1-5",
-            "7 3 * * 1-5",
-            "37 3 * * 1-5",
-            "7 4 * * 1-5",
-            "37 4 * * 1-5",
-            "7 5 * * 1-5",
-            "37 5 * * 1-5",
-        )
+        daily_workflow = (ROOT / ".github" / "workflows" / "daily_scan.yml").read_text()
+        vercel = (ROOT / "web" / "vercel.json").read_text()
 
-        for cron in expected_crons:
-            self.assertEqual(workflow.count(f"cron: '{cron}'"), 1)
-        self.assertIn('EVENT_SCHEDULE: ${{ github.event.schedule }}', workflow)
+        self.assertNotIn("schedule:", workflow)
+        self.assertNotIn("schedule:", daily_workflow)
+        self.assertIn('"schedule": "0,30 1-5 * * 1-5"', vercel)
+        self.assertIn('"schedule": "17 6 * * 1-5"', vercel)
+        self.assertIn('SCHEDULED_CRON: ${{ inputs.scheduled_cron }}', workflow)
 
-    def test_daily_workflow_avoids_top_of_hour_queue_peak(self):
-        workflow = (ROOT / ".github" / "workflows" / "daily_scan.yml").read_text()
-        self.assertEqual(workflow.count("cron: '17 6 * * 1-5'"), 1)
+    def test_vercel_cron_routes_fail_closed_with_cron_secret(self):
+        for route_name in ("intraday", "daily"):
+            route = (
+                ROOT / "web" / "src" / "app" / "api" / "cron" / route_name / "route.ts"
+            ).read_text()
+            self.assertIn("process.env.CRON_SECRET", route)
+            self.assertIn("cronAuthorized", route)
+            self.assertIn("process.env.GITHUB_ACTIONS_TOKEN", route)
 
     def test_daily_workflow_backtests_all_candidates_before_training(self):
         workflow = (ROOT / ".github" / "workflows" / "daily_scan.yml").read_text()

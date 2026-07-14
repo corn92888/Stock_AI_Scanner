@@ -18,16 +18,16 @@ class ScanSlot:
 
 
 INTRADAY_SLOTS = (
-    ScanSlot("09:00", dt.time(9, 0), dt.time(9, 29, 59), "7 1 * * 1-5"),
-    ScanSlot("09:30", dt.time(9, 30), dt.time(9, 59, 59), "37 1 * * 1-5"),
-    ScanSlot("10:00", dt.time(10, 0), dt.time(10, 29, 59), "7 2 * * 1-5"),
-    ScanSlot("10:30", dt.time(10, 30), dt.time(10, 59, 59), "37 2 * * 1-5"),
-    ScanSlot("11:00", dt.time(11, 0), dt.time(11, 29, 59), "7 3 * * 1-5"),
-    ScanSlot("11:30", dt.time(11, 30), dt.time(11, 59, 59), "37 3 * * 1-5"),
-    ScanSlot("12:00", dt.time(12, 0), dt.time(12, 29, 59), "7 4 * * 1-5"),
-    ScanSlot("12:30", dt.time(12, 30), dt.time(12, 59, 59), "37 4 * * 1-5"),
-    ScanSlot("13:00", dt.time(13, 0), dt.time(13, 29, 59), "7 5 * * 1-5"),
-    ScanSlot("13:30", dt.time(13, 30), dt.time(13, 59, 59), "37 5 * * 1-5"),
+    ScanSlot("09:00", dt.time(9, 0), dt.time(9, 29, 59), "0 1 * * 1-5"),
+    ScanSlot("09:30", dt.time(9, 30), dt.time(9, 59, 59), "30 1 * * 1-5"),
+    ScanSlot("10:00", dt.time(10, 0), dt.time(10, 29, 59), "0 2 * * 1-5"),
+    ScanSlot("10:30", dt.time(10, 30), dt.time(10, 59, 59), "30 2 * * 1-5"),
+    ScanSlot("11:00", dt.time(11, 0), dt.time(11, 29, 59), "0 3 * * 1-5"),
+    ScanSlot("11:30", dt.time(11, 30), dt.time(11, 59, 59), "30 3 * * 1-5"),
+    ScanSlot("12:00", dt.time(12, 0), dt.time(12, 29, 59), "0 4 * * 1-5"),
+    ScanSlot("12:30", dt.time(12, 30), dt.time(12, 59, 59), "30 4 * * 1-5"),
+    ScanSlot("13:00", dt.time(13, 0), dt.time(13, 29, 59), "0 5 * * 1-5"),
+    ScanSlot("13:30", dt.time(13, 30), dt.time(13, 59, 59), "30 5 * * 1-5"),
 )
 
 
@@ -113,6 +113,26 @@ def slot_already_completed(db_path, trade_date, slot):
     return False
 
 
+def eod_already_completed(db_path, trade_date):
+    db_path = Path(db_path)
+    if not db_path.exists():
+        return False
+
+    conn = sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True)
+    try:
+        table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='scan_runs'"
+        ).fetchone()
+        if not table:
+            return False
+        return conn.execute(
+            "SELECT 1 FROM scan_runs WHERE trade_date = ? AND mode = 'eod' LIMIT 1",
+            (str(trade_date),),
+        ).fetchone() is not None
+    finally:
+        conn.close()
+
+
 def evaluate_intraday_run(
     now=None,
     db_path="data/stock_scanner.db",
@@ -160,6 +180,35 @@ def evaluate_intraday_run(
     }
 
 
+def evaluate_eod_run(now=None, db_path="data/stock_scanner.db", ignore_existing=False):
+    now = now or get_taipei_now()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=TAIPEI_TZ)
+    else:
+        now = now.astimezone(TAIPEI_TZ)
+
+    if now.weekday() >= 5:
+        return {
+            "run": False,
+            "slot": "",
+            "reason": "outside_trading_week",
+            "now": now.isoformat(timespec="seconds"),
+        }
+    if not ignore_existing and eod_already_completed(db_path, now.date().isoformat()):
+        return {
+            "run": False,
+            "slot": "close",
+            "reason": "eod_already_completed",
+            "now": now.isoformat(timespec="seconds"),
+        }
+    return {
+        "run": True,
+        "slot": "close",
+        "reason": "eod_ready",
+        "now": now.isoformat(timespec="seconds"),
+    }
+
+
 def write_github_output(path, decision):
     if not path:
         return
@@ -175,18 +224,26 @@ def main():
     parser = argparse.ArgumentParser(description="Decide whether an intraday automation slot should run.")
     parser.add_argument("--db-path", default="data/stock_scanner.db")
     parser.add_argument("--github-output")
+    parser.add_argument("--mode", choices=("intraday", "eod"), default="intraday")
     parser.add_argument("--ignore-existing", action="store_true")
     parser.add_argument("--scheduled-cron")
     parser.add_argument("--now", help="ISO timestamp used for deterministic checks")
     args = parser.parse_args()
 
     now = dt.datetime.fromisoformat(args.now) if args.now else None
-    decision = evaluate_intraday_run(
-        now=now,
-        db_path=args.db_path,
-        ignore_existing=args.ignore_existing,
-        scheduled_cron=args.scheduled_cron,
-    )
+    if args.mode == "eod":
+        decision = evaluate_eod_run(
+            now=now,
+            db_path=args.db_path,
+            ignore_existing=args.ignore_existing,
+        )
+    else:
+        decision = evaluate_intraday_run(
+            now=now,
+            db_path=args.db_path,
+            ignore_existing=args.ignore_existing,
+            scheduled_cron=args.scheduled_cron,
+        )
     write_github_output(args.github_output, decision)
     print(json.dumps(decision, ensure_ascii=False, sort_keys=True))
 
