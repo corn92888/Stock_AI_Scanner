@@ -11,9 +11,12 @@
 - `scan_runs`：每次盤中或盤後掃描事件。
 - `stock_signals`：三個原始策略訊號。
 - `candidate_events`：交叉排名後的標準候選事件，保存可交易性、阻擋原因、風險標記、每日首次合格與正式入選狀態。
-- `feature_snapshots`：訊號當下的技術、量價、市場、產業、基本面與新聞特徵。
+- `feature_snapshots`：訊號當下的技術、量價、市場、產業與已知基本面特徵，以及資料血緣與品質旗標；決策後新聞不得回填。
+- `fundamental_observations`：基本面觀測值、資料期間、發布時間與系統得知時間。
 - `news_evidence`：新聞來源、發布時間、系統得知時間、證據類型與結構化內容。
 - `model_versions`：模型版本、特徵版本、訓練期間、設定與樣本外指標。
+- `model_validation_predictions`：每一折不可回填的樣本外預測、訓練截止日與真實結果。
+- `model_challenger_evaluations`：AI 挑戰者和規則冠軍的同窗經濟績效比較與拒絕原因。
 - `predictions`：正式排名、Top 3 選擇、預測機率、預期超額報酬、進場與風險區間。
 - `prediction_outcomes`：正式預測的進場結果與成熟標籤。
 - `backtest_results`：原始策略訊號回測結果。
@@ -62,6 +65,6 @@ GitHub cron 只負責頻繁喚醒，`automation_guard.py` 依台北時間決定�
 
 ## 模型升級規則
 
-正式模型為 Champion，新訓練模型為 Challenger。Challenger 只有在 walk-forward 樣本外資料上同時改善 Top 3 淨超額報酬、成功率與最大回撤，且不是只依賴單一產業時，才可升級。
+正式規則為 Champion，新訓練模型為 Challenger。Challenger 只有在 expanding walk-forward 樣本外資料上達到最低交易日與交易筆數，且成本後淨報酬、超額報酬、相對 Champion 增值、最大回撤與跨折穩定度全部通過時，才會進入人工升級審查。精確門檻見 `docs/model_governance_v2.md`。
 
 LLM 只負責把新聞與研究結果轉成結構化證據、產生錯誤歸因與提出特徵假設；它不能直接修改正式權重或自動部署模型。

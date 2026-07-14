@@ -86,6 +86,7 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertEqual(payload["overview"]["paperAccounts"], 0)
             self.assertEqual(payload["paperAccounts"], [])
             self.assertEqual(payload["researchExperiments"], [])
+            self.assertEqual(payload["modelChallengers"], [])
             self.assertEqual(payload["globalMarket"]["quality"]["status"], "unavailable")
             self.assertFalse(payload["globalMarket"]["quality"]["formalRankingEnabled"])
             self.assertEqual(payload["researchQuality"]["matureRejectedOutcomes"], 0)
@@ -196,3 +197,83 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertEqual(experiment["meanExcessReturn"], 0.7)
             self.assertTrue(experiment["qualified"])
             self.assertEqual(experiment["rejectionReasons"], [])
+
+    def test_snapshot_exports_model_challenger_governance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scanner.db"
+            with get_connection(database) as conn:
+                init_db(conn)
+                conn.execute(
+                    """
+                    INSERT INTO model_challenger_evaluations (
+                        model_version, evaluated_at, status, oof_trade_dates,
+                        oof_candidates, challenger_trades, champion_trades,
+                        challenger_mean_net_return, challenger_mean_excess_return,
+                        champion_mean_net_return, champion_mean_excess_return,
+                        net_return_lift, excess_return_lift,
+                        challenger_max_drawdown, profitable_fold_rate, qualified,
+                        rejection_reasons_json, metrics_json, created_at
+                    ) VALUES (
+                        'model-v2', '2026-07-14T15:00:00+08:00', 'shadow', 40,
+                        200, 60, 45, 0.8, 0.3, 0.5, 0.1, 0.3, 0.2,
+                        -4.0, 0.75, 0,
+                        '["challenger_does_not_beat_champion"]', '{}',
+                        '2026-07-14T15:00:00+08:00'
+                    )
+                    """
+                )
+                conn.commit()
+
+            challenger = build_dashboard_snapshot(database)["modelChallengers"][0]
+            self.assertEqual(challenger["modelVersion"], "model-v2")
+            self.assertEqual(challenger["oofTradeDates"], 40)
+            self.assertFalse(challenger["qualified"])
+            self.assertEqual(
+                challenger["rejectionReasons"],
+                ["challenger_does_not_beat_champion"],
+            )
+
+    def test_feature_coverage_counts_candidates_not_feature_versions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scanner.db"
+            with get_connection(database) as conn:
+                init_db(conn)
+                conn.execute(
+                    """
+                    INSERT INTO scan_runs (
+                        id, run_at, trade_date, mode, source, strategy_version
+                    ) VALUES (1, '2026-07-14T10:00:00+08:00', '2026-07-14',
+                              'intraday', 'test', 'v1')
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO candidate_events (
+                        run_id, code, name, as_of, strategies_json,
+                        strategy_count, tradable, block_reasons_json,
+                        risk_flags_json, is_first_eligible_event, is_selected,
+                        selection_status, policy_version, policy_config_json,
+                        snapshot_json, created_at, updated_at
+                    ) VALUES (
+                        1, '2330', '台積電', '2026-07-14T10:00:00+08:00',
+                        '["trend"]', 1, 1, '[]', '[]', 1, 1, 'selected',
+                        'test-v1', '{}', '{}',
+                        '2026-07-14T10:00:00+08:00',
+                        '2026-07-14T10:00:00+08:00'
+                    )
+                    """
+                )
+                conn.executemany(
+                    """
+                    INSERT INTO feature_snapshots (
+                        run_id, code, as_of, feature_version, created_at
+                    ) VALUES (1, '2330', '2026-07-14T10:00:00+08:00', ?,
+                              '2026-07-14T10:00:00+08:00')
+                    """,
+                    [("features-v1",), ("features-v2",)],
+                )
+                conn.commit()
+
+            overview = build_dashboard_snapshot(database)["overview"]
+            self.assertEqual(overview["candidateEvents"], 1)
+            self.assertEqual(overview["featureSnapshots"], 1)

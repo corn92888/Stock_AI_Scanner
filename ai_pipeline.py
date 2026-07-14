@@ -18,11 +18,19 @@ from database import (
     init_db,
 )
 from llm_agent import analyze_news_evidence_claude, fetch_google_news_evidence
+from model_governance import (
+    ShadowSelectionPolicy,
+    apply_shadow_selection,
+    evaluate_challenger,
+    save_model_governance,
+    score_prediction,
+    walk_forward_splits,
+)
 
 
-FEATURE_VERSION = "candidate_features_v1"
-MODEL_NAME = "shadow_logistic_t3"
-MODEL_FAMILY_VERSION = "shadow_logistic_t3_v1"
+FEATURE_VERSION = "candidate_features_v2"
+MODEL_NAME = "shadow_walk_forward_t3"
+MODEL_FAMILY_VERSION = "shadow_walk_forward_t3_v2"
 MIN_TRAINING_SAMPLES = 80
 MIN_POSITIVE_SAMPLES = 10
 VALIDATION_FRACTION = 0.20
@@ -47,6 +55,9 @@ MODEL_FEATURES = [
     "industry_up_ratio",
     "industry_avg_return",
     "industry_heat",
+    "market_up_ratio",
+    "market_avg_return",
+    "market_median_return",
     "stop_distance_pct",
 ]
 
@@ -76,12 +87,47 @@ def _decode_json(value, default):
         return default
 
 
-def _bounded_sigmoid(value, scale=1.0):
-    value = max(-30.0, min(30.0, float(value) / scale))
-    return 1.0 / (1.0 + math.exp(-value))
+def _timestamp(value):
+    try:
+        stamp = pd.Timestamp(value)
+        if pd.isna(stamp):
+            return None
+        if stamp.tzinfo is None:
+            stamp = stamp.tz_localize("Asia/Taipei")
+        return stamp.tz_convert("UTC")
+    except (TypeError, ValueError):
+        return None
 
 
-def candidate_to_feature(event):
+def _is_timely_prospective(run_at, predicted_at, max_hours=24):
+    run_stamp = _timestamp(run_at)
+    predicted_stamp = _timestamp(predicted_at)
+    if run_stamp is None or predicted_stamp is None:
+        return False
+    elapsed = predicted_stamp - run_stamp
+    return pd.Timedelta(0) <= elapsed <= pd.Timedelta(hours=max_hours)
+
+
+def _known_fundamentals(conn, code, decision_at):
+    decision = _timestamp(decision_at)
+    if decision is None:
+        return None
+    rows = conn.execute(
+        """
+        SELECT * FROM fundamental_observations
+        WHERE code=?
+        ORDER BY known_at DESC, id DESC
+        """,
+        (str(code),),
+    ).fetchall()
+    for row in rows:
+        known = _timestamp(row["known_at"])
+        if known is not None and known <= decision:
+            return dict(row)
+    return None
+
+
+def candidate_to_feature(event, fundamentals=None):
     snapshot = _decode_json(event.get("snapshot_json"), {})
     strategies = {
         str(value).strip().lower()
@@ -94,6 +140,20 @@ def candidate_to_feature(event):
         strategies.add("reversal")
     if "波段" in strategy_text:
         strategies.add("wave")
+
+    decision_at = event.get("as_of") or event.get("run_at")
+    decision_stamp = _timestamp(decision_at)
+    normalized_decision_at = (
+        decision_stamp.isoformat() if decision_stamp is not None else decision_at
+    )
+    known_at = normalized_decision_at
+    quality_flags = []
+    if decision_stamp is None:
+        quality_flags.append("invalid_decision_timestamp")
+    if _safe_float(event.get("signal_price")) is None:
+        quality_flags.append("missing_signal_price")
+    if fundamentals is None:
+        quality_flags.append("fundamentals_unavailable_at_decision")
 
     feature_values = {
         "candidate_score": _safe_float(event.get("score")),
@@ -117,14 +177,40 @@ def candidate_to_feature(event):
         "market_up_ratio": _safe_float(snapshot.get("市場上漲比例")),
         "market_avg_return": _safe_float(snapshot.get("市場平均漲跌幅")),
         "market_median_return": _safe_float(snapshot.get("市場中位數漲跌幅")),
+        "pe": _safe_float((fundamentals or {}).get("pe")),
+        "pb": _safe_float((fundamentals or {}).get("pb")),
+        "revenue_yoy": _safe_float((fundamentals or {}).get("revenue_yoy")),
+        "revenue_mom": _safe_float((fundamentals or {}).get("revenue_mom")),
+        "eps_ttm": _safe_float((fundamentals or {}).get("eps_ttm")),
+    }
+    lineage = {
+        "scanner_snapshot": {"known_at": known_at, "source": "candidate_event"},
+        "fundamentals": (
+            {
+                "known_at": fundamentals.get("known_at"),
+                "published_at": fundamentals.get("published_at"),
+                "period_end": fundamentals.get("period_end"),
+                "source": fundamentals.get("source_name"),
+            }
+            if fundamentals
+            else None
+        ),
+        "post_decision_news_included": False,
     }
     return {
         "run_id": int(event["run_id"]),
         "signal_id": event.get("signal_id"),
         "code": str(event["code"]),
-        "as_of": event.get("as_of") or event.get("run_at"),
+        "as_of": normalized_decision_at,
+        "decision_at": normalized_decision_at,
+        "known_at": known_at,
+        "point_in_time_valid": int(decision_stamp is not None),
         "feature_version": FEATURE_VERSION,
         **feature_values,
+        "feature_lineage_json": json.dumps(
+            lineage, ensure_ascii=False, sort_keys=True
+        ),
+        "quality_flags_json": json.dumps(quality_flags, ensure_ascii=False),
         "features_json": json.dumps(
             {
                 "industry": event.get("industry"),
@@ -168,9 +254,18 @@ def build_feature_snapshots(db_path=DB_PATH, run_id=None, missing_only=True):
             """,
             tuple(params),
         ).fetchall()
-        records = [candidate_to_feature(dict(row)) for row in rows]
+        records = []
+        for row in rows:
+            event = dict(row)
+            fundamentals = _known_fundamentals(
+                conn,
+                event["code"],
+                event.get("as_of") or event.get("run_at"),
+            )
+            records.append(candidate_to_feature(event, fundamentals=fundamentals))
         columns = [
-            "run_id", "signal_id", "code", "as_of", "feature_version",
+            "run_id", "signal_id", "code", "as_of", "decision_at",
+            "known_at", "point_in_time_valid", "feature_version",
             "candidate_score", "strategy_count", "strategy_trend",
             "strategy_reversal", "strategy_wave", "tradable",
             "is_first_eligible_event", "stop_distance_pct", "price",
@@ -178,7 +273,9 @@ def build_feature_snapshots(db_path=DB_PATH, run_id=None, missing_only=True):
             "volume_ratio_20", "intraday_position", "rsi",
             "industry_up_ratio", "industry_avg_return", "industry_heat",
             "market_up_ratio", "market_avg_return", "market_median_return",
-            "features_json", "created_at",
+            "pe", "pb", "revenue_yoy", "revenue_mom", "eps_ttm",
+            "feature_lineage_json", "quality_flags_json", "features_json",
+            "created_at",
         ]
         now = get_taipei_now().isoformat(timespec="seconds")
         for record in records:
@@ -207,7 +304,7 @@ def _load_candidate_training_frame(conn):
         f"""
         WITH canonical AS (
             SELECT ce.id AS candidate_id, ce.run_id, ce.code, ce.as_of,
-                   sr.trade_date,
+                   ce.industry, ce.is_selected, sr.trade_date,
                    ROW_NUMBER() OVER (
                        PARTITION BY sr.trade_date, ce.code
                        ORDER BY ce.as_of ASC, ce.id ASC
@@ -216,7 +313,10 @@ def _load_candidate_training_frame(conn):
             JOIN scan_runs sr ON sr.id=ce.run_id
         )
         SELECT fs.id AS feature_id, fs.run_id, fs.signal_id, fs.code, fs.as_of,
-               canonical.trade_date, {columns}, co.success_t3,
+               canonical.trade_date, canonical.industry,
+               canonical.is_selected AS rule_selected,
+               fs.tradable, fs.is_first_eligible_event,
+               {columns}, co.success_t3, co.net_return_3d,
                co.excess_return_3d, co.max_drawdown_3d
         FROM canonical
         JOIN candidate_outcomes co ON co.candidate_id=canonical.candidate_id
@@ -224,9 +324,13 @@ def _load_candidate_training_frame(conn):
           ON fs.run_id=canonical.run_id AND fs.code=canonical.code
         WHERE canonical.day_code_rank=1
           AND fs.feature_version=?
+          AND fs.point_in_time_valid=1
+          AND fs.known_at <= fs.decision_at
           AND co.execution_version=?
+          AND co.entry_status='filled'
           AND co.matured_horizon >= 3
           AND co.success_t3 IS NOT NULL
+          AND co.net_return_3d IS NOT NULL
           AND co.excess_return_3d IS NOT NULL
           AND co.max_drawdown_3d IS NOT NULL
         ORDER BY canonical.trade_date, fs.as_of, fs.id
@@ -241,14 +345,22 @@ def _load_legacy_training_frame(conn):
     return pd.read_sql_query(
         f"""
         SELECT fs.id AS feature_id, fs.run_id, fs.signal_id, fs.code, fs.as_of,
-               sr.trade_date, {columns}, br.success_t3,
+               sr.trade_date, ce.industry,
+               COALESCE(ce.is_selected, 0) AS rule_selected,
+               fs.tradable, fs.is_first_eligible_event,
+               {columns}, br.success_t3, br.net_return_3d,
                br.excess_return_3d, br.max_drawdown_3d
         FROM feature_snapshots fs
         JOIN scan_runs sr ON sr.id=fs.run_id
         JOIN backtest_results br ON br.signal_id=fs.signal_id
+        LEFT JOIN candidate_events ce
+          ON ce.run_id=fs.run_id AND ce.code=fs.code
         WHERE fs.feature_version=?
+          AND fs.point_in_time_valid=1
+          AND fs.known_at <= fs.decision_at
           AND br.matured_horizon >= 3
           AND br.success_t3 IS NOT NULL
+          AND br.net_return_3d IS NOT NULL
           AND br.excess_return_3d IS NOT NULL
           AND br.max_drawdown_3d IS NOT NULL
         ORDER BY sr.trade_date, fs.as_of, fs.id
@@ -333,85 +445,148 @@ def train_shadow_model(
             "model": None,
         }
 
-    minimum_training_size = max(10, min_samples // 2)
-    train, validation, embargo_dates = _purged_date_split(frame)
-    if len(train) < minimum_training_size or validation.empty:
-        return {
-            "status": "insufficient_time_split",
-            "samples": len(frame),
-            "positives": positives,
-            "message": "日期分組與隔離區套用後，訓練或驗證樣本不足",
-            "model": None,
-        }
-    if train["success_t3"].nunique() < 2:
-        return {
-            "status": "insufficient_training_classes",
-            "samples": len(frame),
-            "positives": positives,
-            "message": "時序訓練區間尚未同時包含成功與失敗樣本",
-            "model": None,
-        }
-
-    classifier = Pipeline(
-        [
-            ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
-            ("scaler", StandardScaler()),
-            (
-                "model",
-                LogisticRegression(
-                    class_weight="balanced",
-                    max_iter=2000,
-                    random_state=42,
-                    C=0.5,
+    def new_models():
+        classifier = Pipeline(
+            [
+                ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
+                ("scaler", StandardScaler()),
+                (
+                    "model",
+                    LogisticRegression(
+                        class_weight="balanced",
+                        max_iter=2000,
+                        random_state=42,
+                        C=0.5,
+                    ),
                 ),
-            ),
-        ]
-    )
-    regression = Pipeline(
-        [
-            ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
-            ("scaler", StandardScaler()),
-            ("model", Ridge(alpha=5.0)),
-        ]
-    )
-    drawdown = Pipeline(
-        [
-            ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
-            ("scaler", StandardScaler()),
-            ("model", Ridge(alpha=5.0)),
-        ]
-    )
+            ]
+        )
+        regression = Pipeline(
+            [
+                ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
+                ("scaler", StandardScaler()),
+                ("model", Ridge(alpha=5.0)),
+            ]
+        )
+        drawdown = Pipeline(
+            [
+                ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
+                ("scaler", StandardScaler()),
+                ("model", Ridge(alpha=5.0)),
+            ]
+        )
+        return classifier, regression, drawdown
 
-    classifier.fit(train[MODEL_FEATURES], train["success_t3"].astype(int))
-    regression.fit(train[MODEL_FEATURES], train["excess_return_3d"])
-    drawdown.fit(train[MODEL_FEATURES], train["max_drawdown_3d"])
-    probabilities = classifier.predict_proba(validation[MODEL_FEATURES])[:, 1]
-    excess_predictions = regression.predict(validation[MODEL_FEATURES])
-    drawdown_predictions = drawdown.predict(validation[MODEL_FEATURES])
+    minimum_training_size = max(10, min_samples // 2)
+    oof_parts = []
+    used_embargo_dates = set()
+    for fold in walk_forward_splits(
+        frame,
+        min_train_dates=max(10, min(20, int(frame["trade_date"].nunique()) // 2)),
+        test_dates=5,
+        embargo_trade_dates=EMBARGO_TRADE_DATES,
+    ):
+        train = fold["train"]
+        validation = fold["validation"]
+        if len(train) < minimum_training_size or train["success_t3"].nunique() < 2:
+            continue
+        classifier, regression, drawdown = new_models()
+        classifier.fit(train[MODEL_FEATURES], train["success_t3"].astype(int))
+        regression.fit(train[MODEL_FEATURES], train["excess_return_3d"])
+        drawdown.fit(train[MODEL_FEATURES], train["max_drawdown_3d"])
+        validation = validation.copy()
+        validation["probability_t3"] = classifier.predict_proba(
+            validation[MODEL_FEATURES]
+        )[:, 1]
+        validation["expected_excess_return_3d"] = regression.predict(
+            validation[MODEL_FEATURES]
+        )
+        validation["expected_max_drawdown_3d"] = drawdown.predict(
+            validation[MODEL_FEATURES]
+        )
+        validation["final_score"] = [
+            score_prediction(probability, excess, max_drawdown)
+            for probability, excess, max_drawdown in zip(
+                validation["probability_t3"],
+                validation["expected_excess_return_3d"],
+                validation["expected_max_drawdown_3d"],
+            )
+        ]
+        validation["fold_index"] = fold["fold_index"]
+        validation["trained_through"] = fold["trained_through"]
+        used_embargo_dates.update(fold["embargo_dates"])
+        oof_parts.append(validation)
+
+    if not oof_parts:
+        return {
+            "status": "insufficient_walk_forward_folds",
+            "samples": len(frame),
+            "positives": positives,
+            "message": "擴展視窗與隔離區套用後，沒有可用的樣本外分折",
+            "model": None,
+        }
+
+    selection_policy = ShadowSelectionPolicy()
+    oof = apply_shadow_selection(pd.concat(oof_parts).sort_index(), selection_policy)
     auc = None
-    if validation["success_t3"].nunique() == 2:
-        auc = float(roc_auc_score(validation["success_t3"], probabilities))
+    if oof["success_t3"].nunique() == 2:
+        auc = float(roc_auc_score(oof["success_t3"], oof["probability_t3"]))
+    challenger_metrics, challenger_reasons = evaluate_challenger(oof)
     metrics = {
         "samples": int(len(frame)),
         "positive_samples": positives,
-        "training_samples": int(len(train)),
-        "validation_samples": int(len(validation)),
+        "training_samples": int(len(frame)),
+        "validation_samples": int(len(oof)),
         "unique_trade_dates": int(frame["trade_date"].nunique()),
-        "embargo_trade_dates": list(embargo_dates),
+        "embargo_trade_dates": sorted(used_embargo_dates),
         "outcome_source": outcome_source,
         "validation_auc": auc,
-        "validation_brier": float(brier_score_loss(validation["success_t3"], probabilities)),
-        "validation_excess_mae": float(mean_absolute_error(validation["excess_return_3d"], excess_predictions)),
-        "validation_drawdown_mae": float(mean_absolute_error(validation["max_drawdown_3d"], drawdown_predictions)),
-        "validation_start": str(validation["trade_date"].min()),
-        "validation_end": str(validation["trade_date"].max()),
+        "validation_brier": float(
+            brier_score_loss(oof["success_t3"], oof["probability_t3"])
+        ),
+        "validation_excess_mae": float(
+            mean_absolute_error(
+                oof["excess_return_3d"], oof["expected_excess_return_3d"]
+            )
+        ),
+        "validation_drawdown_mae": float(
+            mean_absolute_error(
+                oof["max_drawdown_3d"], oof["expected_max_drawdown_3d"]
+            )
+        ),
+        "validation_start": str(oof["trade_date"].min()),
+        "validation_end": str(oof["trade_date"].max()),
+        "walk_forward_folds": int(oof["fold_index"].nunique()),
+        "oof_trade_dates": int(oof["trade_date"].nunique()),
+        "challenger": challenger_metrics,
+        "challenger_rejection_reasons": challenger_reasons,
     }
+    fingerprint_columns = [
+        "feature_id",
+        "trade_date",
+        "industry",
+        "rule_selected",
+        "tradable",
+        "is_first_eligible_event",
+        "success_t3",
+        "net_return_3d",
+        "excess_return_3d",
+        "max_drawdown_3d",
+        *MODEL_FEATURES,
+    ]
+    training_fingerprint = hashlib.sha256(
+        frame[fingerprint_columns].to_csv(index=False).encode("utf-8")
+    ).hexdigest()[:10]
     version = (
         f"{MODEL_FAMILY_VERSION}-{frame['trade_date'].max().replace('-', '')}"
-        f"-n{len(frame)}"
+        f"-n{len(frame)}-d{training_fingerprint}"
     )
     artifact_path = Path(artifact_dir) / f"{version}.joblib"
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    classifier, regression, drawdown = new_models()
+    classifier.fit(frame[MODEL_FEATURES], frame["success_t3"].astype(int))
+    regression.fit(frame[MODEL_FEATURES], frame["excess_return_3d"])
+    drawdown.fit(frame[MODEL_FEATURES], frame["max_drawdown_3d"])
     bundle = {
         "classifier": classifier,
         "excess_regression": regression,
@@ -440,16 +615,18 @@ def train_shadow_model(
                 MODEL_NAME,
                 version,
                 FEATURE_VERSION,
-                str(train["trade_date"].min()),
-                str(train["trade_date"].max()),
+                str(frame["trade_date"].min()),
+                str(frame["trade_date"].max()),
                 json.dumps(
                     {
                         "features": MODEL_FEATURES,
                         "classifier": "balanced_logistic_regression",
                         "regression": "ridge",
-                        "time_split": "purged_trade_date_groups",
+                        "time_split": "expanding_walk_forward_oof",
                         "embargo_trade_dates": EMBARGO_TRADE_DATES,
+                        "prospective_fit": "all_matured_samples_after_oof",
                         "outcome_source": outcome_source,
+                        "training_fingerprint": training_fingerprint,
                         "git_commit": get_git_commit(),
                     },
                     sort_keys=True,
@@ -460,11 +637,20 @@ def train_shadow_model(
             ),
         )
         conn.commit()
+    governance = save_model_governance(
+        version,
+        oof,
+        challenger_metrics,
+        challenger_reasons,
+        selection_policy=selection_policy,
+        db_path=db_path,
+    )
     return {
         "status": "trained",
         "version": version,
         "metrics": metrics,
         "artifact_path": str(artifact_path),
+        "governance": governance,
         "model": bundle,
     }
 
@@ -493,7 +679,7 @@ def save_shadow_predictions(run_id, training_result, db_path=DB_PATH):
         frame = pd.read_sql_query(
             f"""
             SELECT fs.*, ce.name, ce.industry, ce.observation_price,
-                   ce.chase_limit, ce.policy_version, sr.trade_date
+                   ce.chase_limit, ce.policy_version, sr.trade_date, sr.run_at
             FROM feature_snapshots fs
             JOIN candidate_events ce
               ON ce.run_id=fs.run_id AND ce.code=fs.code
@@ -519,32 +705,10 @@ def save_shadow_predictions(run_id, training_result, db_path=DB_PATH):
     frame["expected_excess_return_3d"] = expected_excess
     frame["expected_max_drawdown_3d"] = expected_drawdown
     frame["final_score"] = [
-        100.0
-        * (
-            0.70 * p
-            + 0.20 * _bounded_sigmoid(excess, scale=3.0)
-            + 0.10 * _bounded_sigmoid(drawdown + 4.0, scale=2.0)
-        )
+        score_prediction(p, excess, drawdown)
         for p, excess, drawdown in zip(probability, expected_excess, expected_drawdown)
     ]
-    eligible = frame[
-        (frame["tradable"].fillna(0).astype(int) == 1)
-        & (frame["is_first_eligible_event"].fillna(0).astype(int) == 1)
-        & (frame["probability_t3"] >= MIN_SHADOW_PROBABILITY)
-        & (frame["expected_excess_return_3d"] >= MIN_SHADOW_EXPECTED_EXCESS)
-        & (frame["expected_max_drawdown_3d"] >= MIN_SHADOW_EXPECTED_DRAWDOWN)
-    ].sort_values("final_score", ascending=False)
-    shadow_selected = []
-    industries = set()
-    for index, row in eligible.iterrows():
-        industry = str(row.get("industry") or "")
-        if industry and industry in industries:
-            continue
-        shadow_selected.append(index)
-        if industry:
-            industries.add(industry)
-        if len(shadow_selected) >= 3:
-            break
+    frame = apply_shadow_selection(frame, ShadowSelectionPolicy())
 
     now = get_taipei_now().isoformat(timespec="seconds")
     saved = []
@@ -557,8 +721,18 @@ def save_shadow_predictions(run_id, training_result, db_path=DB_PATH):
             ).astype(int)
         ).sort_values(["_eligible_rank", "final_score"], ascending=[False, False])
         for rank, (index, row) in enumerate(ranked_frame.iterrows(), start=1):
-            is_selected = index in shadow_selected
-            is_prospective = str(row.get("trade_date") or "") == now[:10]
+            is_selected = bool(row["is_selected"])
+            has_prior_prospective = conn.execute(
+                """
+                SELECT 1 FROM predictions
+                WHERE run_id=? AND code=? AND is_prospective=1
+                LIMIT 1
+                """,
+                (int(run_id), str(row["code"])),
+            ).fetchone()
+            is_prospective = _is_timely_prospective(
+                row.get("run_at"), now
+            ) and not has_prior_prospective
             probability_value = float(row["probability_t3"])
             if not bool(row.get("tradable")):
                 action = "blocked_by_risk_policy"
@@ -569,8 +743,9 @@ def save_shadow_predictions(run_id, training_result, db_path=DB_PATH):
             else:
                 action = "shadow_neutral"
             rationale = {
-                    "shadow_mode": True,
-                    "prospective": is_prospective,
+                "shadow_mode": True,
+                "prospective": is_prospective,
+                "immutable_first_prediction": True,
                 "rule_policy_unchanged": True,
                 "shadow_thresholds": {
                     "minimum_probability_t3": MIN_SHADOW_PROBABILITY,
@@ -588,7 +763,7 @@ def save_shadow_predictions(run_id, training_result, db_path=DB_PATH):
             entry_price = _safe_float(row.get("price"))
             chase_limit = _safe_float(row.get("chase_limit"))
             stop_price = _safe_float(row.get("observation_price"))
-            cursor = conn.execute(
+            conn.execute(
                 """
                 INSERT INTO predictions (
                     run_id, signal_id, code, predicted_at, model_version,
@@ -597,18 +772,7 @@ def save_shadow_predictions(run_id, training_result, db_path=DB_PATH):
                     action, entry_low, entry_high, chase_limit, stop_price,
                     rationale_json, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(run_id, code, model_version) DO UPDATE SET
-                    signal_id=excluded.signal_id, predicted_at=excluded.predicted_at,
-                    is_prospective=excluded.is_prospective,
-                    rank_order=excluded.rank_order, is_selected=excluded.is_selected,
-                    final_score=excluded.final_score,
-                    probability_t3=excluded.probability_t3,
-                    expected_excess_return_3d=excluded.expected_excess_return_3d,
-                    expected_max_drawdown_3d=excluded.expected_max_drawdown_3d,
-                    action=excluded.action, entry_low=excluded.entry_low,
-                    entry_high=excluded.entry_high, chase_limit=excluded.chase_limit,
-                    stop_price=excluded.stop_price,
-                    rationale_json=excluded.rationale_json
+                ON CONFLICT(run_id, code, model_version) DO NOTHING
                 """,
                 (
                     int(run_id),
@@ -632,19 +796,32 @@ def save_shadow_predictions(run_id, training_result, db_path=DB_PATH):
                     now,
                 ),
             )
+            persisted = conn.execute(
+                """
+                SELECT id, is_prospective, is_selected, probability_t3,
+                       expected_excess_return_3d, expected_max_drawdown_3d, action
+                FROM predictions
+                WHERE run_id=? AND code=? AND model_version=?
+                """,
+                (int(run_id), str(row["code"]), training_result["version"]),
+            ).fetchone()
             saved.append(
                 {
-                    "id": cursor.lastrowid,
+                    "id": int(persisted["id"]),
                     "code": str(row["code"]),
                     "name": str(row.get("name") or ""),
                     "industry": str(row.get("industry") or ""),
                     "rank": rank,
-                    "is_prospective": is_prospective,
-                    "is_selected": is_selected,
-                    "probability_t3": probability_value,
-                    "expected_excess_return_3d": float(row["expected_excess_return_3d"]),
-                    "expected_max_drawdown_3d": float(row["expected_max_drawdown_3d"]),
-                    "action": action,
+                    "is_prospective": bool(persisted["is_prospective"]),
+                    "is_selected": bool(persisted["is_selected"]),
+                    "probability_t3": float(persisted["probability_t3"]),
+                    "expected_excess_return_3d": float(
+                        persisted["expected_excess_return_3d"]
+                    ),
+                    "expected_max_drawdown_3d": float(
+                        persisted["expected_max_drawdown_3d"]
+                    ),
+                    "action": persisted["action"],
                 }
             )
         conn.commit()
@@ -851,21 +1028,6 @@ def collect_news_research(run_id, db_path=DB_PATH, limit=MAX_NEWS_CANDIDATES):
                         now,
                     ),
                 )
-            conn.execute(
-                """
-                UPDATE feature_snapshots
-                SET news_score=?, catalyst_score=?, risk_score=?
-                WHERE run_id=? AND code=? AND feature_version=?
-                """,
-                (
-                    analysis.get("news_score"),
-                    analysis.get("catalyst_score"),
-                    analysis.get("risk_score"),
-                    int(run_id),
-                    candidate["code"],
-                    FEATURE_VERSION,
-                ),
-            )
             conn.commit()
         results.append(
             {
@@ -888,9 +1050,12 @@ def format_ai_report(training, predictions, news):
         metrics = training.get("metrics", {})
         auc = metrics.get("validation_auc")
         auc_text = "NA" if auc is None else f"{auc:.3f}"
+        governance = training.get("governance", {})
         lines.append(
             f"- 模型 {training['version']}｜樣本{metrics.get('samples', 0)}｜"
-            f"時序驗證 AUC {auc_text}；僅供影子比較。"
+            f"擴展視窗 {metrics.get('walk_forward_folds', 0)} 折 / "
+            f"OOF {metrics.get('oof_trade_dates', 0)} 日｜AUC {auc_text}｜"
+            f"挑戰者狀態 {governance.get('status', 'shadow')}；僅供影子比較。"
         )
         selected = [row for row in predictions if row.get("is_selected")]
         if selected:

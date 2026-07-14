@@ -72,6 +72,7 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
     },
     researchExperiments: snapshot.researchExperiments ?? [],
     aiModels: snapshot.aiModels ?? [],
+    modelChallengers: snapshot.modelChallengers ?? [],
     paperAccounts: (snapshot.paperAccounts ?? []).map((account) => ({
       ...account,
       comparisonStartAt: account.comparisonStartAt ?? null,

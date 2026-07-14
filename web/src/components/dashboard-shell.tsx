@@ -104,6 +104,16 @@ const experimentReasonLabels: Record<string, string> = {
   fold_stability_gate_failed: "分折穩定度不足",
 };
 
+const challengerReasonLabels: Record<string, string> = {
+  insufficient_oof_trade_dates: "樣本外交易日不足",
+  insufficient_challenger_trades: "AI 入選筆數不足",
+  non_positive_challenger_net_return: "AI 成本後報酬未轉正",
+  non_positive_challenger_excess_return: "AI 超額報酬未轉正",
+  challenger_does_not_beat_champion: "AI 未勝過規則冠軍",
+  challenger_drawdown_gate_failed: "AI 回撤超標",
+  challenger_fold_stability_failed: "AI 分折穩定度不足",
+};
+
 const tooltipStyle = {
   background: "#151719",
   border: "1px solid #363a3d",
@@ -767,6 +777,7 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const max = Math.max(...stages.map((stage) => stage.value), 1);
   const statusData = snapshot.statusCounts.slice(0, 7).map((row) => ({ ...row, short: row.label.slice(0, 6) }));
   const latestModel = (snapshot.aiModels ?? [])[0];
+  const latestChallenger = (snapshot.modelChallengers ?? [])[0];
   const samples = latestModel?.metrics.samples ?? 0;
   const positives = latestModel?.metrics.positive_samples ?? 0;
   const auc = latestModel?.metrics.validation_auc ?? 0;
@@ -785,7 +796,8 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const economicEdge = (research.formalMeanNetReturn3d ?? -Infinity) > 0
     && (research.formalMeanExcessReturn3d ?? -Infinity) > 0
     && selectionLift > 0;
-  const allGatesPassed = samples >= 500 && positives >= 50 && auc >= 0.6 && mae <= 3
+  const allGatesPassed = Boolean(latestChallenger?.qualified)
+    && samples >= 500 && positives >= 50 && auc >= 0.6 && mae <= 3
     && research.matureCandidateOutcomes >= 500 && research.matureRejectedOutcomes >= 250
     && research.uniqueTradeDates >= 120 && matureProspective >= 150 && economicEdge
     && paperClosed >= 100 && paperEdge > 0;
@@ -811,6 +823,11 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
         <div className="table-scroll"><table className="data-table compact-table strategy-table"><thead><tr><th>策略實驗</th><th>樣本</th><th>成本後淨報酬</th><th>超額報酬</th><th>PSR</th><th>最大回撤</th><th>分折獲利率</th><th>判定</th></tr></thead><tbody>{experiments.length ? experiments.map((row) => <tr key={row.experimentKey} title={row.hypothesis}><td><div className="symbol-cell"><strong>{experimentFamilyLabels[row.strategyFamily] ?? row.strategyFamily}</strong><span>{row.name}</span></div></td><td><strong>{number.format(row.trades ?? 0)} 筆</strong><br /><small>{number.format(row.tradeDates ?? 0)} 日 · {row.sampleStart ?? "--"} 至 {row.sampleEnd ?? "--"}</small></td><td className={(row.meanNetReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.meanNetReturn)}</td><td className={(row.meanExcessReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.meanExcessReturn)}</td><td>{row.probabilisticSharpe == null ? "--" : `${decimal.format(row.probabilisticSharpe * 100)}%`}</td><td className="negative-text">{pct(row.maxDrawdown)}</td><td>{row.profitableFoldRate == null ? "--" : `${decimal.format(row.profitableFoldRate * 100)}%`}</td><td><span className={`status-pill ${row.qualified ? "selected" : "blocked"}`}>{row.qualified ? "符合升級門檻" : "維持研究"}</span><br /><small>{row.qualified ? "等待人工審查" : row.rejectionReasons.map((reason) => experimentReasonLabels[reason] ?? reason).join("、") || "尚無評估"}</small></td></tr>) : <tr><td colSpan={8}>每日盤後流程完成後會建立第一批策略評估。</td></tr>}</tbody></table></div>
       </section>
 
+      <section className="panel">
+        <PanelHeader eyebrow="Out-of-fold challenge" title="AI 挑戰者與規則冠軍同窗比較" description="每一折只使用該日期以前的資料訓練，隔離 T+3 標籤重疊後，再以相同候選、成本與交易日比較" trailing={<span className={`health-badge ${latestChallenger?.qualified ? "healthy" : "building"}`}>{latestChallenger?.qualified ? "通過量化門檻" : "維持影子"}</span>} />
+        {latestChallenger ? <div className="table-scroll"><table className="data-table compact-table strategy-table"><thead><tr><th>驗證範圍</th><th>AI 挑戰者</th><th>規則冠軍</th><th>AI 淨報酬</th><th>規則淨報酬</th><th>AI 超額</th><th>規則超額</th><th>AI 相對增值</th><th>最大回撤</th><th>判定</th></tr></thead><tbody><tr><td><strong>{number.format(latestChallenger.oofTradeDates)} 日</strong><br /><small>{number.format(latestChallenger.oofCandidates)} 個樣本外候選</small></td><td>{number.format(latestChallenger.challengerTrades)} 筆</td><td>{number.format(latestChallenger.championTrades)} 筆</td><td className={(latestChallenger.challengerMeanNetReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(latestChallenger.challengerMeanNetReturn)}</td><td className={(latestChallenger.championMeanNetReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(latestChallenger.championMeanNetReturn)}</td><td className={(latestChallenger.challengerMeanExcessReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(latestChallenger.challengerMeanExcessReturn)}</td><td className={(latestChallenger.championMeanExcessReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(latestChallenger.championMeanExcessReturn)}</td><td className={(latestChallenger.excessReturnLift ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(latestChallenger.excessReturnLift)}</td><td className="negative-text">{pct(latestChallenger.challengerMaxDrawdown)}</td><td><span className={`status-pill ${latestChallenger.qualified ? "selected" : "blocked"}`}>{latestChallenger.qualified ? "可進人工審查" : "不可升級"}</span><br /><small>{latestChallenger.qualified ? `分折獲利率 ${pct((latestChallenger.profitableFoldRate ?? 0) * 100)}` : latestChallenger.rejectionReasons.map((reason) => challengerReasonLabels[reason] ?? reason).join("、")}</small></td></tr></tbody></table></div> : <div className="empty-state">下一次 AI 訓練後會建立第一份嚴格樣本外挑戰報告。</div>}
+      </section>
+
       <section className="pipeline-board panel">
         <PanelHeader eyebrow="Data lineage" title="量化學習資料鏈" description={`特徵覆蓋率 ${decimal.format(featureCoverage)}%，所有階段保留版本與時間點`} trailing={<span className={`health-badge ${allGatesPassed ? "healthy" : "building"}`}>{allGatesPassed ? "可審查升級" : latestModel ? "影子測試" : "累積中"}</span>} />
         <div className="pipeline-grid">{stages.map((stage, index) => { const Icon = stage.icon; return <div className="pipeline-stage" key={stage.label}><div className="stage-icon"><Icon size={18} /></div><span>{stage.label}</span><strong>{number.format(stage.value)}</strong><small>{stage.note}</small><div className="progress"><i style={{ width: `${Math.max(stage.value ? 3 : 0, stage.value / max * 100)}%` }} /></div>{index < stages.length - 1 && <ChevronRight className="stage-arrow" size={16} />}</div>; })}</div>
@@ -825,7 +842,8 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
             <GateRow label="獨立交易日" value={research.uniqueTradeDates} target={120} display={`${research.uniqueTradeDates} 日`} passed={research.uniqueTradeDates >= 120} />
             <GateRow label="模型訓練樣本" value={samples} target={500} display={`${samples} 筆`} passed={samples >= 500} />
             <GateRow label="成功正樣本" value={positives} target={50} display={`${positives} 筆`} passed={positives >= 50} />
-            <GateRow label="時序驗證 AUC" value={auc} target={0.6} display={auc ? decimal.format(auc) : "NA"} passed={auc >= 0.6} />
+            <GateRow label="擴展視窗 OOF AUC" value={auc} target={0.6} display={auc ? decimal.format(auc) : "NA"} passed={auc >= 0.6} />
+            <GateRow label="AI 勝過規則冠軍" value={latestChallenger?.qualified ? 1 : 0} target={1} display={latestChallenger?.qualified ? "通過" : "尚未通過"} passed={Boolean(latestChallenger?.qualified)} />
             <GateRow label="超額報酬 MAE" value={mae} target={3} display={mae < 99 ? pct(mae) : "NA"} passed={mae <= 3} lowerIsBetter />
             <GateRow label="成熟前瞻預測" value={matureProspective} target={150} display={`${matureProspective} 筆`} passed={matureProspective >= 150} />
             <GateRow label="AI 模擬結案交易" value={paperClosed} target={100} display={`${paperClosed} 筆`} passed={paperClosed >= 100} />
@@ -836,7 +854,7 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
         </div>
         <div className="panel model-panel">
           <PanelHeader eyebrow="Latest challenger" title="目前影子模型" description="模型只提供平行排名，正式名單仍由版本化規則控制" />
-          {latestModel ? <div className="model-spec"><div className="model-version"><Bot size={22} /><div><strong>{latestModel.modelName}</strong><span>{latestModel.version}</span></div></div><dl className="detail-list"><div><dt>狀態</dt><dd>{latestModel.status}</dd></div><div><dt>結果來源</dt><dd>{latestModel.metrics.outcome_source ?? "legacy"}</dd></div><div><dt>特徵版本</dt><dd>{latestModel.featureVersion}</dd></div><div><dt>訓練樣本</dt><dd>{samples}</dd></div><div><dt>驗證樣本</dt><dd>{latestModel.metrics.validation_samples ?? "--"}</dd></div><div><dt>獨立日期</dt><dd>{latestModel.metrics.unique_trade_dates ?? "--"}</dd></div><div><dt>Brier Score</dt><dd>{latestModel.metrics.validation_brier == null ? "--" : decimal.format(latestModel.metrics.validation_brier)}</dd></div><div><dt>回撤 MAE</dt><dd>{pct(latestModel.metrics.validation_drawdown_mae)}</dd></div><div><dt>新聞證據</dt><dd>{snapshot.overview.newsEvidence}</dd></div><div><dt>前瞻預測</dt><dd>{prospective}</dd></div></dl></div> : <div className="empty-state">尚未建立模型版本。</div>}
+          {latestModel ? <div className="model-spec"><div className="model-version"><Bot size={22} /><div><strong>{latestModel.modelName}</strong><span>{latestModel.version}</span></div></div><dl className="detail-list"><div><dt>狀態</dt><dd>{latestModel.status}</dd></div><div><dt>結果來源</dt><dd>{latestModel.metrics.outcome_source ?? "legacy"}</dd></div><div><dt>特徵版本</dt><dd>{latestModel.featureVersion}</dd></div><div><dt>訓練樣本</dt><dd>{samples}</dd></div><div><dt>OOF 驗證樣本</dt><dd>{latestModel.metrics.validation_samples ?? "--"}</dd></div><div><dt>擴展視窗分折</dt><dd>{latestModel.metrics.walk_forward_folds ?? "--"}</dd></div><div><dt>OOF 交易日</dt><dd>{latestModel.metrics.oof_trade_dates ?? "--"}</dd></div><div><dt>Brier Score</dt><dd>{latestModel.metrics.validation_brier == null ? "--" : decimal.format(latestModel.metrics.validation_brier)}</dd></div><div><dt>回撤 MAE</dt><dd>{pct(latestModel.metrics.validation_drawdown_mae)}</dd></div><div><dt>新聞證據</dt><dd>{snapshot.overview.newsEvidence}</dd></div><div><dt>前瞻預測</dt><dd>{prospective}</dd></div></dl></div> : <div className="empty-state">尚未建立模型版本。</div>}
         </div>
       </section>
 

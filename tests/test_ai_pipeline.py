@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from ai_pipeline import (
     FEATURE_VERSION,
+    _is_timely_prospective,
     _purged_date_split,
     build_feature_snapshots,
     candidate_to_feature,
@@ -75,6 +76,84 @@ class AiPipelineTests(unittest.TestCase):
         self.assertEqual(feature["strategy_reversal"], 0)
         self.assertEqual(feature["strategy_wave"], 1)
         self.assertEqual(feature["market_up_ratio"], 55)
+        self.assertEqual(feature["decision_at"], "2026-07-10T02:00:00+00:00")
+        self.assertEqual(feature["point_in_time_valid"], 1)
+
+    def test_feature_builder_uses_only_fundamentals_known_before_decision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "scanner.db"
+            with get_connection(db_path) as conn:
+                init_db(conn)
+                conn.execute(
+                    """
+                    INSERT INTO scan_runs (
+                        id, run_at, trade_date, mode, source, strategy_version
+                    ) VALUES (1, '2026-07-10T10:00:00+08:00', '2026-07-10',
+                              'intraday', 'test', 'v1')
+                    """
+                )
+                conn.executemany(
+                    """
+                    INSERT INTO fundamental_observations (
+                        code, period_end, published_at, known_at, source_name,
+                        pe, raw_json, created_at
+                    ) VALUES (?, ?, ?, ?, 'test', ?, '{}', ?)
+                    """,
+                    [
+                        (
+                            "2330", "2026-Q1", "2026-05-01",
+                            "2026-05-01T15:00:00+08:00", 20,
+                            "2026-05-01T15:00:00+08:00",
+                        ),
+                        (
+                            "2330", "2026-Q2", "2026-07-10",
+                            "2026-07-10T12:00:00+08:00", 99,
+                            "2026-07-10T12:00:00+08:00",
+                        ),
+                    ],
+                )
+                conn.commit()
+            save_candidate_events(
+                1,
+                [
+                    {
+                        "code": "2330",
+                        "name": "台積電",
+                        "as_of": "2026-07-10T10:00:00+08:00",
+                        "strategies_json": '["trend"]',
+                        "strategy_count": 1,
+                        "tradable": True,
+                        "is_first_eligible_event": True,
+                        "selection_status": "daily_limit",
+                        "policy_version": "test-v1",
+                    }
+                ],
+                db_path=db_path,
+            )
+
+            self.assertEqual(build_feature_snapshots(db_path=db_path), 1)
+            with get_connection(db_path) as conn:
+                feature = conn.execute(
+                    "SELECT pe, feature_lineage_json FROM feature_snapshots"
+                ).fetchone()
+            self.assertEqual(feature["pe"], 20)
+            lineage = json.loads(feature["feature_lineage_json"])
+            self.assertEqual(lineage["fundamentals"]["period_end"], "2026-Q1")
+            self.assertFalse(lineage["post_decision_news_included"])
+
+    def test_prospective_window_requires_prediction_after_run_within_24_hours(self):
+        self.assertTrue(
+            _is_timely_prospective(
+                "2026-07-10T10:00:00+08:00",
+                "2026-07-10T10:05:00+08:00",
+            )
+        )
+        self.assertFalse(
+            _is_timely_prospective(
+                "2026-07-10T10:00:00+08:00",
+                "2026-07-12T10:00:00+08:00",
+            )
+        )
 
     def test_shadow_training_prediction_and_outcome_loop(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -184,6 +263,7 @@ class AiPipelineTests(unittest.TestCase):
                 min_positives=5,
             )
             self.assertEqual(training["status"], "trained")
+            self.assertGreaterEqual(training["metrics"]["walk_forward_folds"], 1)
             predicted_at = dt.datetime(
                 2026, 5, 30, 10, 5,
                 tzinfo=dt.timezone(dt.timedelta(hours=8)),
@@ -194,8 +274,47 @@ class AiPipelineTests(unittest.TestCase):
                 self.assertTrue(predictions[0]["is_prospective"])
                 self.assertEqual(update_prediction_outcomes(db_path=db_path), 1)
 
+            replayed_at = predicted_at + dt.timedelta(days=7)
+            with patch("ai_pipeline.get_taipei_now", return_value=replayed_at):
+                replayed = save_shadow_predictions(30, training, db_path=db_path)
+                self.assertTrue(replayed[0]["is_prospective"])
+
+            second_version = dict(training)
+            second_version["version"] = f"{training['version']}-challenger"
+            with patch("ai_pipeline.get_taipei_now", return_value=predicted_at):
+                second_predictions = save_shadow_predictions(
+                    30, second_version, db_path=db_path
+                )
+                self.assertFalse(second_predictions[0]["is_prospective"])
+
             with get_connection(db_path) as conn:
                 self.assertEqual(conn.execute("SELECT COUNT(*) FROM model_versions").fetchone()[0], 1)
+                self.assertGreater(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM model_validation_predictions"
+                    ).fetchone()[0],
+                    0,
+                )
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM model_challenger_evaluations"
+                    ).fetchone()[0],
+                    1,
+                )
+                prediction = conn.execute(
+                    "SELECT predicted_at, is_prospective FROM predictions"
+                ).fetchone()
+                self.assertEqual(
+                    prediction["predicted_at"],
+                    predicted_at.isoformat(timespec="seconds"),
+                )
+                self.assertEqual(prediction["is_prospective"], 1)
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM predictions WHERE is_prospective=1"
+                    ).fetchone()[0],
+                    1,
+                )
                 outcome = conn.execute(
                     "SELECT matured_horizon, success_t3 FROM prediction_outcomes"
                 ).fetchone()

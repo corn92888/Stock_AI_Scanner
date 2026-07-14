@@ -11,7 +11,7 @@
 * **🖥 視覺化戰情室 (Web UI)**：提供基於 Streamlit 開發的網頁 Dashboard，可輸入股票代號即時驗證技術指標 (如 SuperTrend 三線、布林通道等)，也可輸入目前持股，結合最新市場監控與策略訊號做部位分析。
 * **☁️ 雲端股票倉**：持股頁可接 Supabase/Postgres，讓每個使用者用自己的 Email/名稱 + 私密倉庫代碼開啟獨立股票倉，並寫入每日持股快照；也可設定超級管理員總覽所有股票倉，供之後績效追蹤與回測。
 * **🧭 量化控制中心**：獨立的 Next.js 儀表板整合正式候選、回測證據、AI 資料管線與 GitHub Actions 維運狀態，線上版位於 [stock-ai-control.vercel.app](https://stock-ai-control.vercel.app)。
-* **🧠 AI 影子決策閉環**：候選會轉成時間點特徵，由時序留出驗證的模型預測 T+3 成功率、超額報酬與回撤；Claude 另對正式候選的近期新聞抽取催化劑與風險。AI 先平行觀察，不直接改寫正式規則名單。
+* **🧠 AI 影子決策閉環**：候選會轉成具 `known_at` 與資料血緣的時間點特徵，由擴展視窗 walk-forward 模型預測 T+3 成功率、超額報酬與回撤；Claude 另對正式候選的近期新聞抽取催化劑與風險。AI 先平行觀察，不直接改寫正式規則名單。
 * **🌐 全球市場情報層**：以點時資料整合美股期貨、費半、VIX、韓股、匯率、利率與原物料，並在 Next.js 儀表板呈現來源品質、資料延遲與台股風險傳導；完整規格見 [全球市場情報文件](docs/global_market_intelligence.md)。
 
 ## 🎯 內建三大策略
@@ -185,13 +185,13 @@
   ```bash
   venv/bin/python3 ai_pipeline.py
   ```
-  這會補齊 `feature_snapshots`、同步成熟結果到 `prediction_outcomes`、重新訓練版本化模型，並對最新候選產生影子預測。新聞 AI 只分析正式入選；每則證據同時保存發布時間與系統得知時間。未設定 `ANTHROPIC_API_KEY` 時仍會完成量化模型，不會阻斷掃描。
+  這會補齊 `feature_snapshots`、同步成熟結果到 `prediction_outcomes`、重新訓練版本化模型，並對最新候選產生不可覆寫的影子預測。新聞 AI 只分析正式入選；每則證據同時保存發布時間與系統得知時間，決策後取得的新聞不會回填污染既有特徵。未設定 `ANTHROPIC_API_KEY` 時仍會完成量化模型，不會阻斷掃描。
 
   若只更新量化模型、不呼叫新聞 API：
   ```bash
   venv/bin/python3 ai_pipeline.py --no-news --no-predict
   ```
-  AI 目前不改變 `tradability_v1` 正式名單。控制中心會顯示模型樣本、時序驗證 AUC、預期超額與回撤；等前瞻結果持續優於規則基準後，才考慮升級為混合排名。
+  AI 目前不改變 `tradability_v1` 正式名單。控制中心會顯示擴展視窗 OOF 指標，並在相同候選、日期與成本口徑下比較 AI 挑戰者與規則冠軍。只有成本後淨報酬、超額報酬、回撤與跨折穩定性全部通過，才會進入人工升級審查。完整治理契約見 [`docs/model_governance_v2.md`](docs/model_governance_v2.md)。
 
 * **測試 Telegram 連線：**
   快速確認 Token 與 Chat ID 是否設定正確，直接發送一則推播：

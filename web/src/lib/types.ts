@@ -188,7 +188,29 @@ export type AiModel = {
     unique_trade_dates?: number;
     embargo_trade_dates?: string[];
     outcome_source?: string;
+    walk_forward_folds?: number;
+    oof_trade_dates?: number;
   };
+};
+
+export type ModelChallenger = {
+  modelVersion: string;
+  evaluatedAt: string;
+  status: string;
+  oofTradeDates: number;
+  oofCandidates: number;
+  challengerTrades: number;
+  championTrades: number;
+  challengerMeanNetReturn: number | null;
+  challengerMeanExcessReturn: number | null;
+  championMeanNetReturn: number | null;
+  championMeanExcessReturn: number | null;
+  netReturnLift: number | null;
+  excessReturnLift: number | null;
+  challengerMaxDrawdown: number | null;
+  profitableFoldRate: number | null;
+  qualified: boolean;
+  rejectionReasons: string[];
 };
 
 export type PaperAccount = {
@@ -354,6 +376,7 @@ export type DashboardSnapshot = {
   scanRuns: ScanRun[];
   backtestRuns: BacktestRun[];
   aiModels: AiModel[];
+  modelChallengers: ModelChallenger[];
   paperAccounts: PaperAccount[];
   paperEquity: PaperEquityPoint[];
   paperTrades: PaperTrade[];

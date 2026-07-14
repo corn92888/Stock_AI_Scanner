@@ -249,6 +249,43 @@ def _research_experiment_snapshot(conn):
     return rows
 
 
+def _model_challenger_snapshot(conn):
+    if not _table_exists(conn, "model_challenger_evaluations"):
+        return []
+    rows = _read_records(
+        conn,
+        """
+        SELECT
+            model_version AS modelVersion,
+            evaluated_at AS evaluatedAt,
+            status,
+            oof_trade_dates AS oofTradeDates,
+            oof_candidates AS oofCandidates,
+            challenger_trades AS challengerTrades,
+            champion_trades AS championTrades,
+            challenger_mean_net_return AS challengerMeanNetReturn,
+            challenger_mean_excess_return AS challengerMeanExcessReturn,
+            champion_mean_net_return AS championMeanNetReturn,
+            champion_mean_excess_return AS championMeanExcessReturn,
+            net_return_lift AS netReturnLift,
+            excess_return_lift AS excessReturnLift,
+            challenger_max_drawdown AS challengerMaxDrawdown,
+            profitable_fold_rate AS profitableFoldRate,
+            qualified,
+            rejection_reasons_json AS rejectionReasonsJson
+        FROM model_challenger_evaluations
+        ORDER BY evaluated_at DESC, id DESC
+        LIMIT 12
+        """,
+    )
+    for row in rows:
+        row["qualified"] = bool(row.get("qualified"))
+        row["rejectionReasons"] = _decode_list(
+            row.pop("rejectionReasonsJson", "")
+        )
+    return rows
+
+
 def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
     db_path = Path(db_path)
     if not db_path.exists():
@@ -277,7 +314,20 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "scanRuns": _table_count(conn, "scan_runs"),
             "signals": _table_count(conn, "stock_signals"),
             "candidateEvents": _table_count(conn, "candidate_events"),
-            "featureSnapshots": _table_count(conn, "feature_snapshots"),
+            "featureSnapshots": (
+                int(
+                    conn.execute(
+                        """
+                        SELECT COUNT(*) FROM (
+                            SELECT run_id, code FROM feature_snapshots
+                            GROUP BY run_id, code
+                        )
+                        """
+                    ).fetchone()[0]
+                )
+                if _table_exists(conn, "feature_snapshots")
+                else 0
+            ),
             "predictions": _table_count(conn, "predictions"),
             "predictionOutcomes": _table_count(conn, "prediction_outcomes"),
             "modelVersions": _table_count(conn, "model_versions"),
@@ -769,6 +819,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
         )
         global_market = _global_market_snapshot(conn)
         research_experiments = _research_experiment_snapshot(conn)
+        model_challengers = _model_challenger_snapshot(conn)
 
         return {
             "schemaVersion": SCHEMA_VERSION,
@@ -784,6 +835,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "scanRuns": scan_runs,
             "backtestRuns": backtest_runs,
             "aiModels": ai_models,
+            "modelChallengers": model_challengers,
             "paperAccounts": paper_accounts,
             "paperEquity": paper_equity,
             "paperTrades": paper_trades,

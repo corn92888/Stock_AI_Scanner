@@ -182,6 +182,13 @@ def load_ai_signals(db_path=DB_PATH):
                 LEFT JOIN candidate_outcomes co
                   ON co.candidate_id=ce.id AND co.execution_version=?
                 WHERE p.is_prospective=1 AND p.is_selected=1
+                  AND p.id=(
+                      SELECT p2.id FROM predictions p2
+                      WHERE p2.run_id=p.run_id AND p2.code=p.code
+                        AND p2.is_prospective=1
+                      ORDER BY p2.predicted_at, p2.id
+                      LIMIT 1
+                  )
                 ORDER BY sr.trade_date, p.rank_order, p.id
                 """,
                 (CANDIDATE_EXECUTION_VERSION,),

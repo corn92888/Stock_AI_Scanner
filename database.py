@@ -177,6 +177,14 @@ def init_db(conn):
         "ON experiment_evaluations(experiment_id, evaluated_at DESC)"
     )
     conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_fundamentals_code_known "
+        "ON fundamental_observations(code, known_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_model_validation_version_date "
+        "ON model_validation_predictions(model_version, trade_date, fold_index)"
+    )
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_market_observations_key_time "
         "ON market_observations(instrument_key, snapshot_at DESC)"
     )
@@ -285,6 +293,9 @@ def _create_quant_tables(conn):
             signal_id INTEGER,
             code TEXT NOT NULL,
             as_of TEXT NOT NULL,
+            decision_at TEXT,
+            known_at TEXT,
+            point_in_time_valid INTEGER NOT NULL DEFAULT 0,
             feature_version TEXT NOT NULL,
             candidate_score REAL,
             strategy_count INTEGER,
@@ -315,11 +326,33 @@ def _create_quant_tables(conn):
             news_score REAL,
             catalyst_score REAL,
             risk_score REAL,
+            feature_lineage_json TEXT NOT NULL DEFAULT '{}',
+            quality_flags_json TEXT NOT NULL DEFAULT '[]',
             features_json TEXT,
             created_at TEXT NOT NULL,
             FOREIGN KEY (run_id) REFERENCES scan_runs(id),
             FOREIGN KEY (signal_id) REFERENCES stock_signals(id),
             UNIQUE (run_id, code, feature_version)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS fundamental_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL,
+            period_end TEXT,
+            published_at TEXT,
+            known_at TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            pe REAL,
+            pb REAL,
+            revenue_yoy REAL,
+            revenue_mom REAL,
+            eps_ttm REAL,
+            raw_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            UNIQUE (code, source_name, period_end, published_at)
         )
         """
     )
@@ -496,6 +529,57 @@ def _create_quant_tables(conn):
             created_at TEXT NOT NULL,
             promoted_at TEXT,
             UNIQUE (model_name, version)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS model_validation_predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            model_version TEXT NOT NULL,
+            feature_id INTEGER NOT NULL,
+            trade_date TEXT NOT NULL,
+            code TEXT NOT NULL,
+            fold_index INTEGER NOT NULL,
+            trained_through TEXT NOT NULL,
+            probability_t3 REAL NOT NULL,
+            expected_excess_return_3d REAL NOT NULL,
+            expected_max_drawdown_3d REAL NOT NULL,
+            final_score REAL NOT NULL,
+            is_selected INTEGER NOT NULL DEFAULT 0,
+            actual_success_t3 INTEGER NOT NULL,
+            actual_net_return_3d REAL NOT NULL,
+            actual_excess_return_3d REAL NOT NULL,
+            actual_max_drawdown_3d REAL NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (feature_id) REFERENCES feature_snapshots(id),
+            UNIQUE (model_version, feature_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS model_challenger_evaluations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            model_version TEXT NOT NULL UNIQUE,
+            evaluated_at TEXT NOT NULL,
+            status TEXT NOT NULL,
+            oof_trade_dates INTEGER NOT NULL DEFAULT 0,
+            oof_candidates INTEGER NOT NULL DEFAULT 0,
+            challenger_trades INTEGER NOT NULL DEFAULT 0,
+            champion_trades INTEGER NOT NULL DEFAULT 0,
+            challenger_mean_net_return REAL,
+            challenger_mean_excess_return REAL,
+            champion_mean_net_return REAL,
+            champion_mean_excess_return REAL,
+            net_return_lift REAL,
+            excess_return_lift REAL,
+            challenger_max_drawdown REAL,
+            profitable_fold_rate REAL,
+            qualified INTEGER NOT NULL DEFAULT 0,
+            rejection_reasons_json TEXT NOT NULL,
+            metrics_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
         )
         """
     )
@@ -702,6 +786,11 @@ def _migrate_quant_tables(conn):
             "tradable": "INTEGER",
             "is_first_eligible_event": "INTEGER",
             "stop_distance_pct": "REAL",
+            "decision_at": "TEXT",
+            "known_at": "TEXT",
+            "point_in_time_valid": "INTEGER NOT NULL DEFAULT 0",
+            "feature_lineage_json": "TEXT NOT NULL DEFAULT '{}'",
+            "quality_flags_json": "TEXT NOT NULL DEFAULT '[]'",
         },
     )
     _ensure_columns(
