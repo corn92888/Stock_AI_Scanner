@@ -18,16 +18,16 @@ class ScanSlot:
 
 
 INTRADAY_SLOTS = (
-    ScanSlot("09:00", dt.time(9, 0), dt.time(9, 29, 59), "0 1 * * 1-5"),
-    ScanSlot("09:30", dt.time(9, 30), dt.time(9, 59, 59), "30 1 * * 1-5"),
-    ScanSlot("10:00", dt.time(10, 0), dt.time(10, 29, 59), "0 2 * * 1-5"),
-    ScanSlot("10:30", dt.time(10, 30), dt.time(10, 59, 59), "30 2 * * 1-5"),
-    ScanSlot("11:00", dt.time(11, 0), dt.time(11, 29, 59), "0 3 * * 1-5"),
-    ScanSlot("11:30", dt.time(11, 30), dt.time(11, 59, 59), "30 3 * * 1-5"),
-    ScanSlot("12:00", dt.time(12, 0), dt.time(12, 29, 59), "0 4 * * 1-5"),
-    ScanSlot("12:30", dt.time(12, 30), dt.time(12, 59, 59), "30 4 * * 1-5"),
-    ScanSlot("13:00", dt.time(13, 0), dt.time(13, 29, 59), "0 5 * * 1-5"),
-    ScanSlot("13:30", dt.time(13, 30), dt.time(13, 59, 59), "30 5 * * 1-5"),
+    ScanSlot("09:00", dt.time(9, 0), dt.time(9, 29, 59), "7 1 * * 1-5"),
+    ScanSlot("09:30", dt.time(9, 30), dt.time(9, 59, 59), "37 1 * * 1-5"),
+    ScanSlot("10:00", dt.time(10, 0), dt.time(10, 29, 59), "7 2 * * 1-5"),
+    ScanSlot("10:30", dt.time(10, 30), dt.time(10, 59, 59), "37 2 * * 1-5"),
+    ScanSlot("11:00", dt.time(11, 0), dt.time(11, 29, 59), "7 3 * * 1-5"),
+    ScanSlot("11:30", dt.time(11, 30), dt.time(11, 59, 59), "37 3 * * 1-5"),
+    ScanSlot("12:00", dt.time(12, 0), dt.time(12, 29, 59), "7 4 * * 1-5"),
+    ScanSlot("12:30", dt.time(12, 30), dt.time(12, 59, 59), "37 4 * * 1-5"),
+    ScanSlot("13:00", dt.time(13, 0), dt.time(13, 29, 59), "7 5 * * 1-5"),
+    ScanSlot("13:30", dt.time(13, 30), dt.time(13, 59, 59), "37 5 * * 1-5"),
 )
 
 

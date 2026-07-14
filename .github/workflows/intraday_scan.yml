@@ -2,19 +2,20 @@ name: Intraday Stock AI Scanner
 
 on:
   schedule:
-    # UTC schedule mapped to Asia/Taipei 09:00-13:30 every 30 minutes.
+    # Offset seven minutes from common queue peaks while preserving each
+    # Asia/Taipei 09:00-13:30 half-hour decision slot in automation_guard.py.
     # Separate expressions let the guard retain the intended slot even when
     # GitHub queues a scheduled run several minutes late.
-    - cron: '0 1 * * 1-5'   # 09:00
-    - cron: '30 1 * * 1-5'  # 09:30
-    - cron: '0 2 * * 1-5'   # 10:00
-    - cron: '30 2 * * 1-5'  # 10:30
-    - cron: '0 3 * * 1-5'   # 11:00
-    - cron: '30 3 * * 1-5'  # 11:30
-    - cron: '0 4 * * 1-5'   # 12:00
-    - cron: '30 4 * * 1-5'  # 12:30
-    - cron: '0 5 * * 1-5'   # 13:00
-    - cron: '30 5 * * 1-5'  # 13:30
+    - cron: '7 1 * * 1-5'   # 09:07 -> 09:00 slot
+    - cron: '37 1 * * 1-5'  # 09:37 -> 09:30 slot
+    - cron: '7 2 * * 1-5'   # 10:07 -> 10:00 slot
+    - cron: '37 2 * * 1-5'  # 10:37 -> 10:30 slot
+    - cron: '7 3 * * 1-5'   # 11:07 -> 11:00 slot
+    - cron: '37 3 * * 1-5'  # 11:37 -> 11:30 slot
+    - cron: '7 4 * * 1-5'   # 12:07 -> 12:00 slot
+    - cron: '37 4 * * 1-5'  # 12:37 -> 12:30 slot
+    - cron: '7 5 * * 1-5'   # 13:07 -> 13:00 slot
+    - cron: '37 5 * * 1-5'  # 13:37 -> 13:30 slot
   workflow_dispatch:
     inputs:
       trigger_source:

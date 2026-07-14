@@ -29,21 +29,25 @@ class WorkflowPersistenceTests(unittest.TestCase):
     def test_intraday_workflow_has_all_half_hour_market_slots(self):
         workflow = (ROOT / ".github" / "workflows" / "intraday_scan.yml").read_text()
         expected_crons = (
-            "0 1 * * 1-5",
-            "30 1 * * 1-5",
-            "0 2 * * 1-5",
-            "30 2 * * 1-5",
-            "0 3 * * 1-5",
-            "30 3 * * 1-5",
-            "0 4 * * 1-5",
-            "30 4 * * 1-5",
-            "0 5 * * 1-5",
-            "30 5 * * 1-5",
+            "7 1 * * 1-5",
+            "37 1 * * 1-5",
+            "7 2 * * 1-5",
+            "37 2 * * 1-5",
+            "7 3 * * 1-5",
+            "37 3 * * 1-5",
+            "7 4 * * 1-5",
+            "37 4 * * 1-5",
+            "7 5 * * 1-5",
+            "37 5 * * 1-5",
         )
 
         for cron in expected_crons:
             self.assertEqual(workflow.count(f"cron: '{cron}'"), 1)
         self.assertIn('EVENT_SCHEDULE: ${{ github.event.schedule }}', workflow)
+
+    def test_daily_workflow_avoids_top_of_hour_queue_peak(self):
+        workflow = (ROOT / ".github" / "workflows" / "daily_scan.yml").read_text()
+        self.assertEqual(workflow.count("cron: '17 6 * * 1-5'"), 1)
 
     def test_daily_workflow_backtests_all_candidates_before_training(self):
         workflow = (ROOT / ".github" / "workflows" / "daily_scan.yml").read_text()

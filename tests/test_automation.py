@@ -61,12 +61,12 @@ class AutomationGuardTests(unittest.TestCase):
         decision = evaluate_intraday_run(
             now=now,
             db_path=self.db_path,
-            scheduled_cron="0 1 * * 1-5",
+            scheduled_cron="7 1 * * 1-5",
         )
 
         self.assertTrue(decision["run"])
         self.assertEqual(decision["slot"], "09:00")
-        self.assertEqual(find_scheduled_slot("30 5 * * 1-5").name, "13:30")
+        self.assertEqual(find_scheduled_slot("37 5 * * 1-5").name, "13:30")
 
     def test_completed_slot_is_detected_from_structured_notes(self):
         conn = sqlite3.connect(self.db_path)
