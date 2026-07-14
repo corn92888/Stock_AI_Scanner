@@ -388,9 +388,8 @@ def score_candidate(row):
     )
 
 
-def build_candidate_ranking(scan_path, market_path):
-    signals = load_scan_signals(scan_path)
-    market, industry, summary, focus = load_market_report(market_path)
+def build_candidate_ranking_from_data(signals, market, industry, summary, focus=None):
+    focus = focus if focus is not None else pd.DataFrame()
     quote_time = _summary_map(summary).get("更新時間", "")
 
     if signals.empty:
@@ -450,6 +449,12 @@ def build_candidate_ranking(scan_path, market_path):
     sort_cols = [col for col in ["分數", "成交值(億)", "策略數"] if col in ranked.columns]
     ranked = ranked.sort_values(sort_cols, ascending=[False] * len(sort_cols)) if sort_cols else ranked
     return ranked, signals, market, industry, summary, focus
+
+
+def build_candidate_ranking(scan_path, market_path):
+    signals = load_scan_signals(scan_path)
+    market, industry, summary, focus = load_market_report(market_path)
+    return build_candidate_ranking_from_data(signals, market, industry, summary, focus)
 
 
 def _strategy_count_text(signals):

@@ -85,6 +85,7 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertEqual(payload["overview"]["candidateOutcomes"], 0)
             self.assertEqual(payload["overview"]["paperAccounts"], 0)
             self.assertEqual(payload["paperAccounts"], [])
+            self.assertEqual(payload["researchExperiments"], [])
             self.assertEqual(payload["globalMarket"]["quality"]["status"], "unavailable")
             self.assertFalse(payload["globalMarket"]["quality"]["formalRankingEnabled"])
             self.assertEqual(payload["researchQuality"]["matureRejectedOutcomes"], 0)
@@ -150,3 +151,48 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertEqual(snapshot["paperAccounts"][0]["comparisonStartAt"], "2026-07-13")
             self.assertEqual(snapshot["paperAccounts"][0]["comparisonReturnPct"], 0)
             self.assertEqual(snapshot["paperEquity"][0]["equity"], 1010000)
+
+    def test_snapshot_exports_latest_strategy_experiment_evaluation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scanner.db"
+            with get_connection(database) as conn:
+                init_db(conn)
+                experiment_id = conn.execute(
+                    """
+                    INSERT INTO research_experiments (
+                        experiment_key, name, hypothesis, strategy_family,
+                        execution_version, objective, status, config_json,
+                        created_at, updated_at
+                    ) VALUES (
+                        'trend_v2', 'Trend v2', 'test trend', 'trend',
+                        'execution_v2', 'after_cost_excess_return', 'candidate',
+                        '{}', '2026-07-14T14:00:00+08:00',
+                        '2026-07-14T14:00:00+08:00'
+                    )
+                    """
+                ).lastrowid
+                conn.execute(
+                    """
+                    INSERT INTO experiment_evaluations (
+                        experiment_id, evaluation_version, evaluated_at,
+                        sample_start, sample_end, trade_dates, trades, folds,
+                        mean_net_return, mean_excess_return, positive_rate,
+                        annualized_sharpe, probabilistic_sharpe, max_drawdown,
+                        profitable_fold_rate, qualified,
+                        rejection_reasons_json, metrics_json
+                    ) VALUES (
+                        ?, 'eval_v1', '2026-07-14T14:10:00+08:00',
+                        '2026-01-01', '2026-07-14', 120, 300, 5,
+                        1.2, 0.7, 58, 1.4, 0.96, -8.5, 0.8, 1, '[]', '{}'
+                    )
+                    """,
+                    (experiment_id,),
+                )
+
+            experiment = build_dashboard_snapshot(database)[
+                "researchExperiments"
+            ][0]
+            self.assertEqual(experiment["experimentKey"], "trend_v2")
+            self.assertEqual(experiment["meanExcessReturn"], 0.7)
+            self.assertTrue(experiment["qualified"])
+            self.assertEqual(experiment["rejectionReasons"], [])

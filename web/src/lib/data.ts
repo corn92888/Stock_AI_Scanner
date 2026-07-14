@@ -70,6 +70,7 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
       ...EMPTY_RESEARCH_QUALITY,
       ...(snapshot.researchQuality ?? {}),
     },
+    researchExperiments: snapshot.researchExperiments ?? [],
     aiModels: snapshot.aiModels ?? [],
     paperAccounts: (snapshot.paperAccounts ?? []).map((account) => ({
       ...account,

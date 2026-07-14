@@ -7,8 +7,9 @@ from pathlib import Path
 
 DB_PATH = Path("data/stock_scanner.db")
 STRATEGY_VERSION = "strict_v1"
-CANDIDATE_EXECUTION_VERSION = "next_day_open_defense_close_t3_v1"
-PAPER_POLICY_VERSION = "paper_portfolio_v1"
+LEGACY_CANDIDATE_EXECUTION_VERSION = "next_day_open_defense_close_t3_v1"
+CANDIDATE_EXECUTION_VERSION = "mode_aligned_after_costs_t3_v2"
+PAPER_POLICY_VERSION = "risk_budget_portfolio_v2"
 
 
 def get_taipei_now():
@@ -151,6 +152,7 @@ def init_db(conn):
     )
     _migrate_backtest_results(conn)
     _create_quant_tables(conn)
+    _create_research_tables(conn)
     _create_global_market_tables(conn)
     _migrate_quant_tables(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_trade_date ON stock_signals(trade_date)")
@@ -169,6 +171,10 @@ def init_db(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_candidate_outcomes_status "
         "ON candidate_outcomes(execution_version, matured_horizon, outcome_status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_experiment_evaluations_time "
+        "ON experiment_evaluations(experiment_id, evaluated_at DESC)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_market_observations_key_time "
@@ -323,6 +329,8 @@ def _create_quant_tables(conn):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             candidate_id INTEGER NOT NULL,
             execution_version TEXT NOT NULL,
+            entry_status TEXT NOT NULL DEFAULT 'filled',
+            skip_reason TEXT,
             entry_at TEXT,
             entry_price REAL,
             entry_adjustment_factor REAL,
@@ -569,6 +577,54 @@ def _create_quant_tables(conn):
     )
 
 
+def _create_research_tables(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS research_experiments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            experiment_key TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            hypothesis TEXT NOT NULL,
+            strategy_family TEXT NOT NULL,
+            execution_version TEXT NOT NULL,
+            objective TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'candidate',
+            config_json TEXT NOT NULL,
+            git_commit TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS experiment_evaluations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            experiment_id INTEGER NOT NULL,
+            evaluation_version TEXT NOT NULL,
+            evaluated_at TEXT NOT NULL,
+            sample_start TEXT,
+            sample_end TEXT,
+            trade_dates INTEGER NOT NULL DEFAULT 0,
+            trades INTEGER NOT NULL DEFAULT 0,
+            folds INTEGER NOT NULL DEFAULT 0,
+            mean_net_return REAL,
+            mean_excess_return REAL,
+            positive_rate REAL,
+            annualized_sharpe REAL,
+            probabilistic_sharpe REAL,
+            max_drawdown REAL,
+            profitable_fold_rate REAL,
+            qualified INTEGER NOT NULL DEFAULT 0,
+            rejection_reasons_json TEXT NOT NULL,
+            metrics_json TEXT NOT NULL,
+            FOREIGN KEY (experiment_id) REFERENCES research_experiments(id),
+            UNIQUE (experiment_id, evaluation_version)
+        )
+        """
+    )
+
+
 def _create_global_market_tables(conn):
     conn.execute(
         """
@@ -651,7 +707,11 @@ def _migrate_quant_tables(conn):
     _ensure_columns(
         conn,
         "candidate_outcomes",
-        {"entry_adjustment_factor": "REAL"},
+        {
+            "entry_adjustment_factor": "REAL",
+            "entry_status": "TEXT NOT NULL DEFAULT 'filled'",
+            "skip_reason": "TEXT",
+        },
     )
     _ensure_columns(
         conn,
@@ -925,6 +985,8 @@ def save_candidate_outcome(candidate_id, execution_version, result, db_path=DB_P
     columns = [
         "candidate_id",
         "execution_version",
+        "entry_status",
+        "skip_reason",
         "entry_at",
         "entry_price",
         "entry_adjustment_factor",
@@ -958,6 +1020,8 @@ def save_candidate_outcome(candidate_id, execution_version, result, db_path=DB_P
             value = int(candidate_id)
         elif column == "execution_version":
             value = execution_version
+        elif column == "entry_status":
+            value = result.get(column) or "filled"
         elif column in {"evaluated_at", "updated_at"}:
             value = evaluated_at
         elif column in {"defense_triggered", "success_t3"}:

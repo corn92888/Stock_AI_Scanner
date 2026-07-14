@@ -29,7 +29,12 @@ class CandidateExecutionConfig(BacktestConfig):
     execution_version: str = CANDIDATE_EXECUTION_VERSION
     decision_horizon: int = 3
     completion_horizon: int = 5
-    defense_rule: str = "close_below_observation"
+    intraday_entry_method: str = "signal_snapshot"
+    eod_entry_method: str = "next_day_open_validated"
+    intraday_benchmark_method: str = "previous_close_proxy"
+    defense_rule: str = "next_session_close_below_observation"
+    enforce_chase_limit: bool = True
+    reject_gap_below_defense: bool = True
 
 
 def load_pending_candidates(
@@ -41,7 +46,10 @@ def load_pending_candidates(
     where = []
     params = [execution_version]
     if not refresh:
-        where.append("(co.id IS NULL OR COALESCE(co.outcome_status, 'pending') <> 'complete')")
+        where.append(
+            "(co.id IS NULL OR COALESCE(co.outcome_status, 'pending') "
+            "NOT IN ('complete', 'skipped'))"
+        )
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     sql = f"""
         SELECT ce.*, sr.trade_date, sr.mode, sr.run_at
@@ -73,6 +81,7 @@ def _candidate_fixed_returns(future, entry_price, config):
 
 def calculate_candidate_result(candidate, price_df, benchmark_df=None, config=None):
     config = config or CandidateExecutionConfig()
+    candidate = dict(candidate)
     price_df = _normalize_price_frame(price_df)
     if price_df is None or price_df.empty:
         return None
@@ -84,16 +93,60 @@ def calculate_candidate_result(candidate, price_df, benchmark_df=None, config=No
     if future.empty:
         return None
 
-    entry_row = future.iloc[0]
-    entry_at = future.index[0]
-    entry_price = float(entry_row["Open"])
-    entry_factor = float(entry_row.get("AdjustmentFactor", 1.0))
+    mode = str(candidate.get("mode") or "intraday").lower()
+    signal_day = price_df[price_df.index.normalize() == trade_date]
+    signal_factor = (
+        float(signal_day.iloc[-1].get("AdjustmentFactor", 1.0))
+        if not signal_day.empty
+        else 1.0
+    )
+    if mode == "intraday":
+        entry_at = candidate.get("as_of") or trade_date.strftime("%Y-%m-%d")
+        raw_entry_price = candidate.get("signal_price")
+        entry_price = (
+            float(raw_entry_price) * signal_factor
+            if raw_entry_price is not None
+            else None
+        )
+        entry_factor = signal_factor
+        entry_method = config.intraday_entry_method
+    else:
+        entry_row = future.iloc[0]
+        entry_at = future.index[0]
+        entry_price = float(entry_row["Open"])
+        entry_factor = float(entry_row.get("AdjustmentFactor", 1.0))
+        entry_method = config.eod_entry_method
+
+    chase_limit = candidate.get("chase_limit")
+    chase_limit = float(chase_limit) * entry_factor if chase_limit is not None else None
+    defense_price = candidate.get("observation_price")
+    defense_price = float(defense_price) * entry_factor if defense_price is not None else None
+
+    skip_reason = None
+    if entry_price is None or entry_price <= 0:
+        skip_reason = "missing_entry_price"
+    elif config.enforce_chase_limit and chase_limit is not None and entry_price > chase_limit:
+        skip_reason = "above_chase_limit"
+    elif (
+        mode != "intraday"
+        and config.reject_gap_below_defense
+        and defense_price is not None
+        and entry_price <= defense_price
+    ):
+        skip_reason = "gap_below_defense"
+
     matured = [horizon for horizon in (1, 3, 5) if len(future) >= horizon]
     result = {
-        "entry_at": entry_at.strftime("%Y-%m-%d"),
-        "entry_price": round(entry_price, 4),
+        "entry_status": "skipped" if skip_reason else "filled",
+        "skip_reason": skip_reason,
+        "entry_at": (
+            entry_at.strftime("%Y-%m-%d")
+            if hasattr(entry_at, "strftime")
+            else str(entry_at)
+        ),
+        "entry_price": round(entry_price, 4) if entry_price is not None else None,
         "entry_adjustment_factor": round(entry_factor, 8),
-        "entry_method": "next_day_open",
+        "entry_method": entry_method,
         "exit_at": None,
         "exit_price": None,
         "exit_reason": None,
@@ -107,24 +160,41 @@ def calculate_candidate_result(candidate, price_df, benchmark_df=None, config=No
         "defense_triggered": False,
         "success_t3": None,
         "matured_horizon": max(matured, default=0),
-        "outcome_status": "complete" if len(future) >= config.completion_horizon else "partial",
+        "outcome_status": (
+            "skipped"
+            if skip_reason
+            else "complete" if len(future) >= config.completion_horizon else "partial"
+        ),
         "price_data_end": price_df.index[-1].strftime("%Y-%m-%d"),
         "costs_bps": config.costs_bps,
         "config_json": json.dumps(asdict(config), ensure_ascii=True, sort_keys=True),
-        **_candidate_fixed_returns(future, entry_price, config),
     }
 
-    benchmark_entry = _row_for_date(benchmark_df, entry_at)
+    if skip_reason:
+        result.update({f"fixed_net_return_{horizon}d": None for horizon in (1, 3, 5)})
+        return result
+
+    result.update(_candidate_fixed_returns(future, entry_price, config))
+
+    if mode == "intraday" and benchmark_df is not None:
+        known_benchmark = benchmark_df[
+            benchmark_df.index.normalize() < trade_date
+        ]
+        benchmark_entry = known_benchmark.iloc[-1] if not known_benchmark.empty else None
+        benchmark_column = "Close"
+    else:
+        benchmark_entry = _row_for_date(benchmark_df, pd.Timestamp(entry_at))
+        benchmark_column = "Open"
     if benchmark_entry is not None:
-        result["benchmark_entry_price"] = round(float(benchmark_entry["Open"]), 4)
+        result["benchmark_entry_price"] = round(
+            float(benchmark_entry[benchmark_column]), 4
+        )
 
     if len(future) < config.decision_horizon:
         return result
 
     decision_window = future.head(config.decision_horizon)
-    defense_price = candidate["observation_price"]
     if defense_price is not None:
-        defense_price = float(defense_price) * entry_factor
         defense_hits = decision_window[decision_window["Close"] < defense_price]
     else:
         defense_hits = decision_window.iloc[0:0]
@@ -217,6 +287,8 @@ def run_candidate_backtest(
             saved += 1
             if result["outcome_status"] == "complete":
                 complete += 1
+            elif result["outcome_status"] == "skipped":
+                skipped += 1
             else:
                 partial += 1
         finish_backtest_run(

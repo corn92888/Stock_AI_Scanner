@@ -88,7 +88,12 @@ jobs:
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
       run: |
-        python ai_pipeline.py --no-news --no-predict
+        python ai_pipeline.py --no-news
+
+    - name: Evaluate strategy experiments
+      if: steps.gate.outputs.run == 'true'
+      run: |
+        python research_evaluation.py
 
     - name: Settle rule and AI paper portfolios
       if: steps.gate.outputs.run == 'true'

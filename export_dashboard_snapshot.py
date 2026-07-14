@@ -194,6 +194,61 @@ def _global_market_snapshot(conn):
         "history": history,
         "quality": quality,
     }
+
+
+def _research_experiment_snapshot(conn):
+    required = {"research_experiments", "experiment_evaluations"}
+    if any(not _table_exists(conn, table) for table in required):
+        return []
+    rows = _read_records(
+        conn,
+        """
+        WITH latest AS (
+            SELECT ee.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY ee.experiment_id
+                       ORDER BY ee.evaluated_at DESC, ee.id DESC
+                   ) AS row_number
+            FROM experiment_evaluations ee
+        )
+        SELECT
+            re.experiment_key AS experimentKey,
+            re.name,
+            re.hypothesis,
+            re.strategy_family AS strategyFamily,
+            re.execution_version AS executionVersion,
+            re.status,
+            latest.evaluated_at AS evaluatedAt,
+            latest.sample_start AS sampleStart,
+            latest.sample_end AS sampleEnd,
+            latest.trade_dates AS tradeDates,
+            latest.trades,
+            latest.folds,
+            latest.mean_net_return AS meanNetReturn,
+            latest.mean_excess_return AS meanExcessReturn,
+            latest.positive_rate AS positiveRate,
+            latest.annualized_sharpe AS annualizedSharpe,
+            latest.probabilistic_sharpe AS probabilisticSharpe,
+            latest.max_drawdown AS maxDrawdown,
+            latest.profitable_fold_rate AS profitableFoldRate,
+            latest.qualified,
+            latest.rejection_reasons_json AS rejectionReasonsJson
+        FROM research_experiments re
+        LEFT JOIN latest
+          ON latest.experiment_id=re.id AND latest.row_number=1
+        ORDER BY COALESCE(latest.qualified, 0) DESC,
+                 COALESCE(latest.mean_excess_return, -999999) DESC,
+                 re.id
+        """,
+    )
+    for row in rows:
+        row["qualified"] = bool(row.get("qualified"))
+        row["rejectionReasons"] = _decode_list(
+            row.pop("rejectionReasonsJson", "")
+        )
+    return rows
+
+
 def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
     db_path = Path(db_path)
     if not db_path.exists():
@@ -713,6 +768,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             if row.get("evidenceMode") == "prospective_only"
         )
         global_market = _global_market_snapshot(conn)
+        research_experiments = _research_experiment_snapshot(conn)
 
         return {
             "schemaVersion": SCHEMA_VERSION,
@@ -720,6 +776,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "candidateDetailDays": CANDIDATE_DETAIL_DAYS,
             "overview": overview,
             "researchQuality": research_quality,
+            "researchExperiments": research_experiments,
             "candidates": candidates,
             "dailyCandidates": daily_candidates,
             "statusCounts": status_counts,

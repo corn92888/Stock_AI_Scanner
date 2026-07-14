@@ -46,6 +46,30 @@ export type ResearchQuality = {
   selectionExcessLift3d: number | null;
 };
 
+export type ResearchExperiment = {
+  experimentKey: string;
+  name: string;
+  hypothesis: string;
+  strategyFamily: string;
+  executionVersion: string;
+  status: string;
+  evaluatedAt: string | null;
+  sampleStart: string | null;
+  sampleEnd: string | null;
+  tradeDates: number | null;
+  trades: number | null;
+  folds: number | null;
+  meanNetReturn: number | null;
+  meanExcessReturn: number | null;
+  positiveRate: number | null;
+  annualizedSharpe: number | null;
+  probabilisticSharpe: number | null;
+  maxDrawdown: number | null;
+  profitableFoldRate: number | null;
+  qualified: boolean;
+  rejectionReasons: string[];
+};
+
 export type Candidate = {
   tradeDate: string;
   runAt: string;
@@ -322,6 +346,7 @@ export type DashboardSnapshot = {
   candidateDetailDays: number;
   overview: Overview;
   researchQuality: ResearchQuality;
+  researchExperiments: ResearchExperiment[];
   candidates: Candidate[];
   dailyCandidates: DailyCandidate[];
   statusCounts: { status: string; count: number; label: string }[];

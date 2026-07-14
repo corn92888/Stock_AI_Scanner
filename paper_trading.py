@@ -22,6 +22,7 @@ class PaperTradingConfig(BacktestConfig):
     starting_cash: float = 1_000_000.0
     max_positions: int = 5
     position_size_pct: float = 0.20
+    risk_budget_pct: float = 0.01
     cash_buffer_pct: float = 0.05
     min_trade_value: float = 10_000.0
     enforce_chase_limit: bool = True
@@ -115,6 +116,8 @@ def load_rule_signals(db_path=DB_PATH):
                     co.entry_at,
                     co.entry_price,
                     co.entry_adjustment_factor,
+                    co.entry_status,
+                    co.skip_reason AS outcome_skip_reason,
                     co.exit_at,
                     co.exit_price,
                     co.exit_reason,
@@ -158,6 +161,8 @@ def load_ai_signals(db_path=DB_PATH):
                     co.entry_at,
                     co.entry_price,
                     co.entry_adjustment_factor,
+                    co.entry_status,
+                    co.skip_reason AS outcome_skip_reason,
                     co.exit_at,
                     co.exit_price,
                     co.exit_reason,
@@ -253,6 +258,8 @@ def _base_trade(signal):
         "model_version": signal.get("model_version"),
         "entry_at": signal.get("entry_at"),
         "entry_price": _safe_number(signal.get("entry_price")),
+        "entry_status": signal.get("entry_status") or "filled",
+        "outcome_skip_reason": signal.get("outcome_skip_reason"),
         "entry_fee": None,
         "quantity": None,
         "invested_amount": None,
@@ -303,6 +310,10 @@ def simulate_account(spec, signals, config=None, price_cache=None, as_of=None):
     )
 
     for trade in trades:
+        if trade["entry_status"] == "skipped" or trade["outcome_skip_reason"]:
+            trade["status"] = "skipped"
+            trade["skip_reason"] = trade["outcome_skip_reason"] or "execution_rejected"
+            continue
         entry_at = _normalized_date(trade["entry_at"])
         if entry_at is None or trade["entry_price"] is None:
             signal_date = _normalized_date(trade["signal_date"])
@@ -365,13 +376,28 @@ def simulate_account(spec, signals, config=None, price_cache=None, as_of=None):
                 trade["status"] = "skipped"
                 trade["skip_reason"] = "above_chase_limit"
                 continue
+            if (
+                trade["stop_price"] is not None
+                and trade["stop_price"] >= trade["entry_price"]
+            ):
+                trade["status"] = "skipped"
+                trade["skip_reason"] = "invalid_stop_at_entry"
+                continue
 
             unit_cost = trade["entry_price"] * (
                 1 + config.buy_fee_rate + config.slippage_rate
             )
             cash_reserve = sizing_equity * config.cash_buffer_pct
+            risk_spend_limit = sizing_equity * config.position_size_pct
+            if trade["stop_price"] is not None and trade["entry_price"] > 0:
+                risk_fraction = (trade["entry_price"] - trade["stop_price"]) / trade["entry_price"]
+                if risk_fraction > 0:
+                    risk_spend_limit = min(
+                        risk_spend_limit,
+                        sizing_equity * config.risk_budget_pct / risk_fraction,
+                    )
             spend_limit = min(
-                sizing_equity * config.position_size_pct,
+                risk_spend_limit,
                 max(0.0, cash - cash_reserve),
             )
             quantity = int(spend_limit // unit_cost) if unit_cost > 0 else 0

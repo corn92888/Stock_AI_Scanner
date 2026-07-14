@@ -337,12 +337,37 @@ def run_scanner():
         )
         print(f"🗃️  已寫入訊號資料庫: {db_result['db_path']} ({db_result['signals']} 筆訊號)")
     except Exception as e:
-        print(f"⚠️ 訊號資料庫寫入失敗: {e}")
+        raise RuntimeError(f"訊號資料庫寫入失敗: {e}") from e
+
+    try:
+        from eod_research import save_eod_research_candidates
+
+        research = save_eod_research_candidates(
+            db_result["run_id"],
+            strategy_frames,
+            all_stock_data,
+            yf_to_code,
+            codes,
+            captured_at=now,
+        )
+        print(
+            f"🧪 盤後研究候選已建立: {research['saved']} 筆，"
+            f"正式模擬入選 {research['selected']} 筆"
+        )
+    except Exception as e:
+        raise RuntimeError(f"盤後研究候選建立失敗: {e}") from e
     
     elapsed = time.time() - start_time
     minutes, seconds = divmod(int(elapsed), 60)
     print(f"\n📊 掃描完成！Excel 已儲存: {filename}")
     print(f"⏱️  總耗時: {minutes} 分 {seconds} 秒")
+    return {
+        "run_id": db_result["run_id"],
+        "signal_count": db_result["signals"],
+        "candidate_count": research["saved"],
+        "selected_count": research["selected"],
+        "report_path": filename,
+    }
 
 if __name__ == "__main__":
     run_scanner()

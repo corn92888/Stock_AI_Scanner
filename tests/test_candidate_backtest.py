@@ -38,6 +38,7 @@ class CandidateOutcomeCalculationTests(unittest.TestCase):
         self.candidate = {
             "id": 1,
             "trade_date": "2026-01-02",
+            "mode": "eod",
             "code": "2330",
             "observation_price": 99.0,
         }
@@ -79,6 +80,41 @@ class CandidateOutcomeCalculationTests(unittest.TestCase):
         self.assertEqual(result["exit_at"], "2026-01-07")
         self.assertEqual(result["net_return_3d"], 5.0)
         self.assertTrue(result["success_t3"])
+
+    def test_intraday_candidate_enters_at_the_recorded_signal_snapshot(self):
+        candidate = dict(
+            self.candidate,
+            mode="intraday",
+            as_of="2026-01-02T10:00:00+08:00",
+            signal_price=101.0,
+            observation_price=90.0,
+            chase_limit=102.0,
+        )
+        result = calculate_candidate_result(
+            candidate,
+            candidate_prices(),
+            benchmark_df=self.benchmark,
+            config=self.config,
+        )
+        self.assertEqual(result["entry_status"], "filled")
+        self.assertEqual(result["entry_method"], "signal_snapshot")
+        self.assertEqual(result["entry_at"], "2026-01-02T10:00:00+08:00")
+        self.assertEqual(result["entry_price"], 101.0)
+        self.assertEqual(result["exit_at"], "2026-01-07")
+        self.assertAlmostEqual(result["net_return_3d"], 3.9604)
+
+    def test_eod_candidate_is_not_filled_below_the_recorded_defense(self):
+        candidate = dict(self.candidate, observation_price=101.0)
+        result = calculate_candidate_result(
+            candidate,
+            candidate_prices(),
+            benchmark_df=self.benchmark,
+            config=self.config,
+        )
+        self.assertEqual(result["entry_status"], "skipped")
+        self.assertEqual(result["skip_reason"], "gap_below_defense")
+        self.assertEqual(result["outcome_status"], "skipped")
+        self.assertIsNone(result["net_return_3d"])
 
 
 class CandidateOutcomeDatabaseTests(unittest.TestCase):
@@ -138,6 +174,21 @@ class CandidateOutcomeDatabaseTests(unittest.TestCase):
             )
             remaining = load_pending_candidates(db_path=db_path)
             self.assertEqual([row["id"] for row in remaining], [pending[1]["id"]])
+
+            save_candidate_outcome(
+                pending[1]["id"],
+                CANDIDATE_EXECUTION_VERSION,
+                {
+                    "entry_status": "skipped",
+                    "skip_reason": "above_chase_limit",
+                    "entry_method": "signal_snapshot",
+                    "matured_horizon": 5,
+                    "outcome_status": "skipped",
+                    "defense_triggered": False,
+                },
+                db_path=db_path,
+            )
+            self.assertEqual(load_pending_candidates(db_path=db_path), [])
 
 
 if __name__ == "__main__":

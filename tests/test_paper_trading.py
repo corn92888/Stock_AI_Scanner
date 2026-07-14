@@ -43,6 +43,8 @@ def signal(source_id, code, chase_limit=105.0):
         "industry": "Test",
         "rank_order": source_id,
         "model_version": None,
+        "entry_status": "filled",
+        "outcome_skip_reason": None,
         "raw_chase_limit": chase_limit,
         "raw_stop_price": 95.0,
         "entry_at": "2026-01-05",
@@ -105,6 +107,39 @@ class PaperTradingTests(unittest.TestCase):
         self.assertEqual(result["trades"][0]["status"], "pending")
         self.assertEqual(result["trades"][0]["skip_reason"], "awaiting_next_open")
         self.assertEqual(result["account"]["pending_orders"], 1)
+        self.assertEqual(result["account"]["equity"], 100_000.0)
+
+    def test_risk_budget_reduces_position_size_for_a_distant_stop(self):
+        distant_stop = signal(4, "3008")
+        distant_stop["raw_stop_price"] = 80.0
+        result = simulate_account(
+            ACCOUNT_SPECS[0],
+            [distant_stop],
+            config=self.config,
+            price_cache=self.cache,
+            as_of="2026-01-09",
+        )
+        trade = result["trades"][0]
+        self.assertEqual(trade["quantity"], 50)
+        self.assertEqual(trade["realized_pnl"], 500.0)
+
+    def test_rejected_execution_outcome_never_opens_a_position(self):
+        rejected = signal(5, "2303")
+        rejected.update(
+            entry_status="skipped",
+            outcome_skip_reason="gap_below_defense",
+        )
+        result = simulate_account(
+            ACCOUNT_SPECS[0],
+            [rejected],
+            config=self.config,
+            price_cache=self.cache,
+            as_of="2026-01-09",
+        )
+        self.assertEqual(result["trades"][0]["status"], "skipped")
+        self.assertEqual(
+            result["trades"][0]["skip_reason"], "gap_below_defense"
+        )
         self.assertEqual(result["account"]["equity"], 100_000.0)
 
     def test_simulation_persists_account_trades_and_equity_curve(self):
