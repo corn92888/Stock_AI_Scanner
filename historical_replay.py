@@ -701,58 +701,91 @@ def _start_replay_run(
     resume,
     db_path,
 ):
+    def delete_run(conn, replay_run_id):
+        conn.execute(
+            "DELETE FROM historical_replay_summaries WHERE replay_run_id=?",
+            (replay_run_id,),
+        )
+        conn.execute(
+            "DELETE FROM historical_replay_attributions WHERE replay_run_id=?",
+            (replay_run_id,),
+        )
+        conn.execute(
+            "DELETE FROM historical_replay_checkpoints WHERE replay_run_id=?",
+            (replay_run_id,),
+        )
+        conn.execute(
+            "DELETE FROM historical_replay_outcomes WHERE replay_event_id IN "
+            "(SELECT id FROM historical_replay_events WHERE replay_run_id=?)",
+            (replay_run_id,),
+        )
+        conn.execute(
+            "DELETE FROM historical_replay_events WHERE replay_run_id=?",
+            (replay_run_id,),
+        )
+        conn.execute(
+            "DELETE FROM historical_replay_runs WHERE id=?", (replay_run_id,)
+        )
+
     now = get_taipei_now().isoformat(timespec="seconds")
     with get_connection(db_path) as conn:
         init_db(conn)
         existing = conn.execute(
-            "SELECT id, status FROM historical_replay_runs WHERE replay_key=?", (replay_key,)
+            "SELECT id, status, candidate_events FROM historical_replay_runs "
+            "WHERE replay_key=?",
+            (replay_key,),
         ).fetchone()
         if existing and resume and not replace:
             if existing["status"] == "completed":
-                return existing["id"], True
-            conn.execute(
-                """
-                UPDATE historical_replay_runs
-                SET status='running', finished_at=NULL, error_text=NULL,
-                    universe_quality_status=?, universe_partial_memberships=?,
-                    universe_membership_intervals=?, config_json=?,
-                    data_warnings_json=?, git_commit=?
-                WHERE id=?
-                """,
-                (
-                    universe_quality_status,
-                    universe_partial_memberships,
-                    universe_membership_intervals,
-                    json.dumps(asdict(config), sort_keys=True),
-                    json.dumps(warnings, ensure_ascii=False),
-                    get_git_commit(),
-                    existing["id"],
-                ),
-            )
-            return existing["id"], False
+                raw_counts = conn.execute(
+                    """
+                    SELECT
+                        COUNT(DISTINCT hre.id) AS events,
+                        COUNT(hro.id) AS outcomes
+                    FROM historical_replay_events hre
+                    LEFT JOIN historical_replay_outcomes hro
+                      ON hro.replay_event_id=hre.id
+                    WHERE hre.replay_run_id=?
+                    """,
+                    (existing["id"],),
+                ).fetchone()
+                expected = int(existing["candidate_events"] or 0)
+                if (
+                    int(raw_counts["events"] or 0) == expected
+                    and int(raw_counts["outcomes"] or 0) == expected
+                ):
+                    return existing["id"], True
+                delete_run(conn, existing["id"])
+                existing = None
+            if existing is None:
+                pass
+            else:
+                conn.execute(
+                    """
+                    UPDATE historical_replay_runs
+                    SET status='running', finished_at=NULL, error_text=NULL,
+                        universe_quality_status=?, universe_partial_memberships=?,
+                        universe_membership_intervals=?, config_json=?,
+                        data_warnings_json=?, git_commit=?
+                    WHERE id=?
+                    """,
+                    (
+                        universe_quality_status,
+                        universe_partial_memberships,
+                        universe_membership_intervals,
+                        json.dumps(asdict(config), sort_keys=True),
+                        json.dumps(warnings, ensure_ascii=False),
+                        get_git_commit(),
+                        existing["id"],
+                    ),
+                )
+                return existing["id"], False
         if existing and not replace:
             raise ValueError(
                 "Replay already exists. Pass --resume or --replace for this versioned range."
             )
         if existing:
-            conn.execute(
-                "DELETE FROM historical_replay_attributions WHERE replay_run_id=?",
-                (existing["id"],),
-            )
-            conn.execute(
-                "DELETE FROM historical_replay_checkpoints WHERE replay_run_id=?",
-                (existing["id"],),
-            )
-            conn.execute(
-                "DELETE FROM historical_replay_outcomes WHERE replay_event_id IN "
-                "(SELECT id FROM historical_replay_events WHERE replay_run_id=?)",
-                (existing["id"],),
-            )
-            conn.execute(
-                "DELETE FROM historical_replay_events WHERE replay_run_id=?",
-                (existing["id"],),
-            )
-            conn.execute("DELETE FROM historical_replay_runs WHERE id=?", (existing["id"],))
+            delete_run(conn, existing["id"])
         cursor = conn.execute(
             """
             INSERT INTO historical_replay_runs (

@@ -90,6 +90,8 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertIn("group: stock-scanner-historical-replay", workflow)
         self.assertIn("group: stock-scanner-automation", workflow)
         self.assertIn("$RUNNER_TEMP/historical_replay.db", workflow)
+        self.assertIn("gh release download research-replay-data-v1", workflow)
+        self.assertIn("Restore durable replay state", workflow)
         self.assertIn("if: always()", workflow)
         self.assertIn("retention-days: 30", workflow)
         self.assertLess(universe_index, replay_index)

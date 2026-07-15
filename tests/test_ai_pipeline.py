@@ -331,6 +331,7 @@ class AiPipelineTests(unittest.TestCase):
             self.assertEqual(build_feature_snapshots(db_path=db_path), 30)
             training = train_shadow_model(
                 db_path=db_path,
+                replay_dataset_path=None,
                 artifact_dir=Path(directory) / "models",
                 min_samples=20,
                 min_positives=5,

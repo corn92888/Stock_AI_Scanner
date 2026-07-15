@@ -239,6 +239,31 @@ class HistoricalReplayTests(unittest.TestCase):
                     conn.execute("SELECT COUNT(*) FROM historical_replay_events").fetchone()[0],
                     1,
                 )
+                conn.execute("DELETE FROM historical_replay_outcomes")
+                conn.execute("DELETE FROM historical_replay_events")
+                conn.commit()
+            finally:
+                conn.close()
+
+            with patch(
+                "historical_replay.collect_strategy_signals",
+                return_value={decision_date.normalize(): [signal]},
+            ):
+                rebuilt = run_historical_replay(
+                    config,
+                    db_path=database,
+                    universe_file=universe_file,
+                    resume=True,
+                    history_loader=history_loader,
+                    benchmark_loader=benchmark_loader,
+                )
+            self.assertFalse(rebuilt.get("already_completed", False))
+            conn = sqlite3.connect(database)
+            try:
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM historical_replay_events").fetchone()[0],
+                    1,
+                )
             finally:
                 conn.close()
 

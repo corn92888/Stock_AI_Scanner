@@ -56,8 +56,22 @@ jobs:
     - name: Synchronize latest research database
       run: git pull --ff-only origin main
 
-    - name: Prepare isolated replay database
-      run: cp data/stock_scanner.db "$RUNNER_TEMP/historical_replay.db"
+    - name: Restore durable replay state
+      env:
+        GH_TOKEN: ${{ github.token }}
+        START_DATE: ${{ inputs.start_date }}
+        END_DATE: ${{ inputs.end_date }}
+      run: |
+        asset="historical-replay-${START_DATE}-${END_DATE}.tar.gz"
+        restore_dir="$RUNNER_TEMP/replay-restore"
+        mkdir -p "$restore_dir"
+        if gh release download research-replay-data-v1 \
+          --pattern "$asset" --dir "$restore_dir" --clobber; then
+          tar -xzf "$restore_dir/$asset" -C "$restore_dir"
+          cp "$restore_dir/historical_replay.db" "$RUNNER_TEMP/historical_replay.db"
+        else
+          cp data/stock_scanner.db "$RUNNER_TEMP/historical_replay.db"
+        fi
 
     - name: Set up Python
       uses: actions/setup-python@v5
