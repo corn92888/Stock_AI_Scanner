@@ -6,11 +6,12 @@
 decision date. It creates research evidence without pretending those rows were
 live recommendations and without changing the rule or AI paper portfolios.
 
-The first version answers three questions:
+Replay v2 answers four questions:
 
 1. How often did the frozen technical strategies produce candidates?
 2. Did the current ranking and tradability policy add value over rejected candidates?
 3. What happened after a realistic next-session open entry with costs and risk rules?
+4. Which strategy, score, liquidity, risk, market, and industry slices explain the result?
 
 ## Isolation contract
 
@@ -19,6 +20,8 @@ Historical rows are written only to:
 - `historical_replay_runs`
 - `historical_replay_events`
 - `historical_replay_outcomes`
+- `historical_replay_checkpoints`
+- `historical_replay_attributions`
 
 They never enter `scan_runs`, `candidate_events`, `predictions`, or
 `paper_trades`. The current AI training loader therefore cannot consume replay
@@ -38,6 +41,69 @@ For decision date `D`:
 - Outcome bars after `D` are available only to the execution evaluator, never to
   signal generation or ranking.
 
+## Point-in-time universe snapshots
+
+The preferred universe CSV is a sequence of complete snapshots. Every row needs:
+
+```csv
+snapshot_date,code,name,industry,market
+2023-01-01,2330,台積電,半導體業,上市
+2023-01-01,2454,聯發科,半導體業,上市
+2023-02-01,2330,台積電,半導體業,上市
+```
+
+Each `snapshot_date` must describe the complete eligible universe from that date
+until the next snapshot. A stock absent from a snapshot is not eligible on those
+decision dates. Dates before the first snapshot intentionally have no eligible
+stocks, so the loader never borrows a future membership list.
+
+The legacy static `code,name,industry,market` format remains accepted for scoped
+diagnostics, but the replay records a survivorship-bias warning. A credible
+multi-year study should reconstruct monthly snapshots from official TWSE and TPEx
+listing, transfer, and delisting records before interpreting results.
+
+## Cache, checkpoints, and resume
+
+Yahoo responses are normalized and cached per ticker under
+`data/replay_cache/yahoo`. The directory is ignored by Git and persisted by the
+GitHub Actions cache. Use `--refresh-cache` when the requested history must be
+downloaded again.
+
+Decision dates are committed in monthly checkpoints. A failed month is cleaned
+before being retried, while completed months remain immutable. Resume the same
+versioned replay without duplicating events:
+
+```bash
+venv/bin/python3 historical_replay.py \
+  --start 2022-01-01 --end 2025-12-31 \
+  --universe-file data/universe_snapshots.csv \
+  --resume
+```
+
+Use `--replace` only when intentionally rebuilding the entire replay after a
+strategy, policy, universe, or execution assumption changes.
+
+## Factor attribution
+
+After a replay completes, generate the diagnostic matrix:
+
+```bash
+venv/bin/python3 replay_attribution.py
+```
+
+The attribution engine compares all, selected, and rejected candidates across:
+
+- strategy and policy result;
+- score, 5-day and 20-day volume ratio, turnover, and defense distance bands;
+- market breadth and industry breadth known on the decision date;
+- industry, calendar year, and calendar quarter.
+
+Every slice includes mature sample counts, mean T+1/T+3/T+5 net returns, T+3
+benchmark excess, positive and strategy-success rates, mean drawdown, standard
+error, and a 95% confidence interval. The dashboard labels a direction as
+confirmed only with at least 30 observations and a T+3 interval that does not
+cross zero.
+
 ## Known limitations
 
 The default universe comes from the current `twstock` listing. Replaying older
@@ -47,7 +113,7 @@ CSV with `code,name,industry,market` columns when a historically accurate
 universe becomes available.
 
 Yahoo Finance history can include later corrections and adjustment metadata.
-Version 1 also excludes historical point-in-time fundamentals and news. These
+Version 2 also excludes historical point-in-time fundamentals and news. These
 limitations are stored on every replay run and must be considered before using
 the evidence for model training or promotion.
 
@@ -68,13 +134,15 @@ venv/bin/python3 historical_replay.py \
 
 venv/bin/python3 historical_replay.py \
   --start 2025-01-01 --end 2025-12-31 \
-  --universe-file data/universe_2025.csv --replace
+  --universe-file data/universe_snapshots.csv --resume
 ```
 
 The GitHub Actions workflow `Historical Point-in-Time Replay` provides the same
-operation without requiring a local process. It is manual because a full-market
-multi-year replay is intentionally separate from the latency-sensitive intraday
-workflow.
+operation without requiring a local process. It restores the historical price
+cache, resumes incomplete monthly checkpoints by default, generates attribution,
+and persists failed-run checkpoints so a later dispatch can continue. It is
+manual because a full-market multi-year replay is intentionally separate from
+the latency-sensitive intraday workflow.
 
 ## Research health monitor
 

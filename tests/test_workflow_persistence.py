@@ -70,6 +70,18 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertLess(paper_index, monitor_index)
         self.assertLess(monitor_index, export_index)
 
+    def test_historical_replay_resumes_and_generates_attribution(self):
+        workflow = (ROOT / ".github" / "workflows" / "historical_replay.yml").read_text()
+        replay_index = workflow.index('args=(--start "$START_DATE" --end "$END_DATE")')
+        attribution_index = workflow.index("python replay_attribution.py")
+        persistence_index = workflow.index("bash persist_scanner_data.sh")
+
+        self.assertIn("actions/cache@v4", workflow)
+        self.assertIn("args+=(--resume)", workflow)
+        self.assertIn("if: always()", workflow)
+        self.assertLess(replay_index, attribution_index)
+        self.assertLess(attribution_index, persistence_index)
+
     def test_automated_data_commits_use_conventional_english_messages(self):
         for workflow_name in (
             "intraday_scan.yml",

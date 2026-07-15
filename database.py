@@ -10,8 +10,9 @@ STRATEGY_VERSION = "strict_v1"
 LEGACY_CANDIDATE_EXECUTION_VERSION = "next_day_open_defense_close_t3_v1"
 CANDIDATE_EXECUTION_VERSION = "mode_aligned_after_costs_t3_v2"
 PAPER_POLICY_VERSION = "risk_budget_portfolio_v2"
-HISTORICAL_REPLAY_VERSION = "point_in_time_eod_replay_v1"
+HISTORICAL_REPLAY_VERSION = "point_in_time_eod_replay_v2"
 HISTORICAL_REPLAY_EXECUTION_VERSION = "next_open_after_costs_t3_v1"
+HISTORICAL_ATTRIBUTION_VERSION = "replay_attribution_v1"
 
 
 def get_taipei_now():
@@ -194,6 +195,15 @@ def init_db(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_historical_replay_outcomes_status "
         "ON historical_replay_outcomes(execution_version, matured_horizon, outcome_status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_historical_replay_checkpoints_status "
+        "ON historical_replay_checkpoints(replay_run_id, status, partition_start)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_historical_replay_attribution_dimension "
+        "ON historical_replay_attributions(replay_run_id, attribution_version, "
+        "dimension, selection_scope, sort_order)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_research_health_time "
@@ -827,6 +837,70 @@ def _create_historical_replay_tables(conn):
             UNIQUE (replay_event_id, execution_version)
         )
         """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS historical_replay_checkpoints (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            replay_run_id INTEGER NOT NULL,
+            partition_key TEXT NOT NULL,
+            partition_start TEXT NOT NULL,
+            partition_end TEXT NOT NULL,
+            status TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            candidate_events INTEGER NOT NULL DEFAULT 0,
+            selected_events INTEGER NOT NULL DEFAULT 0,
+            matured_t3 INTEGER NOT NULL DEFAULT 0,
+            error_text TEXT,
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY (replay_run_id) REFERENCES historical_replay_runs(id),
+            UNIQUE (replay_run_id, partition_key)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS historical_replay_attributions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            replay_run_id INTEGER NOT NULL,
+            attribution_version TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            dimension TEXT NOT NULL,
+            bucket_key TEXT NOT NULL,
+            bucket_label TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            selection_scope TEXT NOT NULL,
+            sample_count INTEGER NOT NULL DEFAULT 0,
+            selected_count INTEGER NOT NULL DEFAULT 0,
+            mean_net_return_1d REAL,
+            mean_net_return_3d REAL,
+            mean_net_return_5d REAL,
+            mean_excess_return_3d REAL,
+            positive_rate_3d REAL,
+            success_rate_t3 REAL,
+            mean_max_drawdown_3d REAL,
+            standard_error_3d REAL,
+            ci95_low_3d REAL,
+            ci95_high_3d REAL,
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY (replay_run_id) REFERENCES historical_replay_runs(id),
+            UNIQUE (
+                replay_run_id, attribution_version, dimension,
+                bucket_key, selection_scope
+            )
+        )
+        """
+    )
+    _ensure_columns(
+        conn,
+        "historical_replay_runs",
+        {
+            "universe_snapshots": "INTEGER NOT NULL DEFAULT 1",
+            "checkpoint_total": "INTEGER NOT NULL DEFAULT 0",
+            "checkpoint_completed": "INTEGER NOT NULL DEFAULT 0",
+            "last_checkpoint": "TEXT",
+        },
     )
     conn.execute(
         """

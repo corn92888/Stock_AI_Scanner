@@ -92,6 +92,12 @@ export type ResearchHealth = {
   replayMatureT3: number;
   replayAvailableSymbols: number;
   replayTradingDays: number;
+  replayUniverseSnapshots: number;
+  replayCheckpointTotal: number;
+  replayCheckpointCompleted: number;
+  replayAttributionRows: number;
+  replayAttributionDimensions: number;
+  replayAttributionAt: string | null;
   warnings: string[];
   replayDataWarnings: string[];
   replaySelectedMeanNetReturn3d: number | null;
@@ -102,6 +108,39 @@ export type ResearchHealth = {
   replaySelectionExcessLift3d: number | null;
   replaySelectedSuccessRateT3: number | null;
   replayRejectedSuccessRateT3: number | null;
+};
+
+export type ReplayAttributionRow = {
+  dimension: string;
+  dimensionLabel: string;
+  bucketKey: string;
+  bucketLabel: string;
+  sortOrder: number;
+  selectionScope: "all" | "selected" | "rejected";
+  selectionLabel: string;
+  sampleCount: number;
+  selectedCount: number;
+  matureT1: number;
+  matureT3: number;
+  matureT5: number;
+  meanNetReturn1d: number | null;
+  meanNetReturn3d: number | null;
+  meanNetReturn5d: number | null;
+  meanExcessReturn3d: number | null;
+  positiveRate3d: number | null;
+  successRateT3: number | null;
+  meanMaxDrawdown3d: number | null;
+  standardError3d: number | null;
+  ci95Low3d: number | null;
+  ci95High3d: number | null;
+};
+
+export type ReplayAttribution = {
+  replayRunId: number | null;
+  attributionVersion: string;
+  generatedAt: string;
+  dimensions: Array<{ key: string; label: string }>;
+  rows: ReplayAttributionRow[];
 };
 
 export type Candidate = {
@@ -403,6 +442,7 @@ export type DashboardSnapshot = {
   overview: Overview;
   researchQuality: ResearchQuality;
   researchHealth: ResearchHealth;
+  replayAttribution: ReplayAttribution;
   researchExperiments: ResearchExperiment[];
   candidates: Candidate[];
   dailyCandidates: DailyCandidate[];

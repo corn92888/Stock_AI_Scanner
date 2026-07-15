@@ -3,7 +3,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { DashboardSnapshot, GlobalMarketSnapshot, ResearchHealth, ResearchQuality, WorkflowRun } from "./types";
+import type { DashboardSnapshot, GlobalMarketSnapshot, ReplayAttribution, ResearchHealth, ResearchQuality, WorkflowRun } from "./types";
 
 const DEFAULT_DATA_URL =
   "https://raw.githubusercontent.com/corn92888/Stock_AI_Scanner/main/data/dashboard_snapshot.json";
@@ -51,6 +51,12 @@ const EMPTY_RESEARCH_HEALTH: ResearchHealth = {
   replayMatureT3: 0,
   replayAvailableSymbols: 0,
   replayTradingDays: 0,
+  replayUniverseSnapshots: 0,
+  replayCheckpointTotal: 0,
+  replayCheckpointCompleted: 0,
+  replayAttributionRows: 0,
+  replayAttributionDimensions: 0,
+  replayAttributionAt: null,
   warnings: ["研究健康監控尚未完成第一次執行。"],
   replayDataWarnings: [],
   replaySelectedMeanNetReturn3d: null,
@@ -61,6 +67,14 @@ const EMPTY_RESEARCH_HEALTH: ResearchHealth = {
   replaySelectionExcessLift3d: null,
   replaySelectedSuccessRateT3: null,
   replayRejectedSuccessRateT3: null,
+};
+
+const EMPTY_REPLAY_ATTRIBUTION: ReplayAttribution = {
+  replayRunId: null,
+  attributionVersion: "",
+  generatedAt: "",
+  dimensions: [],
+  rows: [],
 };
 
 const EMPTY_GLOBAL_MARKET: GlobalMarketSnapshot = {
@@ -109,6 +123,12 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
       ...(snapshot.researchHealth ?? {}),
       warnings: snapshot.researchHealth?.warnings ?? EMPTY_RESEARCH_HEALTH.warnings,
       replayDataWarnings: snapshot.researchHealth?.replayDataWarnings ?? [],
+    },
+    replayAttribution: {
+      ...EMPTY_REPLAY_ATTRIBUTION,
+      ...(snapshot.replayAttribution ?? {}),
+      dimensions: snapshot.replayAttribution?.dimensions ?? [],
+      rows: snapshot.replayAttribution?.rows ?? [],
     },
     researchExperiments: snapshot.researchExperiments ?? [],
     aiModels: snapshot.aiModels ?? [],

@@ -767,6 +767,15 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const research = snapshot.researchQuality;
   const health = snapshot.researchHealth;
   const experiments = snapshot.researchExperiments ?? [];
+  const attribution = snapshot.replayAttribution;
+  const [attributionDimension, setAttributionDimension] = useState("strategy");
+  const [attributionScope, setAttributionScope] = useState<"all" | "selected" | "rejected">("all");
+  const attributionRows = useMemo(() => (
+    attribution.rows
+      .filter((row) => row.dimension === attributionDimension && row.selectionScope === attributionScope)
+      .sort((left, right) => left.sortOrder - right.sortOrder || right.sampleCount - left.sampleCount)
+      .slice(0, attributionDimension === "industry" ? 20 : 40)
+  ), [attribution.rows, attributionDimension, attributionScope]);
   const stages = [
     { label: "掃描訊號", value: snapshot.overview.signals, icon: Activity, note: "原始策略命中" },
     { label: "候選事件", value: snapshot.overview.candidateEvents, icon: SlidersHorizontal, note: "正規化決策紀錄" },
@@ -832,7 +841,20 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
       <section className="pipeline-board panel">
         <PanelHeader eyebrow="Data lineage" title="量化學習資料鏈" description={`特徵覆蓋率 ${decimal.format(featureCoverage)}%，所有階段保留版本與時間點`} trailing={<span className={`health-badge ${health.status === "healthy" ? "healthy" : "building"}`}>{health.status === "critical" ? "標註逾期" : health.status === "healthy" ? "資料健康" : "證據累積中"}</span>} />
         <div className="pipeline-grid">{stages.map((stage, index) => { const Icon = stage.icon; return <div className="pipeline-stage" key={stage.label}><div className="stage-icon"><Icon size={18} /></div><span>{stage.label}</span><strong>{number.format(stage.value)}</strong><small>{stage.note}</small><div className="progress"><i style={{ width: `${Math.max(stage.value ? 3 : 0, stage.value / max * 100)}%` }} /></div>{index < stages.length - 1 && <ChevronRight className="stage-arrow" size={16} />}</div>; })}</div>
-        <div className="readiness-callout"><Database size={19} /><div><strong>歷史重播：{health.latestReplayStatus === "completed" ? `${number.format(health.replayTradingDays)} 個交易日、${number.format(health.replayMatureT3)} 筆成熟 T+3` : "尚未完成第一輪"}</strong><p>{health.latestReplayStart && health.latestReplayEnd ? `${health.latestReplayStart} 至 ${health.latestReplayEnd} · ${number.format(health.replayAvailableSymbols)} 檔可用股票 · 入選淨報酬 ${pct(health.replaySelectedMeanNetReturn3d)} · 相對落選增值 ${pct(health.replaySelectionNetLift3d)}。` : "重播資料與正式即時預測完全隔離，完成後才作為研究證據。"} {health.warnings.join(" ")}</p></div></div>
+        <div className="readiness-callout"><Database size={19} /><div><strong>歷史重播：{health.latestReplayStatus === "completed" ? `${number.format(health.replayTradingDays)} 個交易日、${number.format(health.replayMatureT3)} 筆成熟 T+3` : "尚未完成第一輪"}</strong><p>{health.latestReplayStart && health.latestReplayEnd ? `${health.latestReplayStart} 至 ${health.latestReplayEnd} · ${number.format(health.replayAvailableSymbols)} 檔可用股票 · ${number.format(health.replayUniverseSnapshots)} 份 universe 快照${health.replayCheckpointTotal ? ` · 檢查點 ${health.replayCheckpointCompleted}/${health.replayCheckpointTotal}` : ""} · 入選淨報酬 ${pct(health.replaySelectedMeanNetReturn3d)} · 相對落選增值 ${pct(health.replaySelectionNetLift3d)}。` : "重播資料與正式即時預測完全隔離，完成後才作為研究證據。"} {health.warnings.join(" ")}</p></div></div>
+      </section>
+
+      <section className="panel replay-attribution-panel">
+        <PanelHeader eyebrow="Historical factor attribution" title="歷史重播因子歸因" description="同一批點時事件比較持有期、超額、回撤與統計不確定性" trailing={<span className="record-count">{attribution.attributionVersion || "尚未建立"}</span>} />
+        <div className="toolbar attribution-toolbar">
+          <label className="inline-select"><SlidersHorizontal size={14} /><select value={attributionDimension} onChange={(event) => setAttributionDimension(event.target.value)}>{attribution.dimensions.map((dimension) => <option value={dimension.key} key={dimension.key}>{dimension.label}</option>)}</select></label>
+          <div className="segmented" aria-label="歸因候選範圍"><button className={attributionScope === "all" ? "active" : ""} onClick={() => setAttributionScope("all")}>全部候選</button><button className={attributionScope === "selected" ? "active" : ""} onClick={() => setAttributionScope("selected")}>正式入選</button><button className={attributionScope === "rejected" ? "active" : ""} onClick={() => setAttributionScope("rejected")}>未入選</button></div>
+          <span className="attribution-asof">更新 {formatDateTime(attribution.generatedAt)} · Replay #{attribution.replayRunId ?? "--"}</span>
+        </div>
+        {attributionRows.length ? <>
+          <div className="chart-frame attribution-chart"><ResponsiveContainer width="100%" height="100%"><BarChart data={attributionRows.slice(0, 12)} margin={{ top: 16, right: 18, left: -12, bottom: 48 }}><CartesianGrid stroke="#2b2e31" vertical={false} /><XAxis dataKey="bucketLabel" stroke="#777d82" tickLine={false} axisLine={false} interval={0} angle={-17} textAnchor="end" /><YAxis stroke="#777d82" tickLine={false} axisLine={false} unit="%" /><Tooltip contentStyle={tooltipStyle} formatter={(value) => pct(Number(value))} /><ReferenceLine y={0} stroke="#666c71" /><Bar dataKey="meanNetReturn1d" name="T+1 淨報酬" fill="#72787d" radius={[2, 2, 0, 0]} /><Bar dataKey="meanNetReturn3d" name="T+3 淨報酬" fill="#5fb3d9" radius={[2, 2, 0, 0]} /><Bar dataKey="meanNetReturn5d" name="T+5 淨報酬" fill="#55c29a" radius={[2, 2, 0, 0]} /></BarChart></ResponsiveContainer></div>
+          <div className="table-scroll"><table className="data-table compact-table attribution-table"><thead><tr><th>切片</th><th>成熟樣本</th><th>T+1</th><th>T+3</th><th>T+5</th><th>T+3 超額</th><th>正報酬率</th><th>策略成功率</th><th>平均回撤</th><th>95% 信賴區間</th><th>證據判定</th></tr></thead><tbody>{attributionRows.map((row) => { const directionConfirmed = row.sampleCount >= 30 && row.ci95Low3d != null && row.ci95High3d != null && (row.ci95Low3d > 0 || row.ci95High3d < 0); const positive = directionConfirmed && (row.ci95Low3d ?? 0) > 0; return <tr key={`${row.dimension}-${row.bucketKey}-${row.selectionScope}`}><td><strong>{row.bucketLabel}</strong><br /><small>{row.selectionLabel}</small></td><td><strong>{number.format(row.sampleCount)}</strong><br /><small>T+5 {number.format(row.matureT5)}</small></td><td className={(row.meanNetReturn1d ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.meanNetReturn1d)}</td><td className={(row.meanNetReturn3d ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.meanNetReturn3d)}</td><td className={(row.meanNetReturn5d ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.meanNetReturn5d)}</td><td className={(row.meanExcessReturn3d ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.meanExcessReturn3d)}</td><td>{rate(row.positiveRate3d)}</td><td>{rate(row.successRateT3)}</td><td className="negative-text">{pct(row.meanMaxDrawdown3d)}</td><td>{row.ci95Low3d == null || row.ci95High3d == null ? "--" : `${pct(row.ci95Low3d)} ～ ${pct(row.ci95High3d)}`}</td><td><span className={`status-pill ${directionConfirmed ? positive ? "selected" : "blocked" : "neutral"}`}>{directionConfirmed ? positive ? "正向確認" : "負向確認" : "尚未確認"}</span></td></tr>; })}</tbody></table></div>
+        </> : <div className="empty-state">完成重播並執行歸因後，這裡會顯示各因子的歷史效果。</div>}
       </section>
 
       <section className="metrics-grid metrics-grid-five">

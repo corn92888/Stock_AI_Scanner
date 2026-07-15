@@ -309,6 +309,12 @@ def _empty_research_health():
         "replayMatureT3": 0,
         "replayAvailableSymbols": 0,
         "replayTradingDays": 0,
+        "replayUniverseSnapshots": 0,
+        "replayCheckpointTotal": 0,
+        "replayCheckpointCompleted": 0,
+        "replayAttributionRows": 0,
+        "replayAttributionDimensions": 0,
+        "replayAttributionAt": None,
         "warnings": ["研究健康監控尚未完成第一次執行。"],
         "replayDataWarnings": [],
         "replaySelectedMeanNetReturn3d": None,
@@ -356,6 +362,12 @@ def _research_health_snapshot(conn):
         "replayMatureT3": int(row["replay_mature_t3"] or 0),
         "replayAvailableSymbols": int(metrics.get("replay_available_symbols", 0) or 0),
         "replayTradingDays": int(metrics.get("replay_trading_days", 0) or 0),
+        "replayUniverseSnapshots": int(metrics.get("replay_universe_snapshots", 0) or 0),
+        "replayCheckpointTotal": int(metrics.get("replay_checkpoint_total", 0) or 0),
+        "replayCheckpointCompleted": int(metrics.get("replay_checkpoint_completed", 0) or 0),
+        "replayAttributionRows": int(metrics.get("replay_attribution_rows", 0) or 0),
+        "replayAttributionDimensions": int(metrics.get("replay_attribution_dimensions", 0) or 0),
+        "replayAttributionAt": metrics.get("replay_attribution_at"),
         "warnings": _decode_list(row["warnings_json"]),
         "replayDataWarnings": metrics.get("replay_data_warnings", []),
         "replaySelectedMeanNetReturn3d": metrics.get("replay_selected_mean_net_return_3d"),
@@ -366,6 +378,83 @@ def _research_health_snapshot(conn):
         "replaySelectionExcessLift3d": metrics.get("replay_selection_excess_lift_3d"),
         "replaySelectedSuccessRateT3": metrics.get("replay_selected_success_rate_t3"),
         "replayRejectedSuccessRateT3": metrics.get("replay_rejected_success_rate_t3"),
+    }
+
+
+def _empty_replay_attribution():
+    return {
+        "replayRunId": None,
+        "attributionVersion": "",
+        "generatedAt": "",
+        "dimensions": [],
+        "rows": [],
+    }
+
+
+def _replay_attribution_snapshot(conn):
+    if not _table_exists(conn, "historical_replay_attributions"):
+        return _empty_replay_attribution()
+    latest = conn.execute(
+        """
+        SELECT hra.replay_run_id, hra.attribution_version,
+               MAX(hra.generated_at) AS generated_at
+        FROM historical_replay_attributions hra
+        JOIN historical_replay_runs hrr ON hrr.id=hra.replay_run_id
+        WHERE hrr.status='completed'
+        GROUP BY hra.replay_run_id, hra.attribution_version, hrr.finished_at
+        ORDER BY COALESCE(hrr.finished_at, hrr.started_at) DESC,
+                 hra.replay_run_id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if not latest:
+        return _empty_replay_attribution()
+    rows = _read_records(
+        conn,
+        """
+        SELECT
+            dimension, bucket_key AS bucketKey, bucket_label AS bucketLabel,
+            sort_order AS sortOrder, selection_scope AS selectionScope,
+            sample_count AS sampleCount, selected_count AS selectedCount,
+            mean_net_return_1d AS meanNetReturn1d,
+            mean_net_return_3d AS meanNetReturn3d,
+            mean_net_return_5d AS meanNetReturn5d,
+            mean_excess_return_3d AS meanExcessReturn3d,
+            positive_rate_3d AS positiveRate3d,
+            success_rate_t3 AS successRateT3,
+            mean_max_drawdown_3d AS meanMaxDrawdown3d,
+            standard_error_3d AS standardError3d,
+            ci95_low_3d AS ci95Low3d,
+            ci95_high_3d AS ci95High3d,
+            metrics_json AS metricsJson
+        FROM historical_replay_attributions
+        WHERE replay_run_id=? AND attribution_version=?
+        ORDER BY dimension, selection_scope, sort_order, sample_count DESC,
+                 bucket_label
+        """,
+        (latest["replay_run_id"], latest["attribution_version"]),
+    )
+    for row in rows:
+        metrics = _decode_object(row.pop("metricsJson", ""))
+        row["dimensionLabel"] = metrics.get("dimensionLabel", row["dimension"])
+        row["selectionLabel"] = metrics.get(
+            "selectionLabel", row["selectionScope"]
+        )
+        row["matureT1"] = int(metrics.get("matureT1", 0) or 0)
+        row["matureT3"] = int(metrics.get("matureT3", 0) or 0)
+        row["matureT5"] = int(metrics.get("matureT5", 0) or 0)
+    dimensions = []
+    for row in rows:
+        if not any(item["key"] == row["dimension"] for item in dimensions):
+            dimensions.append(
+                {"key": row["dimension"], "label": row["dimensionLabel"]}
+            )
+    return {
+        "replayRunId": int(latest["replay_run_id"]),
+        "attributionVersion": latest["attribution_version"],
+        "generatedAt": latest["generated_at"],
+        "dimensions": dimensions,
+        "rows": rows,
     }
 
 
@@ -904,6 +993,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
         research_experiments = _research_experiment_snapshot(conn)
         model_challengers = _model_challenger_snapshot(conn)
         research_health = _research_health_snapshot(conn)
+        replay_attribution = _replay_attribution_snapshot(conn)
 
         return {
             "schemaVersion": SCHEMA_VERSION,
@@ -912,6 +1002,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "overview": overview,
             "researchQuality": research_quality,
             "researchHealth": research_health,
+            "replayAttribution": replay_attribution,
             "researchExperiments": research_experiments,
             "candidates": candidates,
             "dailyCandidates": daily_candidates,

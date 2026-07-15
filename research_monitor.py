@@ -87,6 +87,12 @@ def _replay_metrics(conn):
         "replay_mature_t3": 0,
         "replay_available_symbols": 0,
         "replay_trading_days": 0,
+        "replay_universe_snapshots": 0,
+        "replay_checkpoint_total": 0,
+        "replay_checkpoint_completed": 0,
+        "replay_attribution_rows": 0,
+        "replay_attribution_dimensions": 0,
+        "replay_attribution_at": None,
         "replay_data_warnings": [],
         "replay_selected_mean_net_return_3d": None,
         "replay_selected_mean_excess_return_3d": None,
@@ -98,6 +104,16 @@ def _replay_metrics(conn):
         "replay_rejected_success_rate_t3": None,
     }
     if latest:
+        attribution = conn.execute(
+            """
+            SELECT COUNT(*) AS rows,
+                   COUNT(DISTINCT dimension) AS dimensions,
+                   MAX(generated_at) AS generated_at
+            FROM historical_replay_attributions
+            WHERE replay_run_id=?
+            """,
+            (latest["id"],),
+        ).fetchone()
         performance = conn.execute(
             """
             SELECT
@@ -136,6 +152,12 @@ def _replay_metrics(conn):
                 "replay_mature_t3": int(latest["matured_t3"] or 0),
                 "replay_available_symbols": int(latest["available_symbols"] or 0),
                 "replay_trading_days": int(latest["trading_days"] or 0),
+                "replay_universe_snapshots": int(latest["universe_snapshots"] or 0),
+                "replay_checkpoint_total": int(latest["checkpoint_total"] or 0),
+                "replay_checkpoint_completed": int(latest["checkpoint_completed"] or 0),
+                "replay_attribution_rows": int(attribution["rows"] or 0),
+                "replay_attribution_dimensions": int(attribution["dimensions"] or 0),
+                "replay_attribution_at": attribution["generated_at"],
                 "replay_data_warnings": json.loads(
                     latest["data_warnings_json"] or "[]"
                 ),
@@ -184,6 +206,15 @@ def build_research_health(db_path=DB_PATH):
         warnings.append("最近一次歷史重播未完成，請檢查批次錯誤。")
     if replay["completed_replay_runs"] and replay["replay_mature_t3"] == 0:
         warnings.append("歷史重播已完成，但尚無可用的成熟 T+3 成交結果。")
+    if (
+        replay["replay_checkpoint_total"]
+        and replay["replay_checkpoint_completed"] < replay["replay_checkpoint_total"]
+    ):
+        warnings.append(
+            "歷史重播月份檢查點尚未全部完成，可使用 --resume 接續執行。"
+        )
+    if replay["completed_replay_runs"] and replay["replay_attribution_rows"] == 0:
+        warnings.append("歷史重播尚未建立因子歸因矩陣。")
 
     if prospective["stale_outcomes"]:
         status = "critical"

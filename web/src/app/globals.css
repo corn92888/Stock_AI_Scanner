@@ -483,6 +483,13 @@ button.action-link[aria-busy="true"]:disabled { cursor: wait; }
 .workflow-grid .workflow-row:nth-child(odd) { border-right: 1px solid var(--border); padding-right: 14px; }
 .workflow-grid .workflow-row:nth-child(even) { padding-left: 14px; }
 .strategy-table { min-width: 780px; }
+.attribution-toolbar { align-items: center; flex-wrap: wrap; }
+.attribution-toolbar .inline-select { min-width: 150px; }
+.attribution-toolbar .inline-select select { width: 100%; }
+.attribution-asof { margin-left: auto; color: var(--faint); font-family: var(--font-geist-mono), monospace; font-size: 9px; }
+.attribution-chart { height: 320px; border-bottom: 1px solid var(--border); }
+.attribution-table { min-width: 1320px; }
+.attribution-table td small { color: var(--faint); font-size: 9px; }
 
 @media (max-width: 1120px) {
   .metrics-grid-five { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -534,6 +541,7 @@ button.action-link[aria-busy="true"]:disabled { cursor: wait; }
   .paper-account-row dl > div:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
   .market-policy-band { align-items: flex-start; flex-direction: column; }
   .market-policy-band .policy-code { overflow-wrap: anywhere; }
+  .attribution-asof { width: 100%; margin-left: 0; }
 }
 
 @media (max-width: 560px) {

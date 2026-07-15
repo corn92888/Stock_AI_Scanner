@@ -22,6 +22,21 @@ on:
         required: false
         default: "0"
         type: string
+      universe_file:
+        description: Optional repository CSV with point-in-time universe snapshots
+        required: false
+        default: ""
+        type: string
+      force_rebuild:
+        description: Delete and rebuild an existing replay with the same versioned key
+        required: false
+        default: false
+        type: boolean
+      refresh_cache:
+        description: Ignore cached Yahoo history and download the requested range again
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -53,28 +68,58 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements-intraday.txt
 
+    - name: Restore historical price cache
+      uses: actions/cache@v4
+      with:
+        path: data/replay_cache/yahoo
+        key: replay-yahoo-${{ runner.os }}-${{ inputs.start_date }}-${{ inputs.end_date }}
+        restore-keys: |
+          replay-yahoo-${{ runner.os }}-
+
     - name: Run isolated historical replay
       env:
         START_DATE: ${{ inputs.start_date }}
         END_DATE: ${{ inputs.end_date }}
         CODES: ${{ inputs.codes }}
         MAX_SYMBOLS: ${{ inputs.max_symbols }}
+        UNIVERSE_FILE: ${{ inputs.universe_file }}
+        FORCE_REBUILD: ${{ inputs.force_rebuild }}
+        REFRESH_CACHE: ${{ inputs.refresh_cache }}
       run: |
-        args=(--start "$START_DATE" --end "$END_DATE" --replace)
+        args=(--start "$START_DATE" --end "$END_DATE")
+        if [ "$FORCE_REBUILD" = "true" ]; then
+          args+=(--replace)
+        else
+          args+=(--resume)
+        fi
+        if [ "$REFRESH_CACHE" = "true" ]; then
+          args+=(--refresh-cache)
+        fi
         if [ -n "$CODES" ]; then
           args+=(--codes "$CODES")
         fi
         if [ "${MAX_SYMBOLS:-0}" -gt 0 ]; then
           args+=(--max-symbols "$MAX_SYMBOLS")
         fi
+        if [ -n "$UNIVERSE_FILE" ]; then
+          args+=(--universe-file "$UNIVERSE_FILE")
+        fi
         python historical_replay.py "${args[@]}"
+
+    - name: Generate replay factor attribution
+      run: python replay_attribution.py
 
     - name: Refresh research health and dashboard
       run: |
         python research_monitor.py
         python export_dashboard_snapshot.py
 
-    - name: Persist replay evidence
+    - name: Record failed replay health
+      if: failure()
+      run: python research_monitor.py || true
+
+    - name: Persist replay evidence and checkpoints
+      if: always()
       run: |
         bash persist_scanner_data.sh "chore(data): record historical replay evidence"
 
