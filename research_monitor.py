@@ -105,6 +105,8 @@ def _replay_metrics(conn):
         "replay_selection_excess_lift_3d": None,
         "replay_selected_success_rate_t3": None,
         "replay_rejected_success_rate_t3": None,
+        "replay_evidence_storage_mode": "none",
+        "replay_raw_events_persisted": 0,
     }
     if latest:
         attribution = conn.execute(
@@ -117,29 +119,49 @@ def _replay_metrics(conn):
             """,
             (latest["id"],),
         ).fetchone()
-        performance = conn.execute(
-            """
-            SELECT
-                AVG(CASE WHEN hre.is_selected=1 THEN hro.net_return_3d END)
-                    AS selected_net,
-                AVG(CASE WHEN hre.is_selected=1 THEN hro.excess_return_3d END)
-                    AS selected_excess,
-                AVG(CASE WHEN hre.is_selected=0 THEN hro.net_return_3d END)
-                    AS rejected_net,
-                AVG(CASE WHEN hre.is_selected=0 THEN hro.excess_return_3d END)
-                    AS rejected_excess,
-                AVG(CASE WHEN hre.is_selected=1 THEN hro.success_t3 END) * 100
-                    AS selected_success,
-                AVG(CASE WHEN hre.is_selected=0 THEN hro.success_t3 END) * 100
-                    AS rejected_success
-            FROM historical_replay_outcomes hro
-            JOIN historical_replay_events hre ON hre.id=hro.replay_event_id
-            WHERE hre.replay_run_id=?
-              AND hro.entry_status='filled'
-              AND hro.matured_horizon >= 3
-            """,
+        summary = conn.execute(
+            "SELECT * FROM historical_replay_summaries WHERE replay_run_id=?",
             (latest["id"],),
         ).fetchone()
+        raw_event_count = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM historical_replay_events WHERE replay_run_id=?",
+                (latest["id"],),
+            ).fetchone()[0]
+        )
+        if summary:
+            performance = {
+                "selected_net": summary["selected_mean_net_return_3d"],
+                "selected_excess": summary["selected_mean_excess_return_3d"],
+                "rejected_net": summary["rejected_mean_net_return_3d"],
+                "rejected_excess": summary["rejected_mean_excess_return_3d"],
+                "selected_success": summary["selected_success_rate_t3"],
+                "rejected_success": summary["rejected_success_rate_t3"],
+            }
+        else:
+            performance = conn.execute(
+                """
+                SELECT
+                    AVG(CASE WHEN hre.is_selected=1 THEN hro.net_return_3d END)
+                        AS selected_net,
+                    AVG(CASE WHEN hre.is_selected=1 THEN hro.excess_return_3d END)
+                        AS selected_excess,
+                    AVG(CASE WHEN hre.is_selected=0 THEN hro.net_return_3d END)
+                        AS rejected_net,
+                    AVG(CASE WHEN hre.is_selected=0 THEN hro.excess_return_3d END)
+                        AS rejected_excess,
+                    AVG(CASE WHEN hre.is_selected=1 THEN hro.success_t3 END) * 100
+                        AS selected_success,
+                    AVG(CASE WHEN hre.is_selected=0 THEN hro.success_t3 END) * 100
+                        AS rejected_success
+                FROM historical_replay_outcomes hro
+                JOIN historical_replay_events hre ON hre.id=hro.replay_event_id
+                WHERE hre.replay_run_id=?
+                  AND hro.entry_status='filled'
+                  AND hro.matured_horizon >= 3
+                """,
+                (latest["id"],),
+            ).fetchone()
         selected_net = performance["selected_net"]
         selected_excess = performance["selected_excess"]
         rejected_net = performance["rejected_net"]
@@ -189,6 +211,10 @@ def _replay_metrics(conn):
                 ),
                 "replay_selected_success_rate_t3": performance["selected_success"],
                 "replay_rejected_success_rate_t3": performance["rejected_success"],
+                "replay_evidence_storage_mode": (
+                    "summary_only" if summary and raw_event_count == 0 else "raw"
+                ),
+                "replay_raw_events_persisted": raw_event_count,
             }
         )
     return result

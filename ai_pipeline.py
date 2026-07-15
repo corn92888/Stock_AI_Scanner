@@ -30,12 +30,13 @@ from model_governance import (
 
 FEATURE_VERSION = "candidate_features_v2"
 MODEL_NAME = "shadow_walk_forward_t3"
-MODEL_FAMILY_VERSION = "shadow_walk_forward_t3_v2"
+MODEL_FAMILY_VERSION = "shadow_walk_forward_t3_v3"
 MIN_TRAINING_SAMPLES = 80
 MIN_POSITIVE_SAMPLES = 10
 VALIDATION_FRACTION = 0.20
 EMBARGO_TRADE_DATES = 3
 MAX_NEWS_CANDIDATES = 3
+DEFAULT_REPLAY_TRAINING_DATASET = Path("data/replay_training_samples.csv.gz")
 MIN_SHADOW_PROBABILITY = 0.35
 MIN_SHADOW_EXPECTED_EXCESS = 0.0
 MIN_SHADOW_EXPECTED_DRAWDOWN = -4.0
@@ -340,6 +341,97 @@ def _load_candidate_training_frame(conn):
     )
 
 
+def _load_historical_replay_training_frame(conn):
+    rows = conn.execute(
+        """
+        WITH canonical AS (
+            SELECT hre.*, hrr.finished_at,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY hre.trade_date, hre.code
+                       ORDER BY COALESCE(hrr.finished_at, hrr.started_at) DESC,
+                                hre.id DESC
+                   ) AS day_code_rank
+            FROM historical_replay_events hre
+            JOIN historical_replay_runs hrr ON hrr.id=hre.replay_run_id
+            WHERE hrr.status='completed'
+              AND hrr.universe_quality_status IN ('verified', 'partial')
+        )
+        SELECT canonical.*, hro.success_t3, hro.net_return_3d,
+               hro.excess_return_3d, hro.max_drawdown_3d
+        FROM canonical
+        JOIN historical_replay_outcomes hro
+          ON hro.replay_event_id=canonical.id
+        WHERE canonical.day_code_rank=1
+          AND hro.entry_status='filled'
+          AND hro.matured_horizon >= 3
+          AND hro.success_t3 IS NOT NULL
+          AND hro.net_return_3d IS NOT NULL
+          AND hro.excess_return_3d IS NOT NULL
+          AND hro.max_drawdown_3d IS NOT NULL
+        ORDER BY canonical.trade_date, canonical.raw_rank, canonical.id
+        """
+    ).fetchall()
+    records = []
+    for row in rows:
+        event = dict(row)
+        snapshot = _decode_json(event.get("snapshot_json"), {})
+        event.update(
+            {
+                "run_id": -int(event["replay_run_id"]),
+                "as_of": event["decision_at"],
+                "is_first_eligible_event": int(
+                    bool(snapshot.get("每日首次合格", event.get("tradable")))
+                ),
+            }
+        )
+        features = candidate_to_feature(event)
+        records.append(
+            {
+                "feature_id": -int(event["id"]),
+                "run_id": features["run_id"],
+                "signal_id": None,
+                "code": features["code"],
+                "as_of": features["as_of"],
+                "trade_date": event["trade_date"],
+                "industry": event.get("industry"),
+                "rule_selected": int(bool(event.get("is_selected"))),
+                "tradable": features["tradable"],
+                "is_first_eligible_event": features["is_first_eligible_event"],
+                **{name: features.get(name) for name in MODEL_FEATURES},
+                "success_t3": int(bool(event["success_t3"])),
+                "net_return_3d": float(event["net_return_3d"]),
+                "excess_return_3d": float(event["excess_return_3d"]),
+                "max_drawdown_3d": float(event["max_drawdown_3d"]),
+                "training_source": "point_in_time_replay",
+            }
+        )
+    return pd.DataFrame(records)
+
+
+def _load_replay_training_dataset(path):
+    path = Path(path)
+    if not path.exists():
+        return pd.DataFrame()
+    frame = pd.read_csv(path, dtype={"code": str, "trade_date": str})
+    required = {
+        "feature_id",
+        "code",
+        "trade_date",
+        "success_t3",
+        "net_return_3d",
+        "excess_return_3d",
+        "max_drawdown_3d",
+        *MODEL_FEATURES,
+    }
+    missing = sorted(required.difference(frame.columns))
+    if missing:
+        raise ValueError(
+            "Replay training dataset is missing columns: " + ", ".join(missing)
+        )
+    frame["training_source"] = "point_in_time_replay"
+    return frame
+
+
 def _load_legacy_training_frame(conn):
     columns = ", ".join(f"fs.{name}" for name in MODEL_FEATURES)
     return pd.read_sql_query(
@@ -372,19 +464,39 @@ def _load_legacy_training_frame(conn):
 
 def _load_training_frame(
     conn,
+    replay_frame=None,
     min_candidate_samples=MIN_TRAINING_SAMPLES,
     min_candidate_positives=MIN_POSITIVE_SAMPLES,
 ):
     candidate_frame = _load_candidate_training_frame(conn)
-    positives = int(candidate_frame["success_t3"].sum()) if not candidate_frame.empty else 0
-    negatives = len(candidate_frame) - positives
+    if not candidate_frame.empty:
+        candidate_frame = candidate_frame.copy()
+        candidate_frame["training_source"] = CANDIDATE_EXECUTION_VERSION
+    replay_frame = replay_frame if replay_frame is not None else pd.DataFrame()
+    combined = pd.concat(
+        [frame for frame in (replay_frame, candidate_frame) if not frame.empty],
+        ignore_index=True,
+    ) if not replay_frame.empty or not candidate_frame.empty else pd.DataFrame()
+    if not combined.empty:
+        combined["_source_priority"] = combined["training_source"].map(
+            {"point_in_time_replay": 0}
+        ).fillna(1)
+        combined = (
+            combined.sort_values(["trade_date", "code", "_source_priority"])
+            .drop_duplicates(["trade_date", "code"], keep="last")
+            .drop(columns=["_source_priority"])
+            .reset_index(drop=True)
+        )
+    positives = int(combined["success_t3"].sum()) if not combined.empty else 0
+    negatives = len(combined) - positives
     if (
-        len(candidate_frame) >= min_candidate_samples
+        len(combined) >= min_candidate_samples
         and positives >= min_candidate_positives
         and negatives >= min_candidate_positives
     ):
-        candidate_frame.attrs["outcome_source"] = CANDIDATE_EXECUTION_VERSION
-        return candidate_frame
+        sources = sorted(str(value) for value in combined["training_source"].unique())
+        combined.attrs["outcome_source"] = "+".join(sources)
+        return combined
     legacy = _load_legacy_training_frame(conn)
     legacy.attrs["outcome_source"] = "legacy_signal_backtest"
     return legacy
@@ -412,6 +524,8 @@ def _purged_date_split(
 
 def train_shadow_model(
     db_path=DB_PATH,
+    replay_db_path=None,
+    replay_dataset_path=DEFAULT_REPLAY_TRAINING_DATASET,
     artifact_dir="data/models",
     min_samples=MIN_TRAINING_SAMPLES,
     min_positives=MIN_POSITIVE_SAMPLES,
@@ -428,11 +542,30 @@ def train_shadow_model(
 
     with get_connection(db_path) as conn:
         init_db(conn)
-        frame = _load_training_frame(
-            conn,
-            min_candidate_samples=min_samples,
-            min_candidate_positives=min_positives,
-        )
+        replay_path = Path(replay_db_path).resolve() if replay_db_path else None
+        main_path = Path(db_path).resolve()
+        if replay_path and replay_path != main_path:
+            with get_connection(replay_path) as replay_conn:
+                init_db(replay_conn)
+                replay_frame = _load_historical_replay_training_frame(replay_conn)
+                frame = _load_training_frame(
+                    conn,
+                    replay_frame=replay_frame,
+                    min_candidate_samples=min_samples,
+                    min_candidate_positives=min_positives,
+                )
+        else:
+            replay_frame = (
+                _load_replay_training_dataset(replay_dataset_path)
+                if replay_dataset_path and Path(replay_dataset_path).exists()
+                else _load_historical_replay_training_frame(conn)
+            )
+            frame = _load_training_frame(
+                conn,
+                replay_frame=replay_frame,
+                min_candidate_samples=min_samples,
+                min_candidate_positives=min_positives,
+            )
     outcome_source = frame.attrs.get("outcome_source", "unknown")
 
     positives = int(frame["success_t3"].sum()) if not frame.empty else 0
@@ -480,10 +613,13 @@ def train_shadow_model(
     minimum_training_size = max(10, min_samples // 2)
     oof_parts = []
     used_embargo_dates = set()
+    unique_trade_dates = int(frame["trade_date"].nunique())
+    validation_window = max(5, int(math.ceil(unique_trade_dates / 60)))
+    minimum_train_dates = max(20, min(252, unique_trade_dates // 3))
     for fold in walk_forward_splits(
         frame,
-        min_train_dates=max(10, min(20, int(frame["trade_date"].nunique()) // 2)),
-        test_dates=5,
+        min_train_dates=minimum_train_dates,
+        test_dates=validation_window,
         embargo_trade_dates=EMBARGO_TRADE_DATES,
     ):
         train = fold["train"]
@@ -557,6 +693,8 @@ def train_shadow_model(
         "validation_start": str(oof["trade_date"].min()),
         "validation_end": str(oof["trade_date"].max()),
         "walk_forward_folds": int(oof["fold_index"].nunique()),
+        "walk_forward_test_dates": validation_window,
+        "walk_forward_min_train_dates": minimum_train_dates,
         "oof_trade_dates": int(oof["trade_date"].nunique()),
         "challenger": challenger_metrics,
         "challenger_rejection_reasons": challenger_reasons,
@@ -1080,6 +1218,9 @@ def format_ai_report(training, predictions, news):
 def run_ai_pipeline(
     run_id=None,
     db_path=DB_PATH,
+    replay_db_path=None,
+    replay_dataset_path=DEFAULT_REPLAY_TRAINING_DATASET,
+    artifact_dir="data/models",
     collect_news=True,
     backfill_features=True,
     train=True,
@@ -1095,7 +1236,16 @@ def run_ai_pipeline(
         missing_only=True,
     )
     build_feature_snapshots(db_path=db_path, run_id=run_id, missing_only=True)
-    training = train_shadow_model(db_path=db_path) if train else {"status": "disabled", "model": None}
+    training = (
+        train_shadow_model(
+            db_path=db_path,
+            replay_db_path=replay_db_path,
+            replay_dataset_path=replay_dataset_path,
+            artifact_dir=artifact_dir,
+        )
+        if train
+        else {"status": "disabled", "model": None}
+    )
     predictions = (
         save_shadow_predictions(run_id, training, db_path=db_path)
         if predict and training.get("model")
@@ -1118,6 +1268,11 @@ def run_ai_pipeline(
 def main():
     parser = argparse.ArgumentParser(description="Run the auditable AI shadow pipeline.")
     parser.add_argument("--db", default=str(DB_PATH))
+    parser.add_argument("--replay-db")
+    parser.add_argument(
+        "--replay-dataset", default=str(DEFAULT_REPLAY_TRAINING_DATASET)
+    )
+    parser.add_argument("--artifact-dir", default="data/models")
     parser.add_argument("--run-id", type=int)
     parser.add_argument("--no-news", action="store_true")
     parser.add_argument("--no-backfill-features", action="store_true")
@@ -1127,6 +1282,9 @@ def main():
     result = run_ai_pipeline(
         run_id=args.run_id,
         db_path=args.db,
+        replay_db_path=args.replay_db,
+        replay_dataset_path=args.replay_dataset,
+        artifact_dir=args.artifact_dir,
         collect_news=not args.no_news,
         backfill_features=not args.no_backfill_features,
         train=not args.no_train,

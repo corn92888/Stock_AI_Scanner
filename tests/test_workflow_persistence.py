@@ -77,7 +77,11 @@ class WorkflowPersistenceTests(unittest.TestCase):
             'args=(--start "$START_DATE" --end "$END_DATE" --db-path "$REPLAY_DB")'
         )
         attribution_index = workflow.index("python replay_attribution.py")
+        dataset_index = workflow.index("python replay_training_dataset.py")
+        model_index = workflow.index("python ai_pipeline.py")
         merge_index = workflow.index("python merge_historical_replay.py")
+        archive_index = workflow.index("python archive_historical_replay.py")
+        release_index = workflow.index("gh release upload research-replay-data-v1")
         persistence_index = workflow.index("bash persist_scanner_data.sh")
 
         self.assertIn("actions/cache@v4", workflow)
@@ -87,8 +91,15 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertIn("group: stock-scanner-automation", workflow)
         self.assertIn("$RUNNER_TEMP/historical_replay.db", workflow)
         self.assertIn("if: always()", workflow)
+        self.assertIn("retention-days: 30", workflow)
         self.assertLess(universe_index, replay_index)
         self.assertLess(replay_index, attribution_index)
+        self.assertLess(attribution_index, dataset_index)
+        self.assertLess(dataset_index, model_index)
+        self.assertLess(model_index, archive_index)
+        self.assertLess(attribution_index, archive_index)
+        self.assertLess(archive_index, release_index)
+        self.assertLess(release_index, merge_index)
         self.assertLess(attribution_index, merge_index)
         self.assertLess(merge_index, persistence_index)
 

@@ -101,6 +101,8 @@ export type ResearchHealth = {
   replayAttributionRows: number;
   replayAttributionDimensions: number;
   replayAttributionAt: string | null;
+  replayEvidenceStorageMode: "none" | "raw" | "summary_only";
+  replayRawEventsPersisted: number;
   warnings: string[];
   replayDataWarnings: string[];
   replaySelectedMeanNetReturn3d: number | null;

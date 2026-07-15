@@ -22,11 +22,12 @@ Historical rows are written only to:
 - `historical_replay_outcomes`
 - `historical_replay_checkpoints`
 - `historical_replay_attributions`
+- `historical_replay_summaries`
 
 They never enter `scan_runs`, `candidate_events`, `predictions`, or
-`paper_trades`. The current AI training loader therefore cannot consume replay
-rows accidentally. A later model experiment may opt into them only after replay
-quality and out-of-sample behavior are reviewed.
+`paper_trades`. AI training consumes replay rows only through the versioned
+`replay_training_samples.csv.gz` export. Replay-informed models remain shadow
+challengers and cannot affect the formal list unless every governance gate passes.
 
 ## Point-in-time contract
 
@@ -166,9 +167,23 @@ workflow.
 The long replay job operates on an isolated SQLite copy and uses a separate
 concurrency group, so it cannot block the 30-minute live scan schedule. A short
 final job enters the normal scanner concurrency group, downloads the replay
-artifact, and runs `merge_historical_replay.py`. The merger replaces only the
-matching versioned replay run and its events, outcomes, checkpoints, and
-attributions; it never overwrites newer live scans, predictions, or paper trades.
+artifact, and runs `merge_historical_replay.py`. The live database receives only
+the matching run summary, monthly checkpoints, factor attributions, and model
+governance result; it never copies the large event and outcome tables or
+overwrites newer live scans, predictions, or paper trades.
+
+The complete raw SQLite database, official universe, and compact training export
+are packaged into a checksum-bearing archive and published under the
+`research-replay-data-v1` GitHub Release. This avoids GitHub's 100 MB per-file
+limit while retaining event-level evidence for audit and future retraining. The
+compact `data/replay_training_samples.csv.gz` file contains only point-in-time
+model features and mature T+3 labels, so routine intraday and daily AI runs can
+reuse the five-year evidence without downloading the raw database.
+
+Replay-informed AI uses expanding walk-forward validation with a three-session
+embargo. The validation window grows adaptively for multi-year samples, and the
+challenger remains `shadow` unless it passes minimum trade count, positive net
+and excess returns, drawdown, lift, and profitable-fold stability gates.
 
 ## Research health monitor
 

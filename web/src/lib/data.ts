@@ -57,6 +57,8 @@ const EMPTY_RESEARCH_HEALTH: ResearchHealth = {
   replayAttributionRows: 0,
   replayAttributionDimensions: 0,
   replayAttributionAt: null,
+  replayEvidenceStorageMode: "none",
+  replayRawEventsPersisted: 0,
   warnings: ["研究健康監控尚未完成第一次執行。"],
   replayDataWarnings: [],
   replayUniverseQualityStatus: "unverified",

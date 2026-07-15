@@ -129,12 +129,39 @@ jobs:
         REPLAY_DB: ${{ runner.temp }}/historical_replay.db
       run: python replay_attribution.py --db-path "$REPLAY_DB"
 
+    - name: Export compact replay training dataset
+      env:
+        REPLAY_DB: ${{ runner.temp }}/historical_replay.db
+        REPLAY_DATASET: ${{ runner.temp }}/replay_training_samples.csv.gz
+      run: |
+        python replay_training_dataset.py \
+          --database "$REPLAY_DB" \
+          --output "$REPLAY_DATASET"
+
+    - name: Train replay-informed shadow challenger
+      env:
+        REPLAY_DB: ${{ runner.temp }}/historical_replay.db
+        REPLAY_MODELS: ${{ runner.temp }}/replay-models
+        REPLAY_DATASET: ${{ runner.temp }}/replay_training_samples.csv.gz
+      run: |
+        python ai_pipeline.py \
+          --db "$REPLAY_DB" \
+          --replay-dataset "$REPLAY_DATASET" \
+          --artifact-dir "$REPLAY_MODELS" \
+          --no-news \
+          --no-backfill-features \
+          --no-predict
+
     - name: Stage isolated replay artifact
       if: always()
       run: |
         mkdir -p replay_artifact
         cp "$RUNNER_TEMP/historical_replay.db" replay_artifact/historical_replay.db
         cp data/universe_history* replay_artifact/ 2>/dev/null || true
+        cp "$RUNNER_TEMP"/replay_training_samples.csv.gz* replay_artifact/
+        if [ -d "$RUNNER_TEMP/replay-models" ]; then
+          cp -R "$RUNNER_TEMP/replay-models" replay_artifact/models
+        fi
 
     - name: Upload isolated replay database
       if: always()
@@ -142,7 +169,7 @@ jobs:
       with:
         name: historical-replay-${{ inputs.start_date }}-${{ inputs.end_date }}
         path: replay_artifact
-        retention-days: 7
+        retention-days: 30
         if-no-files-found: error
 
   persist:
@@ -175,8 +202,40 @@ jobs:
         name: historical-replay-${{ inputs.start_date }}-${{ inputs.end_date }}
         path: replay-artifact
 
+    - name: Package durable replay archive
+      run: |
+        python archive_historical_replay.py \
+          --database replay-artifact/historical_replay.db \
+          --output replay-artifact/historical-replay-${{ inputs.start_date }}-${{ inputs.end_date }}.tar.gz \
+          --start "${{ inputs.start_date }}" \
+          --end "${{ inputs.end_date }}" \
+          --universe replay-artifact/universe_history.csv \
+          --universe replay-artifact/universe_history.metadata.json \
+          --include replay-artifact/replay_training_samples.csv.gz \
+          --include replay-artifact/replay_training_samples.csv.gz.metadata.json
+
+    - name: Publish durable replay archive
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if ! gh release view research-replay-data-v1 >/dev/null 2>&1; then
+          gh release create research-replay-data-v1 \
+            --target main \
+            --title "Historical replay research data" \
+            --notes "Versioned raw replay evidence for model training and audit."
+        fi
+        gh release upload research-replay-data-v1 \
+          replay-artifact/historical-replay-${{ inputs.start_date }}-${{ inputs.end_date }}.tar.gz \
+          --clobber
+
     - name: Merge replay evidence into latest research database
       run: |
+        if compgen -G 'replay-artifact/models/*.joblib' > /dev/null; then
+          mkdir -p data/models
+          cp replay-artifact/models/*.joblib data/models/
+        fi
+        cp replay-artifact/replay_training_samples.csv.gz data/
+        cp replay-artifact/replay_training_samples.csv.gz.metadata.json data/
         python merge_historical_replay.py \
           --source replay-artifact/historical_replay.db \
           --target data/stock_scanner.db \

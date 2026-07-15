@@ -206,6 +206,10 @@ def init_db(conn):
         "dimension, selection_scope, sort_order)"
     )
     conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_historical_replay_summary_run "
+        "ON historical_replay_summaries(replay_run_id)"
+    )
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_research_health_time "
         "ON research_health_snapshots(checked_at DESC)"
     )
@@ -892,6 +896,28 @@ def _create_historical_replay_tables(conn):
                 replay_run_id, attribution_version, dimension,
                 bucket_key, selection_scope
             )
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS historical_replay_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            replay_run_id INTEGER NOT NULL UNIQUE,
+            generated_at TEXT NOT NULL,
+            filled_events INTEGER NOT NULL DEFAULT 0,
+            selected_filled INTEGER NOT NULL DEFAULT 0,
+            rejected_filled INTEGER NOT NULL DEFAULT 0,
+            selected_mean_net_return_3d REAL,
+            selected_mean_excess_return_3d REAL,
+            selected_success_rate_t3 REAL,
+            rejected_mean_net_return_3d REAL,
+            rejected_mean_excess_return_3d REAL,
+            rejected_success_rate_t3 REAL,
+            selection_net_lift_3d REAL,
+            selection_excess_lift_3d REAL,
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY (replay_run_id) REFERENCES historical_replay_runs(id)
         )
         """
     )

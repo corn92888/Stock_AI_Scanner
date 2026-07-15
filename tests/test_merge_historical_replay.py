@@ -30,11 +30,11 @@ def _seed_replay(database):
             """
             INSERT INTO historical_replay_events (
                 replay_run_id, trade_date, decision_at, code, name, industry,
-                strategies_json, selection_status, policy_version,
+                strategies_json, is_selected, selection_status, policy_version,
                 snapshot_json, created_at
             ) VALUES (
                 ?, '2025-01-02', '2025-01-02T14:00:00+08:00', '2330',
-                '台積電', '半導體業', '["trend"]', 'selected', 'policy-v1',
+                '台積電', '半導體業', '["trend"]', 1, 'selected', 'policy-v1',
                 '{}', '2026-07-15T14:00:00+08:00'
             )
             """,
@@ -44,9 +44,11 @@ def _seed_replay(database):
             """
             INSERT INTO historical_replay_outcomes (
                 replay_event_id, execution_version, entry_status,
-                net_return_3d, matured_horizon, outcome_status,
+                net_return_3d, excess_return_3d, max_drawdown_3d,
+                success_t3, matured_horizon, outcome_status,
                 config_json, evaluated_at
-            ) VALUES (?, 'execution-v1', 'filled', 1.25, 3, 'mature', '{}',
+            ) VALUES (?, 'execution-v1', 'filled', 1.25, 0.75, -1.5,
+                      1, 3, 'mature', '{}',
                       '2026-07-15T14:05:00+08:00')
             """,
             (event_id,),
@@ -71,10 +73,36 @@ def _seed_replay(database):
             """,
             (replay_run_id,),
         )
+        conn.execute(
+            """
+            INSERT INTO model_versions (
+                model_name, version, status, feature_version,
+                training_start, training_end, metrics_json, artifact_path, created_at
+            ) VALUES (
+                'shadow', 'replay-model-v1', 'shadow', 'features-v1',
+                '2025-01-01', '2025-12-31',
+                '{"outcome_source":"point_in_time_replay"}',
+                '/tmp/models/replay-model-v1.joblib',
+                '2026-07-15T14:07:00+08:00'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO model_challenger_evaluations (
+                model_version, evaluated_at, status, qualified,
+                rejection_reasons_json, metrics_json, created_at
+            ) VALUES (
+                'replay-model-v1', '2026-07-15T14:08:00+08:00', 'shadow', 0,
+                '["non_positive_challenger_net_return"]', '{}',
+                '2026-07-15T14:08:00+08:00'
+            )
+            """
+        )
 
 
 class MergeHistoricalReplayTests(unittest.TestCase):
-    def test_merges_only_replay_tables_and_replaces_the_same_versioned_run(self):
+    def test_compact_merge_preserves_summary_and_replaces_the_same_run(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source.db"
             target = Path(directory) / "target.db"
@@ -107,17 +135,47 @@ class MergeHistoricalReplayTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     conn.execute("SELECT COUNT(*) FROM historical_replay_events").fetchone()[0],
-                    1,
+                    0,
                 )
-                outcome = conn.execute(
+                summary = conn.execute(
                     """
-                    SELECT hro.net_return_3d, hre.code
-                    FROM historical_replay_outcomes hro
-                    JOIN historical_replay_events hre ON hre.id=hro.replay_event_id
+                    SELECT filled_events, selected_mean_net_return_3d
+                    FROM historical_replay_summaries
                     """
                 ).fetchone()
-                self.assertEqual(outcome["code"], "2330")
-                self.assertEqual(outcome["net_return_3d"], 1.25)
+                self.assertEqual(summary["filled_events"], 1)
+                self.assertEqual(summary["selected_mean_net_return_3d"], 1.25)
+                self.assertEqual(first["raw_events_persisted"], 0)
+                model = conn.execute(
+                    "SELECT version, artifact_path FROM model_versions"
+                ).fetchone()
+                self.assertEqual(model["version"], "replay-model-v1")
+                self.assertEqual(
+                    model["artifact_path"], "data/models/replay-model-v1.joblib"
+                )
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM model_challenger_evaluations"
+                    ).fetchone()[0],
+                    1,
+                )
+
+    def test_include_raw_keeps_event_level_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.db"
+            target = Path(directory) / "target.db"
+            _seed_replay(source)
+            result = merge_historical_replay(source, target, include_raw=True)
+            with get_connection(target) as conn:
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM historical_replay_events").fetchone()[0],
+                    1,
+                )
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM historical_replay_outcomes").fetchone()[0],
+                    1,
+                )
+            self.assertEqual(result["raw_events_persisted"], 1)
 
 
 if __name__ == "__main__":

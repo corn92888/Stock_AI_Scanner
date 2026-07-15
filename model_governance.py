@@ -201,6 +201,10 @@ def save_model_governance(
     with get_connection(db_path) as conn:
         init_db(conn)
         for _, row in oof_frame.iterrows():
+            # Replay feature ids belong to the durable training dataset rather
+            # than the live feature_snapshots table enforced by this FK.
+            if int(row["feature_id"]) <= 0:
+                continue
             conn.execute(
                 """
                 INSERT INTO model_validation_predictions (

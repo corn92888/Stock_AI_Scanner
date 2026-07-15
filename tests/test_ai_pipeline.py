@@ -5,8 +5,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
+
 from ai_pipeline import (
     FEATURE_VERSION,
+    _load_historical_replay_training_frame,
     _is_timely_prospective,
     _purged_date_split,
     build_feature_snapshots,
@@ -23,9 +26,79 @@ from database import (
     save_candidate_events,
     save_candidate_outcome,
 )
+from model_governance import save_model_governance
+from tests.test_merge_historical_replay import _seed_replay
 
 
 class AiPipelineTests(unittest.TestCase):
+    def test_replay_oof_rows_are_summarized_without_live_feature_foreign_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "governance.db"
+            with get_connection(database) as conn:
+                init_db(conn)
+            oof = pd.DataFrame(
+                [
+                    {
+                        "feature_id": -1,
+                        "trade_date": "2025-01-02",
+                        "code": "2330",
+                        "fold_index": 1,
+                        "trained_through": "2024-12-31",
+                        "probability_t3": 0.6,
+                        "expected_excess_return_3d": 1.0,
+                        "expected_max_drawdown_3d": -2.0,
+                        "final_score": 60.0,
+                        "is_selected": True,
+                        "success_t3": 1,
+                        "net_return_3d": 2.0,
+                        "excess_return_3d": 1.0,
+                        "max_drawdown_3d": -1.0,
+                    }
+                ]
+            )
+            metrics = {
+                "oof_trade_dates": 1,
+                "oof_candidates": 1,
+                "challenger_trades": 1,
+                "champion_trades": 1,
+                "challenger_mean_net_return": 2.0,
+                "challenger_mean_excess_return": 1.0,
+                "champion_mean_net_return": 1.0,
+                "champion_mean_excess_return": 0.5,
+                "net_return_lift": 1.0,
+                "excess_return_lift": 0.5,
+                "challenger_max_drawdown": -1.0,
+                "profitable_fold_rate": 1.0,
+            }
+            save_model_governance(
+                "replay-model", oof, metrics, [], db_path=database
+            )
+            with get_connection(database) as conn:
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM model_validation_predictions"
+                    ).fetchone()[0],
+                    0,
+                )
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM model_challenger_evaluations"
+                    ).fetchone()[0],
+                    1,
+                )
+
+    def test_official_replay_rows_become_shadow_training_samples(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "replay.db"
+            _seed_replay(database)
+            with get_connection(database) as conn:
+                frame = _load_historical_replay_training_frame(conn)
+            self.assertEqual(len(frame), 1)
+            self.assertLess(int(frame.iloc[0]["feature_id"]), 0)
+            self.assertEqual(frame.iloc[0]["trade_date"], "2025-01-02")
+            self.assertEqual(frame.iloc[0]["training_source"], "point_in_time_replay")
+            self.assertEqual(frame.iloc[0]["success_t3"], 1)
+
     def test_time_split_groups_dates_and_embargoes_the_boundary(self):
         import pandas as pd
 

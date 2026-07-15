@@ -328,6 +328,8 @@ def _empty_research_health():
         "replaySelectionExcessLift3d": None,
         "replaySelectedSuccessRateT3": None,
         "replayRejectedSuccessRateT3": None,
+        "replayEvidenceStorageMode": "none",
+        "replayRawEventsPersisted": 0,
     }
 
 
@@ -390,6 +392,12 @@ def _research_health_snapshot(conn):
         "replaySelectionExcessLift3d": metrics.get("replay_selection_excess_lift_3d"),
         "replaySelectedSuccessRateT3": metrics.get("replay_selected_success_rate_t3"),
         "replayRejectedSuccessRateT3": metrics.get("replay_rejected_success_rate_t3"),
+        "replayEvidenceStorageMode": metrics.get(
+            "replay_evidence_storage_mode", "none"
+        ),
+        "replayRawEventsPersisted": int(
+            metrics.get("replay_raw_events_persisted", 0) or 0
+        ),
     }
 
 
