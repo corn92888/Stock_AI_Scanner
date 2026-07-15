@@ -177,9 +177,9 @@ The complete raw SQLite database, official universe, and compact training export
 are packaged into a checksum-bearing archive and published under the
 `research-replay-data-v1` GitHub Release. This avoids GitHub's 100 MB per-file
 limit while retaining event-level evidence for audit and future retraining. The
-compact `data/replay_training_samples.csv.gz` file contains only point-in-time
-model features and mature T+3 labels, so routine intraday and daily AI runs can
-reuse the five-year evidence without downloading the raw database.
+compact `data/replay_training_samples.csv.gz` file contains point-in-time model
+features plus versioned execution labels, so routine intraday and daily AI runs
+can reuse the five-year evidence without downloading the raw database.
 
 Official feeds may briefly list the same security in both the active-company
 master and a future-delist table. Records with the same market, code, and listing
@@ -203,6 +203,30 @@ from the final holdout. Positive after-cost net return, positive excess return,
 sample size, drawdown, PSR, fold stability, development, and validation must all
 pass before an overlay can enter manual promotion review. Failed experiments
 remain visible and cannot alter the formal rule.
+
+## Multi-horizon execution research
+
+After the signal replay completes, `execution_research.py` reuses the archived
+candidate events and versioned Yahoo cache to calculate four fixed execution
+scenarios: next open, next-session OHLC4 proxy, next close, and a 2% pullback
+limit valid for three sessions. Each filled scenario records after-cost T+1,
+T+3, T+5, T+10 and T+20 returns, benchmark returns, excess returns and
+holding-period drawdown. OHLC4 is deliberately labelled as a proxy and is not
+presented as historical VWAP.
+
+The deterministic `replay_execution_labels.csv.gz` artifact is merged into
+`replay_training_samples.csv.gz`; both files include SHA-256 metadata and are
+stored in the durable replay archive. `cross_sectional_research.py` trains only
+on tradable candidates, ranks the complete candidate pool by predicted net
+return, and evaluates the daily top three. Every T+N experiment uses an embargo
+of at least N trading dates at development, validation and final holdout
+boundaries. The 20 locked method/horizon comparisons use a 99.75% PSR gate and
+must also beat the formal rule on the same dates.
+
+Daily EOD candidates enter the same label contract through
+`candidate_execution_research.py`. Their records mature prospectively from
+`pending` to `partial` and finally T+20 `complete`; they are never backfilled as
+historical paper trades or used to rewrite a past model decision.
 
 ## Research health monitor
 

@@ -177,6 +177,10 @@ def init_db(conn):
         "ON candidate_outcomes(execution_version, matured_horizon, outcome_status)"
     )
     conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_candidate_scenarios_status "
+        "ON candidate_execution_scenarios(scenario_version, matured_horizon, updated_at)"
+    )
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_experiment_evaluations_time "
         "ON experiment_evaluations(experiment_id, evaluated_at DESC)"
     )
@@ -421,6 +425,30 @@ def _create_quant_tables(conn):
             updated_at TEXT NOT NULL,
             FOREIGN KEY (candidate_id) REFERENCES candidate_events(id),
             UNIQUE (candidate_id, execution_version)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS candidate_execution_scenarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            candidate_id INTEGER NOT NULL,
+            scenario_version TEXT NOT NULL,
+            entry_method TEXT NOT NULL,
+            entry_status TEXT NOT NULL,
+            skip_reason TEXT,
+            entry_at TEXT,
+            entry_price REAL,
+            benchmark_entry_price REAL,
+            matured_horizon INTEGER NOT NULL DEFAULT 0,
+            outcome_status TEXT NOT NULL DEFAULT 'pending',
+            costs_bps REAL,
+            labels_json TEXT NOT NULL DEFAULT '{}',
+            price_data_end TEXT,
+            evaluated_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (candidate_id) REFERENCES candidate_events(id),
+            UNIQUE (candidate_id, scenario_version, entry_method)
         )
         """
     )
@@ -1052,6 +1080,11 @@ def _migrate_quant_tables(conn):
             "entry_status": "TEXT NOT NULL DEFAULT 'filled'",
             "skip_reason": "TEXT",
         },
+    )
+    _ensure_columns(
+        conn,
+        "candidate_execution_scenarios",
+        {"outcome_status": "TEXT NOT NULL DEFAULT 'pending'"},
     )
     _ensure_columns(
         conn,

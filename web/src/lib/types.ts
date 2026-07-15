@@ -81,6 +81,10 @@ export type ResearchHealth = {
   staleOutcomes: number;
   oldestPendingSessions: number;
   maturityCoveragePct: number;
+  executionScenarioCandidates: number;
+  executionScenarios: number;
+  executionScenariosMatureT20: number;
+  executionScenariosPending: number;
   replayRuns: number;
   completedReplayRuns: number;
   latestReplayAt: string | null;

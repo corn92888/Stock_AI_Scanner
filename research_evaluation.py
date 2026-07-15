@@ -335,7 +335,7 @@ def _max_drawdown(daily_returns):
     return float(drawdown.min())
 
 
-def evaluate_frame(frame, gates=None, fold_count=5):
+def evaluate_frame(frame, gates=None, fold_count=5, decision_horizon=DECISION_HORIZON):
     gates = gates or PromotionGates()
     if frame.empty:
         metrics = {
@@ -355,8 +355,8 @@ def evaluate_frame(frame, gates=None, fold_count=5):
             net_return=("net_return_3d", "mean"),
             excess_return=("excess_return_3d", "mean"),
         )
-        daily["portfolio_return"] = daily["net_return"] / DECISION_HORIZON
-        daily["portfolio_excess"] = daily["excess_return"] / DECISION_HORIZON
+        daily["portfolio_return"] = daily["net_return"] / decision_horizon
+        daily["portfolio_excess"] = daily["excess_return"] / decision_horizon
         std = (
             float(daily["portfolio_return"].std(ddof=1))
             if len(daily) > 1
@@ -580,9 +580,9 @@ def apply_experiment_filters(frame, spec):
     return result.copy()
 
 
-def replay_temporal_partitions(frame):
+def replay_temporal_partitions(frame, embargo_trade_dates=REPLAY_EMBARGO_TRADE_DATES):
     trade_dates = sorted(frame["trade_date"].dropna().astype(str).unique())
-    minimum_dates = REPLAY_EMBARGO_TRADE_DATES * 2 + 3
+    minimum_dates = embargo_trade_dates * 2 + 3
     if len(trade_dates) < minimum_dates:
         raise ValueError(
             f"Replay evaluation requires at least {minimum_dates} trade dates."
@@ -592,8 +592,8 @@ def replay_temporal_partitions(frame):
         len(trade_dates)
         * (REPLAY_DEVELOPMENT_FRACTION + REPLAY_VALIDATION_FRACTION)
     )
-    first_embargo_end = development_end + REPLAY_EMBARGO_TRADE_DATES
-    second_embargo_end = validation_end + REPLAY_EMBARGO_TRADE_DATES
+    first_embargo_end = development_end + embargo_trade_dates
+    second_embargo_end = validation_end + embargo_trade_dates
     if first_embargo_end >= validation_end or second_embargo_end >= len(trade_dates):
         raise ValueError("Replay temporal split is too short after embargo periods.")
     return {
@@ -712,11 +712,21 @@ def main():
     parser.add_argument("--db", default=str(DB_PATH))
     parser.add_argument("--replay-dataset", default=str(DEFAULT_REPLAY_DATASET))
     parser.add_argument("--skip-replay", action="store_true")
+    parser.add_argument("--skip-ranking", action="store_true")
     args = parser.parse_args()
     results = run_baseline_evaluations(db_path=args.db)
     if not args.skip_replay:
         results.extend(
             run_replay_overlay_evaluations(
+                db_path=args.db,
+                dataset_path=args.replay_dataset,
+            )
+        )
+    if not args.skip_ranking:
+        from cross_sectional_research import run_cross_sectional_evaluations
+
+        results.extend(
+            run_cross_sectional_evaluations(
                 db_path=args.db,
                 dataset_path=args.replay_dataset,
             )

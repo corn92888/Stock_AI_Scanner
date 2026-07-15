@@ -59,6 +59,26 @@ def _prospective_metrics(conn):
     }
 
 
+def _execution_scenario_metrics(conn):
+    row = conn.execute(
+        """
+        SELECT COUNT(DISTINCT candidate_id) AS candidates,
+               COUNT(*) AS scenarios,
+               SUM(CASE WHEN matured_horizon >= 20 THEN 1 ELSE 0 END)
+                   AS mature_t20,
+               SUM(CASE WHEN outcome_status IN ('pending', 'partial')
+                        THEN 1 ELSE 0 END) AS pending
+        FROM candidate_execution_scenarios
+        """
+    ).fetchone()
+    return {
+        "execution_scenario_candidates": int(row["candidates"] or 0),
+        "execution_scenarios": int(row["scenarios"] or 0),
+        "execution_scenarios_mature_t20": int(row["mature_t20"] or 0),
+        "execution_scenarios_pending": int(row["pending"] or 0),
+    }
+
+
 def _replay_metrics(conn):
     counts = conn.execute(
         """
@@ -224,6 +244,7 @@ def build_research_health(db_path=DB_PATH):
     with get_connection(db_path) as conn:
         init_db(conn)
         prospective = _prospective_metrics(conn)
+        execution_scenarios = _execution_scenario_metrics(conn)
         replay = _replay_metrics(conn)
         latest_trade_date = conn.execute(
             "SELECT MAX(trade_date) FROM scan_runs"
@@ -286,6 +307,7 @@ def build_research_health(db_path=DB_PATH):
     expected = prospective["expected_mature_t3"]
     metrics = {
         **prospective,
+        **execution_scenarios,
         **replay,
         "latest_trade_date": latest_trade_date,
         "status": status,

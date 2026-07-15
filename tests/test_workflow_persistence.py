@@ -58,12 +58,17 @@ class WorkflowPersistenceTests(unittest.TestCase):
     def test_daily_workflow_backtests_all_candidates_before_training(self):
         workflow = (ROOT / ".github" / "workflows" / "daily_scan.yml").read_text()
         candidate_index = workflow.index("python candidate_backtest.py --limit 400")
+        scenario_index = workflow.index(
+            "python candidate_execution_research.py --limit 1000"
+        )
         training_index = workflow.index("python ai_pipeline.py --no-news")
         evaluation_index = workflow.index("python research_evaluation.py")
         paper_index = workflow.index("python paper_trading.py")
         monitor_index = workflow.index("python research_monitor.py")
         export_index = workflow.index("python export_dashboard_snapshot.py")
         self.assertLess(candidate_index, training_index)
+        self.assertLess(candidate_index, scenario_index)
+        self.assertLess(scenario_index, training_index)
         self.assertLess(training_index, evaluation_index)
         self.assertLess(evaluation_index, paper_index)
         self.assertLess(training_index, paper_index)
@@ -77,6 +82,7 @@ class WorkflowPersistenceTests(unittest.TestCase):
             'args=(--start "$START_DATE" --end "$END_DATE" --db-path "$REPLAY_DB")'
         )
         attribution_index = workflow.index("python replay_attribution.py")
+        execution_index = workflow.index("python execution_research.py")
         dataset_index = workflow.index("python replay_training_dataset.py")
         model_index = workflow.index("python ai_pipeline.py")
         merge_index = workflow.index("python merge_historical_replay.py")
@@ -101,6 +107,8 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertIn(
             'compgen -G "$RUNNER_TEMP/replay_training_samples.csv.gz*"', workflow
         )
+        self.assertIn("replay_execution_labels.csv.gz", workflow)
+        self.assertIn('--execution-labels "$REPLAY_EXECUTION_DATASET"', workflow)
         self.assertIn("if: ${{ needs.replay.result == 'success' }}", workflow)
         self.assertNotIn(
             "always() && needs.replay.result != 'cancelled'", workflow
@@ -109,6 +117,8 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertIn("retention-days: 30", workflow)
         self.assertLess(universe_index, replay_index)
         self.assertLess(replay_index, attribution_index)
+        self.assertLess(attribution_index, execution_index)
+        self.assertLess(execution_index, dataset_index)
         self.assertLess(attribution_index, dataset_index)
         self.assertLess(dataset_index, model_index)
         self.assertLess(model_index, archive_index)

@@ -17,6 +17,9 @@ cp data/stock_scanner.db "$snapshot_dir/stock_scanner.db"
 if compgen -G 'data/replay_training_samples.csv.gz*' > /dev/null; then
   cp data/replay_training_samples.csv.gz* "$snapshot_dir/"
 fi
+if compgen -G 'data/replay_execution_labels.csv.gz*' > /dev/null; then
+  cp data/replay_execution_labels.csv.gz* "$snapshot_dir/"
+fi
 if compgen -G 'data/models/*.joblib' > /dev/null; then
   cp data/models/*.joblib "$snapshot_dir/models/"
 fi
@@ -33,6 +36,8 @@ git restore --staged --worktree -- \
 git restore --staged --worktree -- data/models 2>/dev/null || true
 git restore --staged --worktree -- data/replay_training_samples.csv.gz \
   data/replay_training_samples.csv.gz.metadata.json 2>/dev/null || true
+git restore --staged --worktree -- data/replay_execution_labels.csv.gz \
+  data/replay_execution_labels.csv.gz.metadata.json 2>/dev/null || true
 git pull --rebase origin main
 
 cp "$snapshot_dir/stock_scanner.db" data/stock_scanner.db
@@ -43,12 +48,18 @@ fi
 if compgen -G "$snapshot_dir/replay_training_samples.csv.gz*" > /dev/null; then
   cp "$snapshot_dir"/replay_training_samples.csv.gz* data/
 fi
+if compgen -G "$snapshot_dir/replay_execution_labels.csv.gz*" > /dev/null; then
+  cp "$snapshot_dir"/replay_execution_labels.csv.gz* data/
+fi
 
 python export_dashboard_snapshot.py
 
 git add data/stock_scanner.db data/dashboard_snapshot.json web/public/dashboard_snapshot.json
 if compgen -G 'data/replay_training_samples.csv.gz*' > /dev/null; then
   git add data/replay_training_samples.csv.gz*
+fi
+if compgen -G 'data/replay_execution_labels.csv.gz*' > /dev/null; then
+  git add data/replay_execution_labels.csv.gz*
 fi
 if compgen -G 'data/models/*.joblib' > /dev/null; then
   git add data/models/*.joblib

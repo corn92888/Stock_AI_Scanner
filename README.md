@@ -117,6 +117,8 @@
   ```
   策略競賽以成本後超額報酬、Probabilistic Sharpe、最大回撤及時間順序分折穩定度作為升級門檻，結果會出現在 Next.js 儀表板「AI 與資料」頁。完整契約見 [`docs/research_execution_v2.md`](docs/research_execution_v2.md)。
 
+  新版橫斷面研究不再只學習舊規則的 T+3 成功標籤。`execution_research.py` 會對每個歷史 EOD 候選比較隔日開盤、隔日 OHLC4 執行代理、隔日收盤與三日內回檔 2% 限價四種進場方式，分別保存 T+1/T+3/T+5/T+10/T+20 成本後報酬、大盤超額報酬與持有期回撤。`cross_sectional_research.py` 使用所有可交易候選訓練每日報酬排名器，只評估每日前三名；開發、驗證及最終 holdout 之間依持有期做等長隔離，並對 20 組預先鎖定的進場/持有期實驗套用 99.75% PSR 多重比較門檻。所有結果預設維持 shadow，不會自動改寫正式選股。
+
   建立不污染正式訊號表的歷史逐日重播證據：
   ```bash
   venv/bin/python3 historical_universe.py --start 2022-01-01 --end 2025-12-31 --output data/universe_history.csv
@@ -132,6 +134,8 @@
 
   `research_evaluation.py` 會額外對五年正式入選樣本執行固定風險覆蓋層競賽，分別檢驗市場廣度、產業廣度、量能放大、平衡量能、漲幅延伸、廣度共識與綜合品質。資料依時間切成 60% 開發、20% 驗證、20% 最終 holdout，兩個邊界各排除三個交易日；儀表板只顯示最終 holdout 指標，而且成本後淨報酬、超額報酬、樣本數、回撤、PSR、跨折穩定度及前兩階段必須全部通過，才可能進入人工升級審查。
   每次盤中與盤後自動化都會執行這項檢查，再把 cohort 數量、理應成熟 T+3、實際成熟、逾期標註與歷史重播覆蓋輸出到控制中心。完整資料契約與限制見 [`docs/historical_replay.md`](docs/historical_replay.md)。
+
+  每日盤後也會執行 `candidate_execution_research.py`，只追蹤與歷史回放同分布的 EOD 候選，將四種執行情境從 `pending`、`partial` 持續補到 T+20 `complete`。這批資料是未來 prospective 驗證資料，不會回填成歷史訓練績效。
 
   回測會計算 1 / 3 / 5 / 10 / 20 個交易日後的毛報酬、成本後報酬、大盤報酬與超額報酬，並保存 3 / 20 日最大漲幅、最大回撤及防守價觸發狀態。預設採標準手續費、交易稅與每邊 0.1% 滑價，合計保守成本約 78.5 bps。
 

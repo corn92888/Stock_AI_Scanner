@@ -101,6 +101,7 @@ const experimentFamilyLabels: Record<string, string> = {
   extension_control: "延伸控制",
   breadth_consensus: "廣度共識",
   quality_stack: "綜合品質層",
+  cross_sectional_return_ranker: "橫斷面 AI 排名",
 };
 
 const experimentReasonLabels: Record<string, string> = {
@@ -113,6 +114,8 @@ const experimentReasonLabels: Record<string, string> = {
   fold_stability_gate_failed: "分折穩定度不足",
   development_gate_failed: "開發期未通過",
   validation_gate_failed: "驗證期未通過",
+  no_formal_net_lift: "成本後報酬未勝過正式規則",
+  no_formal_excess_lift: "超額報酬未勝過正式規則",
 };
 
 const challengerReasonLabels: Record<string, string> = {
@@ -845,7 +848,7 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
       </section>
 
       <section className="panel">
-        <PanelHeader eyebrow="Strategy tournament" title="策略競賽與升級判定" description="即時策略採時間順序分折；五年風險覆蓋層顯示三日隔離後的最終 holdout，任一階段未通過即維持研究" trailing={<span className="record-count">{experiments.length} 組</span>} />
+        <PanelHeader eyebrow="Strategy tournament" title="策略競賽與升級判定" description="即時策略採時間順序分折；五年回放與橫斷面 AI 依持有期做等長隔離，僅顯示最終 holdout，任一階段未通過即維持研究" trailing={<span className="record-count">{experiments.length} 組</span>} />
         <div className="table-scroll"><table className="data-table compact-table strategy-table"><thead><tr><th>策略實驗</th><th>樣本</th><th>成本後淨報酬</th><th>超額報酬</th><th>PSR</th><th>最大回撤</th><th>分折獲利率</th><th>判定</th></tr></thead><tbody>{experiments.length ? experiments.map((row) => <tr key={row.experimentKey} title={row.hypothesis}><td><div className="symbol-cell"><strong>{experimentFamilyLabels[row.strategyFamily] ?? row.strategyFamily}</strong><span>{row.name}</span></div></td><td><strong>{number.format(row.trades ?? 0)} 筆</strong><br /><small>{number.format(row.tradeDates ?? 0)} 日 · {row.sampleStart ?? "--"} 至 {row.sampleEnd ?? "--"}</small></td><td className={(row.meanNetReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.meanNetReturn)}</td><td className={(row.meanExcessReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.meanExcessReturn)}</td><td>{row.probabilisticSharpe == null ? "--" : `${decimal.format(row.probabilisticSharpe * 100)}%`}</td><td className="negative-text">{pct(row.maxDrawdown)}</td><td>{row.profitableFoldRate == null ? "--" : `${decimal.format(row.profitableFoldRate * 100)}%`}</td><td><span className={`status-pill ${row.qualified ? "selected" : "blocked"}`}>{row.qualified ? "符合升級門檻" : "維持研究"}</span><br /><small>{row.qualified ? "等待人工審查" : row.rejectionReasons.map((reason) => experimentReasonLabels[reason] ?? reason).join("、") || "尚無評估"}</small></td></tr>) : <tr><td colSpan={8}>每日盤後流程完成後會建立第一批策略評估。</td></tr>}</tbody></table></div>
       </section>
 
@@ -874,7 +877,7 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
       </section>
 
       <section className="metrics-grid metrics-grid-five">
-        <Metric label="前瞻 Cohort" value={number.format(health.prospectiveCohorts)} detail="同 run / 股票只計最早預測" tone="info" icon={Bot} />
+        <Metric label="前瞻 Cohort" value={number.format(health.prospectiveCohorts)} detail={`多週期 ${number.format(health.executionScenarioCandidates ?? 0)} 檔 · T+20 ${number.format(health.executionScenariosMatureT20 ?? 0)} 情境`} tone="info" icon={Bot} />
         <Metric label="理應成熟 T+3" value={number.format(health.expectedMatureT3)} detail={`最久等待 ${health.oldestPendingSessions} 個交易日`} tone="info" icon={Clock3} />
         <Metric label="實際成熟 T+3" value={number.format(health.matureT3Cohorts)} detail={`覆蓋 ${decimal.format(health.maturityCoveragePct)}%`} tone={health.staleOutcomes === 0 ? "positive" : "warning"} icon={CheckCircle2} />
         <Metric label="逾期未標註" value={number.format(health.staleOutcomes)} detail={health.staleOutcomes ? "資料管線需要處理" : "沒有成熟度缺口"} tone={health.staleOutcomes ? "danger" : "positive"} icon={TriangleAlert} />

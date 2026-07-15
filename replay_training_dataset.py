@@ -3,6 +3,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pandas as pd
+
 from ai_pipeline import (
     FEATURE_VERSION,
     MODEL_FEATURES,
@@ -11,7 +13,7 @@ from ai_pipeline import (
 from database import get_connection, init_db
 
 
-DATASET_VERSION = "point_in_time_replay_training_v1"
+DATASET_VERSION = "point_in_time_replay_training_v2"
 
 
 def _sha256(path):
@@ -22,7 +24,48 @@ def _sha256(path):
     return digest.hexdigest()
 
 
-def export_replay_training_dataset(database_path, output_path):
+def _merge_execution_labels(frame, execution_labels_path):
+    if not execution_labels_path:
+        return frame, None
+    execution_labels_path = Path(execution_labels_path)
+    if not execution_labels_path.exists():
+        raise FileNotFoundError(
+            f"Replay execution label dataset not found: {execution_labels_path}"
+        )
+    labels = pd.read_csv(
+        execution_labels_path, dtype={"code": str, "trade_date": str}
+    )
+    required = {"trade_date", "code", "scenario_version"}
+    missing = sorted(required - set(labels.columns))
+    if missing:
+        raise ValueError(
+            "Replay execution label dataset missing columns: " + ", ".join(missing)
+        )
+    if labels.duplicated(["trade_date", "code"]).any():
+        raise ValueError("Replay execution label dataset contains duplicate event keys.")
+    result = frame.copy()
+    result["trade_date"] = result["trade_date"].astype(str)
+    result["code"] = result["code"].astype(str)
+    labels["trade_date"] = labels["trade_date"].astype(str)
+    labels["code"] = labels["code"].astype(str)
+    merged = result.merge(
+        labels.drop(columns=["source_event_id"], errors="ignore"),
+        on=["trade_date", "code"],
+        how="left",
+        validate="one_to_one",
+    )
+    coverage = float(merged["scenario_version"].notna().mean()) if len(merged) else 0.0
+    return merged, {
+        "path": execution_labels_path.name,
+        "sha256": _sha256(execution_labels_path),
+        "coverage_pct": round(coverage * 100, 4),
+        "rows": int(len(labels)),
+    }
+
+
+def export_replay_training_dataset(
+    database_path, output_path, execution_labels_path=None
+):
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with get_connection(database_path) as conn:
@@ -30,6 +73,9 @@ def export_replay_training_dataset(database_path, output_path):
         frame = _load_historical_replay_training_frame(conn)
     if frame.empty:
         raise ValueError("No mature point-in-time replay samples are available.")
+    frame, execution_labels = _merge_execution_labels(
+        frame, execution_labels_path
+    )
     frame = frame.sort_values(["trade_date", "code", "feature_id"]).reset_index(drop=True)
     frame.to_csv(
         output_path,
@@ -47,6 +93,7 @@ def export_replay_training_dataset(database_path, output_path):
         "end_date": str(frame["trade_date"].max()),
         "symbols": int(frame["code"].nunique()),
         "source": "official_point_in_time_replay",
+        "execution_labels": execution_labels,
         "output": output_path.name,
         "bytes": output_path.stat().st_size,
         "sha256": _sha256(output_path),
@@ -65,8 +112,11 @@ def main():
     )
     parser.add_argument("--database", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--execution-labels")
     args = parser.parse_args()
-    result = export_replay_training_dataset(args.database, args.output)
+    result = export_replay_training_dataset(
+        args.database, args.output, execution_labels_path=args.execution_labels
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

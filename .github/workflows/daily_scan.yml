@@ -75,6 +75,12 @@ jobs:
       run: |
         python candidate_backtest.py --limit 400
 
+    - name: Mature prospective multi-horizon execution scenarios
+      if: steps.gate.outputs.run == 'true'
+      continue-on-error: true
+      run: |
+        python candidate_execution_research.py --limit 1000
+
     - name: Backfill non-formal research outcomes
       if: steps.gate.outputs.run == 'true'
       continue-on-error: true

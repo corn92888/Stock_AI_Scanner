@@ -298,6 +298,10 @@ def _empty_research_health():
         "staleOutcomes": 0,
         "oldestPendingSessions": 0,
         "maturityCoveragePct": 0,
+        "executionScenarioCandidates": 0,
+        "executionScenarios": 0,
+        "executionScenariosMatureT20": 0,
+        "executionScenariosPending": 0,
         "replayRuns": 0,
         "completedReplayRuns": 0,
         "latestReplayAt": None,
@@ -356,6 +360,16 @@ def _research_health_snapshot(conn):
         "staleOutcomes": int(row["stale_outcomes"] or 0),
         "oldestPendingSessions": int(row["oldest_pending_sessions"] or 0),
         "maturityCoveragePct": metrics.get("maturity_coverage_pct", 0),
+        "executionScenarioCandidates": int(
+            metrics.get("execution_scenario_candidates", 0) or 0
+        ),
+        "executionScenarios": int(metrics.get("execution_scenarios", 0) or 0),
+        "executionScenariosMatureT20": int(
+            metrics.get("execution_scenarios_mature_t20", 0) or 0
+        ),
+        "executionScenariosPending": int(
+            metrics.get("execution_scenarios_pending", 0) or 0
+        ),
         "replayRuns": int(row["replay_runs"] or 0),
         "completedReplayRuns": int(row["completed_replay_runs"] or 0),
         "latestReplayAt": row["latest_replay_at"],

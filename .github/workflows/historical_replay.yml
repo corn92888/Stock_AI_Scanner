@@ -145,14 +145,36 @@ jobs:
         REPLAY_DB: ${{ runner.temp }}/historical_replay.db
       run: python replay_attribution.py --db-path "$REPLAY_DB"
 
+    - name: Export multi-horizon execution research labels
+      env:
+        REPLAY_DB: ${{ runner.temp }}/historical_replay.db
+        REPLAY_EXECUTION_DATASET: ${{ runner.temp }}/replay_execution_labels.csv.gz
+        START_DATE: ${{ inputs.start_date }}
+        END_DATE: ${{ inputs.end_date }}
+        REFRESH_CACHE: ${{ inputs.refresh_cache }}
+      run: |
+        args=(
+          --database "$REPLAY_DB"
+          --output "$REPLAY_EXECUTION_DATASET"
+          --universe data/universe_history.csv
+          --start "$START_DATE"
+          --end "$END_DATE"
+        )
+        if [ "$REFRESH_CACHE" = "true" ]; then
+          args+=(--refresh-cache)
+        fi
+        python execution_research.py "${args[@]}"
+
     - name: Export compact replay training dataset
       env:
         REPLAY_DB: ${{ runner.temp }}/historical_replay.db
         REPLAY_DATASET: ${{ runner.temp }}/replay_training_samples.csv.gz
+        REPLAY_EXECUTION_DATASET: ${{ runner.temp }}/replay_execution_labels.csv.gz
       run: |
         python replay_training_dataset.py \
           --database "$REPLAY_DB" \
-          --output "$REPLAY_DATASET"
+          --output "$REPLAY_DATASET" \
+          --execution-labels "$REPLAY_EXECUTION_DATASET"
 
     - name: Train replay-informed shadow challenger
       env:
@@ -176,6 +198,9 @@ jobs:
         cp data/universe_history* replay_artifact/ 2>/dev/null || true
         if compgen -G "$RUNNER_TEMP/replay_training_samples.csv.gz*" > /dev/null; then
           cp "$RUNNER_TEMP"/replay_training_samples.csv.gz* replay_artifact/
+        fi
+        if compgen -G "$RUNNER_TEMP/replay_execution_labels.csv.gz*" > /dev/null; then
+          cp "$RUNNER_TEMP"/replay_execution_labels.csv.gz* replay_artifact/
         fi
         if [ -d "$RUNNER_TEMP/replay-models" ]; then
           cp -R "$RUNNER_TEMP/replay-models" replay_artifact/models
@@ -230,7 +255,9 @@ jobs:
           --universe replay-artifact/universe_history.csv \
           --universe replay-artifact/universe_history.metadata.json \
           --include replay-artifact/replay_training_samples.csv.gz \
-          --include replay-artifact/replay_training_samples.csv.gz.metadata.json
+          --include replay-artifact/replay_training_samples.csv.gz.metadata.json \
+          --include replay-artifact/replay_execution_labels.csv.gz \
+          --include replay-artifact/replay_execution_labels.csv.gz.metadata.json
 
     - name: Publish durable replay archive
       env:
@@ -254,6 +281,8 @@ jobs:
         fi
         cp replay-artifact/replay_training_samples.csv.gz data/
         cp replay-artifact/replay_training_samples.csv.gz.metadata.json data/
+        cp replay-artifact/replay_execution_labels.csv.gz data/
+        cp replay-artifact/replay_execution_labels.csv.gz.metadata.json data/
         python merge_historical_replay.py \
           --source replay-artifact/historical_replay.db \
           --target data/stock_scanner.db \
