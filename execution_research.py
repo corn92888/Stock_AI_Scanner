@@ -77,23 +77,37 @@ def _benchmark_entry_price(benchmark_row, method):
 def _row_for_normalized_date(frame, value):
     if frame is None or frame.empty:
         return None
-    matches = frame[frame.index.normalize() == pd.Timestamp(value).normalize()]
-    return None if matches.empty else matches.iloc[0]
+    key = pd.Timestamp(value).normalize()
+    try:
+        row = frame.loc[key]
+    except KeyError:
+        return None
+    return row.iloc[-1] if isinstance(row, pd.DataFrame) else row
 
 
-def calculate_execution_scenarios(candidate, price_df, benchmark_df=None, config=None):
+def calculate_execution_scenarios(
+    candidate,
+    price_df,
+    benchmark_df=None,
+    config=None,
+    prices_are_normalized=False,
+):
     config = config or ExecutionResearchConfig()
     candidate = dict(candidate)
-    prices = _normalize_price_frame(price_df)
-    benchmark = _normalize_price_frame(benchmark_df)
+    prices = price_df if prices_are_normalized else _normalize_price_frame(price_df)
+    benchmark = (
+        benchmark_df
+        if prices_are_normalized
+        else _normalize_price_frame(benchmark_df)
+    )
     if prices is None or prices.empty:
         return []
 
     trade_date = pd.Timestamp(candidate["trade_date"]).normalize()
-    signal_day = prices[prices.index.normalize() == trade_date]
+    signal_row = _row_for_normalized_date(prices, trade_date)
     signal_factor = (
-        float(signal_day.iloc[-1].get("AdjustmentFactor", 1.0))
-        if not signal_day.empty
+        float(signal_row.get("AdjustmentFactor", 1.0))
+        if signal_row is not None
         else 1.0
     )
     raw_signal_price = candidate.get("signal_price")
@@ -102,7 +116,8 @@ def calculate_execution_scenarios(candidate, price_df, benchmark_df=None, config
         if raw_signal_price is not None and pd.notna(raw_signal_price)
         else None
     )
-    future = prices[prices.index.normalize() > trade_date]
+    future_start = int(prices.index.searchsorted(trade_date, side="right"))
+    future = prices.iloc[future_start:]
     scenarios = []
     for method in ENTRY_METHODS:
         entry_at, entry_price, skip_reason = _entry_for_method(
@@ -295,12 +310,18 @@ def export_replay_execution_dataset(
         refresh_cache=refresh_cache,
     )
     histories, _ = resolve_transfer_history_aliases(histories, universe)
+    histories = {
+        ticker: normalized
+        for ticker, frame in histories.items()
+        if (normalized := _normalize_price_frame(frame)) is not None
+    }
     benchmark = _download_benchmark(
         history_start,
         history_end,
         cache_dir=cache_dir,
         refresh_cache=refresh_cache,
     )
+    benchmark = _normalize_price_frame(benchmark)
 
     records = []
     missing_prices = 0
@@ -310,7 +331,9 @@ def export_replay_execution_dataset(
             f"{event['code']}.{_market_suffix(stock.market)}" if stock else None
         )
         prices = histories.get(ticker)
-        scenarios = calculate_execution_scenarios(event, prices, benchmark)
+        scenarios = calculate_execution_scenarios(
+            event, prices, benchmark, prices_are_normalized=True
+        )
         if not scenarios:
             missing_prices += 1
             continue
