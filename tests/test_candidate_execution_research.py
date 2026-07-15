@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -89,6 +90,21 @@ class CandidateExecutionResearchTests(unittest.TestCase):
             _seed_candidate(database, mode="intraday")
 
             self.assertEqual(load_pending_eod_candidates(database), [])
+
+    def test_default_loader_batches_stock_and_benchmark_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scanner.db"
+            _seed_candidate(database)
+            with patch(
+                "candidate_execution_research.download_replay_history",
+                return_value={"2330.TW": _prices(), "^TWII": _prices()},
+            ) as downloader:
+                metrics = run_candidate_execution_research(db_path=database)
+
+            self.assertEqual(downloader.call_count, 1)
+            requested = set(downloader.call_args.args[0])
+            self.assertEqual(requested, {"2330.TW", "^TWII"})
+            self.assertEqual(metrics["scenarios"], 4)
 
 
 if __name__ == "__main__":

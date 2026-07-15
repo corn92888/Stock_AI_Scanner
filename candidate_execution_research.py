@@ -3,13 +3,14 @@ import json
 
 import pandas as pd
 
-from backtest import PriceCache, download_price_data
+from backtest import PriceCache, download_price_data, resolve_yf_ticker
 from database import DB_PATH, get_connection, get_taipei_now, init_db
 from execution_research import (
     ENTRY_METHODS,
     EXECUTION_RESEARCH_VERSION,
     calculate_execution_scenarios,
 )
+from historical_replay import download_replay_history
 
 
 def load_pending_eod_candidates(db_path=DB_PATH, limit=1000):
@@ -116,8 +117,29 @@ def run_candidate_execution_research(
         days=7
     )
     end = pd.Timestamp.now().normalize() + pd.Timedelta(days=1)
-    cache = PriceCache(start=start, end=end, loader=price_loader)
-    benchmark = cache.get_ticker("^TWII")
+    if price_loader is download_price_data:
+        ticker_by_code = {
+            str(row["code"]): resolve_yf_ticker(row["code"]) for row in candidates
+        }
+        histories = download_replay_history(
+            sorted(set(ticker_by_code.values()) | {"^TWII"}),
+            start,
+            end,
+            chunk_size=100,
+            cache_dir=None,
+        )
+        benchmark = histories.get("^TWII")
+
+        def stock_prices(code):
+            return histories.get(ticker_by_code.get(str(code)))
+
+    else:
+        cache = PriceCache(start=start, end=end, loader=price_loader)
+        benchmark = cache.get_ticker("^TWII")
+
+        def stock_prices(code):
+            return cache.get_stock(code)
+
     metrics = {
         "candidates": 0,
         "scenarios": 0,
@@ -130,7 +152,7 @@ def run_candidate_execution_research(
         init_db(conn)
         for candidate_row in candidates:
             candidate = dict(candidate_row)
-            prices = cache.get_stock(candidate["code"])
+            prices = stock_prices(candidate["code"])
             scenarios = calculate_execution_scenarios(candidate, prices, benchmark)
             if not scenarios:
                 continue
