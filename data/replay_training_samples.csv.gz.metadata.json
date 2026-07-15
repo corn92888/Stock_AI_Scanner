@@ -1,7 +1,13 @@
 {
-  "bytes": 3292217,
-  "dataset_version": "point_in_time_replay_training_v1",
+  "bytes": 22340941,
+  "dataset_version": "point_in_time_replay_training_v2",
   "end_date": "2025-12-31",
+  "execution_labels": {
+    "coverage_pct": 100.0,
+    "path": "replay_execution_labels.csv.gz",
+    "rows": 69606,
+    "sha256": "59aa1b1c147f6d47d972921e2746219fdb5dca06cfcd08c30d999702ae551f66"
+  },
   "feature_version": "candidate_features_v2",
   "model_features": [
     "candidate_score",
@@ -26,7 +32,7 @@
   "output": "replay_training_samples.csv.gz",
   "positive_samples": 8111,
   "samples": 56517,
-  "sha256": "c13820c1b1c5fcdf11b591ff7674631b631b1739e7463dabd399f26efffdfec4",
+  "sha256": "085b896acb160dba2cdd5697a7f52f54593ac1b7f917f047837447f1cb52ae7e",
   "source": "official_point_in_time_replay",
   "start_date": "2021-01-04",
   "symbols": 1636,
