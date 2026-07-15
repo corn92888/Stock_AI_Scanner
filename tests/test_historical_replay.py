@@ -9,6 +9,7 @@ from historical_replay import (
     HistoricalReplayConfig,
     build_historical_market_context,
     load_replay_universe,
+    resolve_transfer_history_aliases,
     run_historical_replay,
 )
 
@@ -72,6 +73,7 @@ class HistoricalReplayTests(unittest.TestCase):
 
         self.assertEqual(context["captured_at"].date(), decision_date.date())
         self.assertLess(context["history"]["2330.TW"].index.max(), decision_date)
+        self.assertLessEqual(len(context["history"]["2330.TW"]), 20)
         self.assertEqual(context["realtime"]["2330"]["Close"], 102.0)
 
     def test_market_transfer_uses_the_ticker_suffix_active_on_the_decision_date(self):
@@ -109,6 +111,42 @@ class HistoricalReplayTests(unittest.TestCase):
             self.assertEqual(february["code_to_yf"]["1234"], "1234.TW")
             self.assertEqual(len(january["realtime"]), 1)
             self.assertEqual(len(february["realtime"]), 1)
+
+    def test_market_transfer_can_reuse_yahoo_history_remapped_to_new_suffix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            universe_file = Path(directory) / "universe.csv"
+            universe_file.write_text(
+                "snapshot_date,code,name,industry,market\n"
+                "2025-01-01,1234,測試股,電子,上櫃\n"
+                "2025-02-01,1234,測試股,電子,上市\n",
+                encoding="utf-8",
+            )
+            universe, _ = load_replay_universe(universe_file=universe_file)
+            dates = pd.to_datetime(["2025-01-02", "2025-01-15", "2025-02-15"])
+            frame = pd.DataFrame(
+                {
+                    "Open": [10, 11, 12],
+                    "High": [11, 12, 13],
+                    "Low": [9, 10, 11],
+                    "Close": [10, 11, 12],
+                    "Volume": [1_000_000, 1_000_000, 1_000_000],
+                },
+                index=dates,
+            )
+
+            histories, aliases = resolve_transfer_history_aliases(
+                {"1234.TW": frame}, universe
+            )
+            january = build_historical_market_context(
+                "2025-01-15",
+                histories,
+                {"1234.TWO": "1234", "1234.TW": "1234"},
+                universe,
+            )
+
+            self.assertEqual(aliases, {"1234.TWO": "1234.TW"})
+            self.assertEqual(january["code_to_yf"]["1234"], "1234.TWO")
+            self.assertEqual(january["realtime"]["1234"]["Close"], 11.0)
 
     def test_replay_isolated_from_live_tables_and_saves_mature_outcome(self):
         with tempfile.TemporaryDirectory() as directory:

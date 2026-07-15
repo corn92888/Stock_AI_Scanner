@@ -788,6 +788,11 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const statusData = snapshot.statusCounts.slice(0, 7).map((row) => ({ ...row, short: row.label.slice(0, 6) }));
   const latestModel = (snapshot.aiModels ?? [])[0];
   const latestChallenger = (snapshot.modelChallengers ?? [])[0];
+  const universeQualityLabel = {
+    verified: "官方成員資格完整",
+    partial: "官方資料部分缺漏",
+    unverified: "股票池尚未驗證",
+  }[health.replayUniverseQualityStatus] ?? "股票池尚未驗證";
   const samples = latestModel?.metrics.samples ?? 0;
   const positives = latestModel?.metrics.positive_samples ?? 0;
   const auc = latestModel?.metrics.validation_auc ?? 0;
@@ -841,7 +846,7 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
       <section className="pipeline-board panel">
         <PanelHeader eyebrow="Data lineage" title="量化學習資料鏈" description={`特徵覆蓋率 ${decimal.format(featureCoverage)}%，所有階段保留版本與時間點`} trailing={<span className={`health-badge ${health.status === "healthy" ? "healthy" : "building"}`}>{health.status === "critical" ? "標註逾期" : health.status === "healthy" ? "資料健康" : "證據累積中"}</span>} />
         <div className="pipeline-grid">{stages.map((stage, index) => { const Icon = stage.icon; return <div className="pipeline-stage" key={stage.label}><div className="stage-icon"><Icon size={18} /></div><span>{stage.label}</span><strong>{number.format(stage.value)}</strong><small>{stage.note}</small><div className="progress"><i style={{ width: `${Math.max(stage.value ? 3 : 0, stage.value / max * 100)}%` }} /></div>{index < stages.length - 1 && <ChevronRight className="stage-arrow" size={16} />}</div>; })}</div>
-        <div className="readiness-callout"><Database size={19} /><div><strong>歷史重播：{health.latestReplayStatus === "completed" ? `${number.format(health.replayTradingDays)} 個交易日、${number.format(health.replayMatureT3)} 筆成熟 T+3` : "尚未完成第一輪"}</strong><p>{health.latestReplayStart && health.latestReplayEnd ? `${health.latestReplayStart} 至 ${health.latestReplayEnd} · ${number.format(health.replayAvailableSymbols)} 檔可用股票 · ${number.format(health.replayUniverseSnapshots)} 份 universe 快照${health.replayCheckpointTotal ? ` · 檢查點 ${health.replayCheckpointCompleted}/${health.replayCheckpointTotal}` : ""} · 入選淨報酬 ${pct(health.replaySelectedMeanNetReturn3d)} · 相對落選增值 ${pct(health.replaySelectionNetLift3d)}。` : "重播資料與正式即時預測完全隔離，完成後才作為研究證據。"} {health.warnings.join(" ")}</p></div></div>
+        <div className="readiness-callout"><Database size={19} /><div><strong>歷史重播：{health.latestReplayStatus === "completed" ? `${number.format(health.replayTradingDays)} 個交易日、${number.format(health.replayMatureT3)} 筆成熟 T+3` : "尚未完成第一輪"}</strong><p>{health.latestReplayStart && health.latestReplayEnd ? `${health.latestReplayStart} 至 ${health.latestReplayEnd} · ${number.format(health.replayAvailableSymbols)} 檔可用股票 · ${number.format(health.replayUniverseMembershipIntervals)} 個成員區間 · ${universeQualityLabel}${health.replayUniversePartialMemberships ? `（${number.format(health.replayUniversePartialMemberships)} 個起始日缺漏）` : ""}${health.replayCheckpointTotal ? ` · 檢查點 ${health.replayCheckpointCompleted}/${health.replayCheckpointTotal}` : ""} · 入選淨報酬 ${pct(health.replaySelectedMeanNetReturn3d)} · 相對落選增值 ${pct(health.replaySelectionNetLift3d)}。` : "重播資料與正式即時預測完全隔離，完成後才作為研究證據。"} {health.warnings.join(" ")} {health.replayDataWarnings.slice(0, 2).join(" ")}</p></div></div>
       </section>
 
       <section className="panel replay-attribution-panel">

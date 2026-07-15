@@ -8,3 +8,5 @@ data/*.db-shm
 data/*.db-wal
 data/global_market_latest.json
 data/replay_cache/
+data/universe_history.csv
+data/universe_history.metadata.json

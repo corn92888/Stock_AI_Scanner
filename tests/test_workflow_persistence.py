@@ -72,15 +72,25 @@ class WorkflowPersistenceTests(unittest.TestCase):
 
     def test_historical_replay_resumes_and_generates_attribution(self):
         workflow = (ROOT / ".github" / "workflows" / "historical_replay.yml").read_text()
-        replay_index = workflow.index('args=(--start "$START_DATE" --end "$END_DATE")')
+        universe_index = workflow.index("python historical_universe.py")
+        replay_index = workflow.index(
+            'args=(--start "$START_DATE" --end "$END_DATE" --db-path "$REPLAY_DB")'
+        )
         attribution_index = workflow.index("python replay_attribution.py")
+        merge_index = workflow.index("python merge_historical_replay.py")
         persistence_index = workflow.index("bash persist_scanner_data.sh")
 
         self.assertIn("actions/cache@v4", workflow)
         self.assertIn("args+=(--resume)", workflow)
+        self.assertIn("--universe-file data/universe_history.csv", workflow)
+        self.assertIn("group: stock-scanner-historical-replay", workflow)
+        self.assertIn("group: stock-scanner-automation", workflow)
+        self.assertIn("$RUNNER_TEMP/historical_replay.db", workflow)
         self.assertIn("if: always()", workflow)
+        self.assertLess(universe_index, replay_index)
         self.assertLess(replay_index, attribution_index)
-        self.assertLess(attribution_index, persistence_index)
+        self.assertLess(attribution_index, merge_index)
+        self.assertLess(merge_index, persistence_index)
 
     def test_automated_data_commits_use_conventional_english_messages(self):
         for workflow_name in (

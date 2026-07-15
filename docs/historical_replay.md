@@ -41,26 +41,41 @@ For decision date `D`:
 - Outcome bars after `D` are available only to the execution evaluator, never to
   signal generation or ranking.
 
-## Point-in-time universe snapshots
+## Official point-in-time universe
 
-The preferred universe CSV is a sequence of complete snapshots. Every row needs:
+Build the historical TWSE and TPEx membership intervals from official company,
+listing, transfer, and delisting feeds before a multi-year replay:
 
-```csv
-snapshot_date,code,name,industry,market
-2023-01-01,2330,台積電,半導體業,上市
-2023-01-01,2454,聯發科,半導體業,上市
-2023-02-01,2330,台積電,半導體業,上市
+```bash
+venv/bin/python3 historical_universe.py \
+  --start 2021-01-01 --end 2025-12-31 \
+  --output data/universe_history.csv
 ```
 
-Each `snapshot_date` must describe the complete eligible universe from that date
-until the next snapshot. A stock absent from a snapshot is not eligible on those
-decision dates. Dates before the first snapshot intentionally have no eligible
-stocks, so the loader never borrows a future membership list.
+The compact interval format changes membership on the exact listing or delisting
+date and avoids expanding thousands of stocks into duplicated monthly rows:
+
+```csv
+code,name,industry,market,listed_on,delisted_on,membership_quality
+2330,台積電,半導體業,上市,1994-09-05,,exact
+6446,藥華醫藥股份有限公司,未分類,上櫃,2016-07-19,2024-01-25,exact
+6446,藥華藥,生技醫療,上市,2024-01-25,,exact
+```
+
+`listed_on` is inclusive and `delisted_on` is exclusive. The generated metadata
+file records source URLs, retrieval time, coverage dates, a SHA-256 data hash,
+market transfers, and the number of `partial_start` intervals. A hash mismatch
+stops the replay instead of silently accepting modified membership data.
+
+The snapshot format remains supported. Each `snapshot_date` must describe the
+complete eligible universe from that date until the next snapshot. Dates before
+the first snapshot intentionally have no eligible stocks, so the loader never
+borrows a future membership list.
 
 The legacy static `code,name,industry,market` format remains accepted for scoped
-diagnostics, but the replay records a survivorship-bias warning. A credible
-multi-year study should reconstruct monthly snapshots from official TWSE and TPEx
-listing, transfer, and delisting records before interpreting results.
+diagnostics, but the replay records a survivorship-bias warning. A missing
+official listing date is never guessed: the builder truncates that interval to
+the requested coverage start and marks the entire universe `partial`.
 
 ## Cache, checkpoints, and resume
 
@@ -76,7 +91,7 @@ versioned replay without duplicating events:
 ```bash
 venv/bin/python3 historical_replay.py \
   --start 2022-01-01 --end 2025-12-31 \
-  --universe-file data/universe_snapshots.csv \
+  --universe-file data/universe_history.csv \
   --resume
 ```
 
@@ -106,11 +121,13 @@ cross zero.
 
 ## Known limitations
 
-The default universe comes from the current `twstock` listing. Replaying older
-dates with it has survivorship bias because delisted securities are absent and
-later IPOs may be overrepresented in the universe definition. Use a versioned
-CSV with `code,name,industry,market` columns when a historically accurate
-universe becomes available.
+The official builder removes the largest current-list survivorship error, but
+some companies delisted after 2021 were listed before the official historical
+listing feed begins. Those intervals are marked `partial_start`. Industry labels
+for active companies are the latest official classification, not a complete
+point-in-time classification history; delisted companies without a historical
+classification are marked unclassified. Both limitations are carried into the
+replay warnings and dashboard quality state.
 
 Yahoo Finance history can include later corrections and adjustment metadata.
 Version 2 also excludes historical point-in-time fundamentals and news. These
@@ -134,15 +151,24 @@ venv/bin/python3 historical_replay.py \
 
 venv/bin/python3 historical_replay.py \
   --start 2025-01-01 --end 2025-12-31 \
-  --universe-file data/universe_snapshots.csv --resume
+  --universe-file data/universe_history.csv --resume
 ```
 
 The GitHub Actions workflow `Historical Point-in-Time Replay` provides the same
-operation without requiring a local process. It restores the historical price
-cache, resumes incomplete monthly checkpoints by default, generates attribution,
-and persists failed-run checkpoints so a later dispatch can continue. It is
-manual because a full-market multi-year replay is intentionally separate from
-the latency-sensitive intraday workflow.
+operation without requiring a local process. When no custom universe file is
+provided, the workflow rebuilds the official interval universe for the requested
+dates. It restores the historical price cache, resumes incomplete monthly
+checkpoints by default, generates attribution, and persists failed-run
+checkpoints so a later dispatch can continue. It is manual because a full-market
+multi-year replay is intentionally separate from the latency-sensitive intraday
+workflow.
+
+The long replay job operates on an isolated SQLite copy and uses a separate
+concurrency group, so it cannot block the 30-minute live scan schedule. A short
+final job enters the normal scanner concurrency group, downloads the replay
+artifact, and runs `merge_historical_replay.py`. The merger replaces only the
+matching versioned replay run and its events, outcomes, checkpoints, and
+attributions; it never overwrites newer live scans, predictions, or paper trades.
 
 ## Research health monitor
 

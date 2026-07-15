@@ -23,7 +23,7 @@ on:
         default: "0"
         type: string
       universe_file:
-        description: Optional repository CSV with point-in-time universe snapshots
+        description: Optional custom point-in-time CSV; blank rebuilds the official universe
         required: false
         default: ""
         type: string
@@ -41,14 +41,13 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: stock-scanner-automation
-  cancel-in-progress: false
-
 jobs:
   replay:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 360
+    concurrency:
+      group: stock-scanner-historical-replay
+      cancel-in-progress: false
 
     steps:
     - name: Checkout repository
@@ -56,6 +55,9 @@ jobs:
 
     - name: Synchronize latest research database
       run: git pull --ff-only origin main
+
+    - name: Prepare isolated replay database
+      run: cp data/stock_scanner.db "$RUNNER_TEMP/historical_replay.db"
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -76,6 +78,19 @@ jobs:
         restore-keys: |
           replay-yahoo-${{ runner.os }}-
 
+    - name: Build official point-in-time universe
+      env:
+        START_DATE: ${{ inputs.start_date }}
+        END_DATE: ${{ inputs.end_date }}
+        UNIVERSE_FILE: ${{ inputs.universe_file }}
+      run: |
+        if [ -z "$UNIVERSE_FILE" ]; then
+          python historical_universe.py \
+            --start "$START_DATE" \
+            --end "$END_DATE" \
+            --output data/universe_history.csv
+        fi
+
     - name: Run isolated historical replay
       env:
         START_DATE: ${{ inputs.start_date }}
@@ -85,8 +100,9 @@ jobs:
         UNIVERSE_FILE: ${{ inputs.universe_file }}
         FORCE_REBUILD: ${{ inputs.force_rebuild }}
         REFRESH_CACHE: ${{ inputs.refresh_cache }}
+        REPLAY_DB: ${{ runner.temp }}/historical_replay.db
       run: |
-        args=(--start "$START_DATE" --end "$END_DATE")
+        args=(--start "$START_DATE" --end "$END_DATE" --db-path "$REPLAY_DB")
         if [ "$FORCE_REBUILD" = "true" ]; then
           args+=(--replace)
         else
@@ -103,33 +119,71 @@ jobs:
         fi
         if [ -n "$UNIVERSE_FILE" ]; then
           args+=(--universe-file "$UNIVERSE_FILE")
+        else
+          args+=(--universe-file data/universe_history.csv)
         fi
         python historical_replay.py "${args[@]}"
 
     - name: Generate replay factor attribution
-      run: python replay_attribution.py
+      env:
+        REPLAY_DB: ${{ runner.temp }}/historical_replay.db
+      run: python replay_attribution.py --db-path "$REPLAY_DB"
 
-    - name: Refresh research health and dashboard
-      run: |
-        python research_monitor.py
-        python export_dashboard_snapshot.py
-
-    - name: Record failed replay health
-      if: failure()
-      run: python research_monitor.py || true
-
-    - name: Persist replay evidence and checkpoints
+    - name: Stage isolated replay artifact
       if: always()
       run: |
-        bash persist_scanner_data.sh "chore(data): record historical replay evidence"
+        mkdir -p replay_artifact
+        cp "$RUNNER_TEMP/historical_replay.db" replay_artifact/historical_replay.db
+        cp data/universe_history* replay_artifact/ 2>/dev/null || true
 
-    - name: Upload replay database
+    - name: Upload isolated replay database
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: historical-replay-${{ inputs.start_date }}-${{ inputs.end_date }}
-        path: |
-          data/stock_scanner.db
-          data/dashboard_snapshot.json
+        path: replay_artifact
         retention-days: 7
         if-no-files-found: error
+
+  persist:
+    needs: replay
+    if: ${{ always() && needs.replay.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: stock-scanner-automation
+      cancel-in-progress: false
+
+    steps:
+    - name: Checkout latest repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    - name: Install persistence dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-intraday.txt
+
+    - name: Download isolated replay database
+      uses: actions/download-artifact@v4
+      with:
+        name: historical-replay-${{ inputs.start_date }}-${{ inputs.end_date }}
+        path: replay-artifact
+
+    - name: Merge replay evidence into latest research database
+      run: |
+        python merge_historical_replay.py \
+          --source replay-artifact/historical_replay.db \
+          --target data/stock_scanner.db \
+          --start "${{ inputs.start_date }}" \
+          --end "${{ inputs.end_date }}"
+        python research_monitor.py
+
+    - name: Persist replay evidence and dashboard
+      run: |
+        bash persist_scanner_data.sh "chore(data): record historical replay evidence"

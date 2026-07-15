@@ -93,6 +93,9 @@ export type ResearchHealth = {
   replayAvailableSymbols: number;
   replayTradingDays: number;
   replayUniverseSnapshots: number;
+  replayUniverseQualityStatus: "verified" | "partial" | "unverified";
+  replayUniversePartialMemberships: number;
+  replayUniverseMembershipIntervals: number;
   replayCheckpointTotal: number;
   replayCheckpointCompleted: number;
   replayAttributionRows: number;

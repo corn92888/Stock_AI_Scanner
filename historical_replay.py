@@ -62,19 +62,56 @@ class ReplayStock:
         return self.industry
 
 
+@dataclass(frozen=True)
+class ReplayMembership:
+    stock: ReplayStock
+    listed_on: pd.Timestamp
+    delisted_on: pd.Timestamp | None = None
+    quality: str = "unverified"
+
+
 class ReplayUniverse:
-    def __init__(self, static_stocks=None, snapshots=None, source=""):
+    def __init__(
+        self,
+        static_stocks=None,
+        snapshots=None,
+        intervals=None,
+        source="",
+        metadata=None,
+    ):
         self.static_stocks = dict(static_stocks or {})
         self.snapshots = {
             pd.Timestamp(date).normalize(): dict(stocks)
             for date, stocks in (snapshots or {}).items()
         }
         self.snapshot_dates = tuple(sorted(self.snapshots))
+        self.intervals = {
+            code: tuple(sorted(rows, key=lambda row: row.listed_on))
+            for code, rows in (intervals or {}).items()
+        }
+        self._validate_intervals()
         union = dict(self.static_stocks)
         for date in self.snapshot_dates:
             union.update(self.snapshots[date])
+        for rows in self.intervals.values():
+            for membership in rows:
+                union[membership.stock.code] = membership.stock
         self.union = dict(sorted(union.items()))
         self.source = source
+        self.metadata = dict(metadata or {})
+
+    def _validate_intervals(self):
+        for code, rows in self.intervals.items():
+            for membership in rows:
+                if membership.delisted_on is not None and (
+                    membership.listed_on >= membership.delisted_on
+                ):
+                    raise ValueError(f"Invalid universe membership interval: {code}")
+            for previous, current in zip(rows, rows[1:]):
+                if previous.delisted_on is None or (
+                    current.listed_on < previous.delisted_on
+                ):
+                    raise ValueError(f"Overlapping universe membership intervals: {code}")
 
     def __len__(self):
         return len(self.union)
@@ -94,17 +131,52 @@ class ReplayUniverse:
         }
         if code in self.static_stocks:
             markets.add(self.static_stocks[code].market)
+        for membership in self.intervals.get(code, ()):
+            markets.add(membership.stock.market)
         if not markets and code in self.union:
             markets.add(self.union[code].market)
         return tuple(sorted(markets))
 
     @property
     def snapshot_count(self):
+        if self.intervals:
+            boundaries = {
+                boundary
+                for rows in self.intervals.values()
+                for membership in rows
+                for boundary in (membership.listed_on, membership.delisted_on)
+                if boundary is not None
+            }
+            return len(boundaries)
         return len(self.snapshot_dates) or 1
 
     @property
     def is_point_in_time(self):
-        return bool(self.snapshot_dates)
+        return bool(self.snapshot_dates or self.intervals)
+
+    @property
+    def membership_interval_count(self):
+        return sum(len(rows) for rows in self.intervals.values())
+
+    @property
+    def quality_status(self):
+        if not self.metadata.get("_integrity_verified"):
+            return "unverified"
+        if self.intervals:
+            return "partial" if self.partial_memberships else "verified"
+        quality = self.metadata.get("membership_quality") or {}
+        return str(quality.get("status") or "unverified")
+
+    @property
+    def partial_memberships(self):
+        if self.intervals:
+            return sum(
+                membership.quality != "exact"
+                for rows in self.intervals.values()
+                for membership in rows
+            )
+        quality = self.metadata.get("membership_quality") or {}
+        return int(quality.get("partial_start_intervals") or 0)
 
     @property
     def fingerprint(self):
@@ -115,15 +187,35 @@ class ReplayUniverse:
                     rows.append(
                         f"{date.date()}:{code}:{stock.name}:{stock.industry}:{stock.market}"
                     )
+        elif self.intervals:
+            for code in sorted(self.intervals):
+                for membership in self.intervals[code]:
+                    stock = membership.stock
+                    rows.append(
+                        f"interval:{membership.listed_on.date()}:"
+                        f"{membership.delisted_on.date() if membership.delisted_on is not None else ''}:"
+                        f"{code}:{stock.name}:{stock.industry}:{stock.market}:"
+                        f"{membership.quality}"
+                    )
         else:
             for code, stock in self.items():
                 rows.append(f"static:{code}:{stock.name}:{stock.industry}:{stock.market}")
         return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()[:12]
 
     def stock_on(self, code, decision_date=None):
-        if not self.snapshot_dates or decision_date is None:
+        if decision_date is None:
             return self.union.get(code)
         date = pd.Timestamp(decision_date).normalize()
+        if self.intervals:
+            for membership in reversed(self.intervals.get(code, ())):
+                if membership.listed_on > date:
+                    continue
+                if membership.delisted_on is None or date < membership.delisted_on:
+                    return membership.stock
+                return None
+            return None
+        if not self.snapshot_dates:
+            return self.union.get(code)
         position = bisect.bisect_right(self.snapshot_dates, date) - 1
         if position < 0:
             return None
@@ -136,7 +228,16 @@ class ReplayUniverse:
             date: {code: stock for code, stock in stocks.items() if code in codes}
             for date, stocks in self.snapshots.items()
         }
-        return ReplayUniverse(static, snapshots, self.source)
+        intervals = {
+            code: rows for code, rows in self.intervals.items() if code in codes
+        }
+        return ReplayUniverse(
+            static_stocks=static,
+            snapshots=snapshots,
+            intervals=intervals,
+            source=self.source,
+            metadata=self.metadata,
+        )
 
 
 @dataclass(frozen=True)
@@ -178,14 +279,40 @@ def _market_suffix(market):
     return "TWO" if str(market).strip() == "上櫃" else "TW"
 
 
+def _universe_metadata_path(path):
+    base = path.with_suffix("") if path.suffix == ".gz" else path
+    return base.with_suffix(".metadata.json")
+
+
+def _load_universe_metadata(path):
+    metadata_path = _universe_metadata_path(path)
+    if not metadata_path.exists():
+        return {}
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    expected_hash = metadata.get("data_sha256")
+    if expected_hash:
+        actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual_hash != expected_hash:
+            raise ValueError(
+                f"Universe data hash does not match {metadata_path.name}."
+            )
+        metadata["_integrity_verified"] = True
+    else:
+        metadata["_integrity_verified"] = False
+    return metadata
+
+
 def load_replay_universe(universe_file=None, codes=None, max_symbols=None):
     requested = {_normalize_code(code) for code in (codes or []) if _normalize_code(code)}
     stocks = {}
     snapshots = defaultdict(dict)
+    intervals = defaultdict(list)
+    metadata = {}
     source = "current_twstock_equities"
     if universe_file:
         path = Path(universe_file)
         frame = pd.read_csv(path, dtype=str)
+        metadata = _load_universe_metadata(path)
         aliases = {
             "代號": "code",
             "名稱": "name",
@@ -200,13 +327,21 @@ def load_replay_universe(universe_file=None, codes=None, max_symbols=None):
         if missing:
             raise ValueError(f"Universe file missing columns: {', '.join(sorted(missing))}")
         has_snapshot_column = "snapshot_date" in frame.columns
+        has_interval_column = "listed_on" in frame.columns
+        if has_snapshot_column and has_interval_column:
+            raise ValueError(
+                "Universe file must use either snapshot_date or membership intervals."
+            )
         if has_snapshot_column and frame["snapshot_date"].isna().any():
             raise ValueError("Universe snapshot_date must be present on every row.")
-        source = (
-            f"point_in_time_csv:{path.name}"
-            if has_snapshot_column
-            else f"csv:{path.name}"
-        )
+        if has_interval_column and frame["listed_on"].isna().any():
+            raise ValueError("Universe listed_on must be present on every interval row.")
+        if has_interval_column:
+            source = f"point_in_time_intervals_csv:{path.name}"
+        elif has_snapshot_column:
+            source = f"point_in_time_csv:{path.name}"
+        else:
+            source = f"csv:{path.name}"
         for row in frame.to_dict(orient="records"):
             code = _normalize_code(row["code"])
             if code:
@@ -223,6 +358,26 @@ def load_replay_universe(universe_file=None, codes=None, max_symbols=None):
                             f"Duplicate universe membership: {snapshot_date.date()} {code}"
                         )
                     snapshots[snapshot_date][code] = stock
+                elif has_interval_column:
+                    listed_on = pd.Timestamp(row["listed_on"]).normalize()
+                    raw_delisted_on = row.get("delisted_on")
+                    delisted_on = (
+                        None
+                        if pd.isna(raw_delisted_on) or not str(raw_delisted_on).strip()
+                        else pd.Timestamp(raw_delisted_on).normalize()
+                    )
+                    intervals[code].append(
+                        ReplayMembership(
+                            stock=stock,
+                            listed_on=listed_on,
+                            delisted_on=delisted_on,
+                            quality=(
+                                "unverified"
+                                if pd.isna(row.get("membership_quality"))
+                                else str(row.get("membership_quality") or "unverified")
+                            ),
+                        )
+                    )
                 else:
                     stocks[code] = stock
     else:
@@ -236,7 +391,13 @@ def load_replay_universe(universe_file=None, codes=None, max_symbols=None):
                 market=info.market,
             )
 
-    universe = ReplayUniverse(stocks, snapshots, source)
+    universe = ReplayUniverse(
+        static_stocks=stocks,
+        snapshots=snapshots,
+        intervals=intervals,
+        source=source,
+        metadata=metadata,
+    )
     if requested:
         missing = sorted(requested - set(universe))
         if missing:
@@ -399,6 +560,25 @@ def _download_benchmark(
     ).get("^TWII")
 
 
+def resolve_transfer_history_aliases(histories, universe):
+    resolved = dict(histories)
+    aliases = {}
+    for code in universe:
+        markets = universe.markets_for(code)
+        if len(markets) < 2:
+            continue
+        expected = [f"{code}.{_market_suffix(market)}" for market in markets]
+        available = [ticker for ticker in expected if ticker in resolved]
+        missing = [ticker for ticker in expected if ticker not in resolved]
+        if len(available) != 1:
+            continue
+        source = available[0]
+        for ticker in missing:
+            resolved[ticker] = resolved[source]
+            aliases[ticker] = source
+    return resolved, aliases
+
+
 def _stock_for_date(universe, code, decision_date=None):
     if hasattr(universe, "stock_on"):
         return universe.stock_on(code, decision_date)
@@ -425,7 +605,7 @@ def collect_strategy_signals(histories, ticker_to_code, universe, start_date, en
             stock = _stock_for_date(universe, code, decision_date)
             if stock is None or not _ticker_matches_stock_market(ticker, stock):
                 continue
-            known = indicators.iloc[: position + 1]
+            known = indicators.iloc[max(0, position - 59) : position + 1]
             if known.index.max().normalize() > decision_date:
                 raise RuntimeError("Replay indicator window contains future data.")
             last = known.iloc[-1]
@@ -465,7 +645,8 @@ def build_historical_market_context(decision_date, histories, ticker_to_code, un
             or date not in frame.index
         ):
             continue
-        past = frame[frame.index < date].copy()
+        past_end = frame.index.searchsorted(date, side="left")
+        past = frame.iloc[max(0, past_end - 20) : past_end]
         if past.empty:
             continue
         row = frame.loc[date]
@@ -512,6 +693,9 @@ def _start_replay_run(
     replay_key,
     universe_size,
     universe_snapshots,
+    universe_quality_status,
+    universe_partial_memberships,
+    universe_membership_intervals,
     warnings,
     replace,
     resume,
@@ -530,10 +714,15 @@ def _start_replay_run(
                 """
                 UPDATE historical_replay_runs
                 SET status='running', finished_at=NULL, error_text=NULL,
-                    config_json=?, data_warnings_json=?, git_commit=?
+                    universe_quality_status=?, universe_partial_memberships=?,
+                    universe_membership_intervals=?, config_json=?,
+                    data_warnings_json=?, git_commit=?
                 WHERE id=?
                 """,
                 (
+                    universe_quality_status,
+                    universe_partial_memberships,
+                    universe_membership_intervals,
                     json.dumps(asdict(config), sort_keys=True),
                     json.dumps(warnings, ensure_ascii=False),
                     get_git_commit(),
@@ -569,9 +758,11 @@ def _start_replay_run(
             INSERT INTO historical_replay_runs (
                 replay_key, replay_version, strategy_version, policy_version,
                 execution_version, started_at, status, start_date, end_date,
-                universe_source, universe_size, universe_snapshots, config_json,
-                data_warnings_json, git_commit
-            ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?)
+                universe_source, universe_size, universe_snapshots,
+                universe_quality_status, universe_partial_memberships,
+                universe_membership_intervals, config_json, data_warnings_json,
+                git_commit
+            ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 replay_key,
@@ -585,6 +776,9 @@ def _start_replay_run(
                 config.universe_source,
                 universe_size,
                 universe_snapshots,
+                universe_quality_status,
+                universe_partial_memberships,
+                universe_membership_intervals,
                 json.dumps(asdict(config), sort_keys=True),
                 json.dumps(warnings, ensure_ascii=False),
                 get_git_commit(),
@@ -880,20 +1074,50 @@ def run_historical_replay(
         "Yahoo historical prices may contain later revisions and adjustment metadata.",
         "Historical fundamentals and news are not included in replay_v2.",
     ]
+    coverage = universe.metadata.get("coverage") or {}
+    if coverage.get("start") and coverage.get("end"):
+        coverage_start = pd.Timestamp(coverage.get("start")).normalize()
+        coverage_end = pd.Timestamp(coverage.get("end")).normalize()
+        replay_start = pd.Timestamp(config.start_date).normalize()
+        replay_end = pd.Timestamp(config.end_date).normalize()
+        if replay_start < coverage_start or replay_end > coverage_end:
+            raise ValueError(
+                "Replay dates fall outside the official universe coverage window."
+            )
+    warnings.extend(str(item) for item in universe.metadata.get("warnings") or [])
+    transfer_symbols = sum(len(universe.markets_for(code)) > 1 for code in universe)
+    if transfer_symbols:
+        warnings.append(
+            "Yahoo can consolidate pre-transfer prices under the current ticker suffix; official membership intervals continue to control date eligibility."
+        )
     if not universe.is_point_in_time:
         warnings.append(
             "The static universe creates survivorship bias for older replay dates."
         )
-    elif universe.snapshot_dates[0] > pd.Timestamp(config.start_date).normalize():
-        warnings.append(
-            "The first universe snapshot is later than the replay start; earlier dates have no eligible stocks."
-        )
+    else:
+        if universe.quality_status == "unverified":
+            warnings.append(
+                "The point-in-time universe has no verified official-source metadata."
+            )
+        elif universe.quality_status == "partial":
+            warnings.append(
+                f"The official universe contains {universe.partial_memberships} partial-start membership intervals."
+            )
+        if universe.snapshot_dates and (
+            universe.snapshot_dates[0] > pd.Timestamp(config.start_date).normalize()
+        ):
+            warnings.append(
+                "The first universe snapshot is later than the replay start; earlier dates have no eligible stocks."
+            )
     key = _replay_key(config, universe)
     replay_run_id, already_completed = _start_replay_run(
         config,
         key,
         len(universe),
         universe.snapshot_count,
+        universe.quality_status,
+        universe.partial_memberships,
+        universe.membership_interval_count,
         warnings,
         replace,
         resume,
@@ -960,6 +1184,11 @@ def run_historical_replay(
             for ticker, frame in histories.items()
             if (normalized := _normalize_history(frame)) is not None
         }
+        histories, transfer_aliases = resolve_transfer_history_aliases(
+            histories, universe
+        )
+        if transfer_aliases:
+            metrics["transfer_history_aliases"] = len(transfer_aliases)
         metrics["available_symbols"] = len(
             {ticker_to_code[ticker] for ticker in histories if ticker in ticker_to_code}
         )

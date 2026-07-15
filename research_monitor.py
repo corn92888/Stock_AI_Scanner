@@ -88,6 +88,9 @@ def _replay_metrics(conn):
         "replay_available_symbols": 0,
         "replay_trading_days": 0,
         "replay_universe_snapshots": 0,
+        "replay_universe_quality_status": "unverified",
+        "replay_universe_partial_memberships": 0,
+        "replay_universe_membership_intervals": 0,
         "replay_checkpoint_total": 0,
         "replay_checkpoint_completed": 0,
         "replay_attribution_rows": 0,
@@ -153,6 +156,15 @@ def _replay_metrics(conn):
                 "replay_available_symbols": int(latest["available_symbols"] or 0),
                 "replay_trading_days": int(latest["trading_days"] or 0),
                 "replay_universe_snapshots": int(latest["universe_snapshots"] or 0),
+                "replay_universe_quality_status": str(
+                    latest["universe_quality_status"] or "unverified"
+                ),
+                "replay_universe_partial_memberships": int(
+                    latest["universe_partial_memberships"] or 0
+                ),
+                "replay_universe_membership_intervals": int(
+                    latest["universe_membership_intervals"] or 0
+                ),
                 "replay_checkpoint_total": int(latest["checkpoint_total"] or 0),
                 "replay_checkpoint_completed": int(latest["checkpoint_completed"] or 0),
                 "replay_attribution_rows": int(attribution["rows"] or 0),
@@ -215,6 +227,19 @@ def build_research_health(db_path=DB_PATH):
         )
     if replay["completed_replay_runs"] and replay["replay_attribution_rows"] == 0:
         warnings.append("歷史重播尚未建立因子歸因矩陣。")
+    if (
+        replay["completed_replay_runs"]
+        and replay["replay_universe_quality_status"] == "unverified"
+    ):
+        warnings.append("最近一次歷史重播尚未附上官方股票池來源與完整性資料。")
+    elif (
+        replay["completed_replay_runs"]
+        and replay["replay_universe_quality_status"] == "partial"
+    ):
+        warnings.append(
+            "最近一次歷史重播的股票池成員資格尚未完全驗證"
+            f"（{replay['replay_universe_partial_memberships']} 個部分區間）。"
+        )
 
     if prospective["stale_outcomes"]:
         status = "critical"
@@ -224,7 +249,10 @@ def build_research_health(db_path=DB_PATH):
         or replay["completed_replay_runs"] == 0
     ):
         status = "building"
-    elif replay["latest_replay_status"] != "completed":
+    elif (
+        replay["latest_replay_status"] != "completed"
+        or replay["replay_universe_quality_status"] != "verified"
+    ):
         status = "warning"
     else:
         status = "healthy"

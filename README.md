@@ -119,10 +119,11 @@
 
   建立不污染正式訊號表的歷史逐日重播證據：
   ```bash
-  venv/bin/python3 historical_replay.py --start 2022-01-01 --end 2025-12-31 --universe-file data/universe_snapshots.csv --resume
+  venv/bin/python3 historical_universe.py --start 2022-01-01 --end 2025-12-31 --output data/universe_history.csv
+  venv/bin/python3 historical_replay.py --start 2022-01-01 --end 2025-12-31 --universe-file data/universe_history.csv --resume
   venv/bin/python3 replay_attribution.py
   ```
-  重播會逐日限制技術指標與市場廣度只能看到決策日以前的資料，盤後訊號採下一交易日開盤成交，並保存禁止追價、成本、T+3 超額報酬與最大回撤。v2 支援完整月度 universe snapshots、Yahoo 行情快取、每月檢查點與 `--resume`；`replay_attribution.py` 會產生策略、分數、量比、成交值、防守距離、市場／產業廣度及年度切片的 T+1/T+3/T+5、超額、回撤與 95% 信賴區間。可用 `--codes 2330,2454` 做小範圍驗證，或到 GitHub Actions 手動執行 `Historical Point-in-Time Replay`。目前重播證據與正式 `scan_runs`、即時前瞻預測及模擬帳戶完全隔離，尚未直接加入模型訓練。
+  重播會逐日限制技術指標與市場廣度只能看到決策日以前的資料，盤後訊號採下一交易日開盤成交，並保存禁止追價、成本、T+3 超額報酬與最大回撤。v2 支援 TWSE／TPEx 官方上市區間、轉板與終止交易資料、SHA-256 完整性檢查、Yahoo 行情快取、每月檢查點與 `--resume`；`replay_attribution.py` 會產生策略、分數、量比、成交值、防守距離、市場／產業廣度及年度切片的 T+1/T+3/T+5、超額、回撤與 95% 信賴區間。可用 `--codes 2330,2454` 做小範圍驗證，或到 GitHub Actions 手動執行 `Historical Point-in-Time Replay`；未指定自訂股票池時，Action 會先重建官方 point-in-time universe。歷史掛牌日不足的區間會標記為 `partial`，不會用推測日期偽裝成完整資料。目前重播證據與正式 `scan_runs`、即時前瞻預測及模擬帳戶完全隔離，尚未直接加入模型訓練。
 
   檢查前瞻預測是否依交易日正確成熟，以及歷史重播資料是否可用：
   ```bash

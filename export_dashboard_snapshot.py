@@ -310,6 +310,9 @@ def _empty_research_health():
         "replayAvailableSymbols": 0,
         "replayTradingDays": 0,
         "replayUniverseSnapshots": 0,
+        "replayUniverseQualityStatus": "unverified",
+        "replayUniversePartialMemberships": 0,
+        "replayUniverseMembershipIntervals": 0,
         "replayCheckpointTotal": 0,
         "replayCheckpointCompleted": 0,
         "replayAttributionRows": 0,
@@ -363,6 +366,15 @@ def _research_health_snapshot(conn):
         "replayAvailableSymbols": int(metrics.get("replay_available_symbols", 0) or 0),
         "replayTradingDays": int(metrics.get("replay_trading_days", 0) or 0),
         "replayUniverseSnapshots": int(metrics.get("replay_universe_snapshots", 0) or 0),
+        "replayUniverseQualityStatus": str(
+            metrics.get("replay_universe_quality_status") or "unverified"
+        ),
+        "replayUniversePartialMemberships": int(
+            metrics.get("replay_universe_partial_memberships", 0) or 0
+        ),
+        "replayUniverseMembershipIntervals": int(
+            metrics.get("replay_universe_membership_intervals", 0) or 0
+        ),
         "replayCheckpointTotal": int(metrics.get("replay_checkpoint_total", 0) or 0),
         "replayCheckpointCompleted": int(metrics.get("replay_checkpoint_completed", 0) or 0),
         "replayAttributionRows": int(metrics.get("replay_attribution_rows", 0) or 0),
