@@ -69,6 +69,8 @@ jobs:
           --pattern "$asset" --dir "$restore_dir" --clobber; then
           tar -xzf "$restore_dir/$asset" -C "$restore_dir"
           cp "$restore_dir/historical_replay.db" "$RUNNER_TEMP/historical_replay.db"
+          cp "$restore_dir"/universe_history* data/ 2>/dev/null || true
+          cp "$restore_dir"/replay_training_samples.csv.gz* "$RUNNER_TEMP"/ 2>/dev/null || true
         else
           cp data/stock_scanner.db "$RUNNER_TEMP/historical_replay.db"
         fi
@@ -98,7 +100,7 @@ jobs:
         END_DATE: ${{ inputs.end_date }}
         UNIVERSE_FILE: ${{ inputs.universe_file }}
       run: |
-        if [ -z "$UNIVERSE_FILE" ]; then
+        if [ -z "$UNIVERSE_FILE" ] && [ ! -f data/universe_history.csv ]; then
           python historical_universe.py \
             --start "$START_DATE" \
             --end "$END_DATE" \
@@ -172,7 +174,9 @@ jobs:
         mkdir -p replay_artifact
         cp "$RUNNER_TEMP/historical_replay.db" replay_artifact/historical_replay.db
         cp data/universe_history* replay_artifact/ 2>/dev/null || true
-        cp "$RUNNER_TEMP"/replay_training_samples.csv.gz* replay_artifact/
+        if compgen -G "$RUNNER_TEMP/replay_training_samples.csv.gz*" > /dev/null; then
+          cp "$RUNNER_TEMP"/replay_training_samples.csv.gz* replay_artifact/
+        fi
         if [ -d "$RUNNER_TEMP/replay-models" ]; then
           cp -R "$RUNNER_TEMP/replay-models" replay_artifact/models
         fi
@@ -188,7 +192,7 @@ jobs:
 
   persist:
     needs: replay
-    if: ${{ always() && needs.replay.result != 'cancelled' }}
+    if: ${{ needs.replay.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:

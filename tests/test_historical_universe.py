@@ -97,6 +97,37 @@ class HistoricalUniverseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "tpex_current"):
             build_universe_history("2021-01-01", "2025-12-31", payloads)
 
+    def test_merges_current_and_scheduled_delisting_for_same_listing(self):
+        payloads = _official_payloads()
+        payloads["tpex_current"].append(
+            {
+                "SecuritiesCompanyCode": "5236",
+                "CompanyAbbreviation": "凌陽創新",
+                "SecuritiesIndustryCode": "24",
+                "DateOfListing": "20210729",
+            }
+        )
+        payloads["tpex_listings"]["tables"][0]["data"].append(
+            ["5236", "凌陽創新", "110/07/29"]
+        )
+        payloads["tpex_delisted"]["tables"][0]["data"].append(
+            ["5236", "凌陽創新科技股份有限公司", "115-07-16", "合併終止上櫃"]
+        )
+
+        frame, metadata = build_universe_history(
+            "2021-01-01", "2026-07-15", payloads
+        )
+
+        membership = frame[frame["code"] == "5236"].iloc[0]
+        self.assertEqual(len(frame[frame["code"] == "5236"]), 1)
+        self.assertEqual(membership["name"], "凌陽創新")
+        self.assertEqual(membership["industry"], "半導體業")
+        self.assertEqual(membership["delisted_on"], "2026-07-16")
+        self.assertEqual(metadata["normalization"]["adjustment_count"], 1)
+        self.assertEqual(
+            metadata["normalization"]["adjustments"][0]["code"], "5236"
+        )
+
     def test_replay_loader_switches_market_at_the_official_transfer_date(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "universe_history.csv"

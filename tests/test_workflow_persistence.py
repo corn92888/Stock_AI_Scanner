@@ -92,6 +92,18 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertIn("$RUNNER_TEMP/historical_replay.db", workflow)
         self.assertIn("gh release download research-replay-data-v1", workflow)
         self.assertIn("Restore durable replay state", workflow)
+        self.assertIn('cp "$restore_dir"/universe_history* data/', workflow)
+        self.assertIn(
+            '[ -z "$UNIVERSE_FILE" ] && [ ! -f data/universe_history.csv ]',
+            workflow,
+        )
+        self.assertIn(
+            'compgen -G "$RUNNER_TEMP/replay_training_samples.csv.gz*"', workflow
+        )
+        self.assertIn("if: ${{ needs.replay.result == 'success' }}", workflow)
+        self.assertNotIn(
+            "always() && needs.replay.result != 'cancelled'", workflow
+        )
         self.assertIn("if: always()", workflow)
         self.assertIn("retention-days: 30", workflow)
         self.assertLess(universe_index, replay_index)

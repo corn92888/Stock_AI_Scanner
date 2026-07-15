@@ -396,6 +396,84 @@ def _delisted_memberships(payloads, history, coverage_start):
     return memberships
 
 
+def _consolidate_same_listing_memberships(memberships):
+    grouped = defaultdict(list)
+    for membership in memberships:
+        grouped[
+            (membership.market, membership.code, membership.listed_on)
+        ].append(membership)
+
+    consolidated = []
+    adjustments = []
+    for (market, code, listed_on), rows in grouped.items():
+        if len(rows) == 1:
+            consolidated.append(rows[0])
+            continue
+
+        finite_delisting_dates = sorted(
+            {row.delisted_on for row in rows if row.delisted_on is not None}
+        )
+        if len(finite_delisting_dates) > 1:
+            raise ValueError(
+                "Conflicting delisting dates for membership: "
+                f"{market} {code} {listed_on.isoformat()}"
+            )
+
+        preferred = max(
+            rows,
+            key=lambda row: (
+                row.status == "current",
+                row.membership_quality == "exact",
+                bool(row.industry_code),
+                bool(row.name),
+            ),
+        )
+        delisting_row = next(
+            (row for row in rows if row.delisted_on is not None), None
+        )
+        delisted_on = finite_delisting_dates[0] if finite_delisting_dates else None
+        merged = SecurityMembership(
+            code=preferred.code,
+            name=preferred.name,
+            industry=preferred.industry,
+            industry_code=preferred.industry_code,
+            market=preferred.market,
+            listed_on=preferred.listed_on,
+            delisted_on=delisted_on,
+            membership_quality=(
+                "partial_start"
+                if any(row.membership_quality != "exact" for row in rows)
+                else "exact"
+            ),
+            status=preferred.status,
+            source="+".join(
+                sorted(
+                    {
+                        source
+                        for row in rows
+                        for source in row.source.split("+")
+                        if source
+                    }
+                )
+            ),
+            delisting_reason=(
+                delisting_row.delisting_reason if delisting_row else ""
+            ),
+        )
+        consolidated.append(merged)
+        adjustments.append(
+            {
+                "kind": "same_listing_interval_merged",
+                "market": market,
+                "code": code,
+                "listed_on": listed_on.isoformat(),
+                "delisted_on": delisted_on.isoformat() if delisted_on else "",
+                "sources": sorted({row.source for row in rows}),
+            }
+        )
+    return consolidated, adjustments
+
+
 def _validate_memberships(memberships):
     grouped = defaultdict(list)
     for membership in memberships:
@@ -428,6 +506,9 @@ def build_universe_history(start_date, end_date, payloads, source_records=None):
         if membership.listed_on <= end
         and (membership.delisted_on is None or membership.delisted_on > start)
     ]
+    memberships, normalization_adjustments = _consolidate_same_listing_memberships(
+        memberships
+    )
     unique = {}
     for membership in memberships:
         key = (
@@ -458,6 +539,10 @@ def build_universe_history(start_date, end_date, payloads, source_records=None):
         warnings.append(
             f"{partial} delisted membership intervals predate the available official listing-history feed; their start is conservatively truncated to the requested coverage start."
         )
+    if normalization_adjustments:
+        warnings.append(
+            f"{len(normalization_adjustments)} official current/delisting records shared the same listing start and were merged into auditable membership intervals."
+        )
     metadata = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
@@ -478,6 +563,10 @@ def build_universe_history(start_date, end_date, payloads, source_records=None):
         "classification_quality": {
             "status": "latest_known",
             "unclassified_intervals": sum(not row.industry_code for row in memberships),
+        },
+        "normalization": {
+            "adjustment_count": len(normalization_adjustments),
+            "adjustments": normalization_adjustments,
         },
         "sources": source_records or [
             {

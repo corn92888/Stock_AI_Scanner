@@ -157,12 +157,13 @@ venv/bin/python3 historical_replay.py \
 
 The GitHub Actions workflow `Historical Point-in-Time Replay` provides the same
 operation without requiring a local process. When no custom universe file is
-provided, the workflow rebuilds the official interval universe for the requested
-dates. It restores the historical price cache, resumes incomplete monthly
-checkpoints by default, generates attribution, and persists failed-run
-checkpoints so a later dispatch can continue. It is manual because a full-market
-multi-year replay is intentionally separate from the latency-sensitive intraday
-workflow.
+provided, the workflow first restores the matching archived official universe
+and rebuilds it only when no durable copy exists. It restores the historical
+price cache, resumes incomplete monthly checkpoints by default, and generates
+attribution. A failed replay uploads a 30-day diagnostic artifact but cannot
+publish a release, merge into the live database, or update the dashboard. It is
+manual because a full-market multi-year replay is intentionally separate from
+the latency-sensitive intraday workflow.
 
 The long replay job operates on an isolated SQLite copy and uses a separate
 concurrency group, so it cannot block the 30-minute live scan schedule. A short
@@ -179,6 +180,13 @@ limit while retaining event-level evidence for audit and future retraining. The
 compact `data/replay_training_samples.csv.gz` file contains only point-in-time
 model features and mature T+3 labels, so routine intraday and daily AI runs can
 reuse the five-year evidence without downloading the raw database.
+
+Official feeds may briefly list the same security in both the active-company
+master and a future-delist table. Records with the same market, code, and listing
+date are consolidated into one interval using the active master classification
+and the official termination date. Every consolidation is recorded under
+`normalization.adjustments` in the universe metadata; conflicting termination
+dates still fail validation.
 
 Replay-informed AI uses expanding walk-forward validation with a three-session
 embargo. The validation window grows adaptively for multi-year samples, and the
