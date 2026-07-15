@@ -80,6 +80,7 @@ class WorkflowPersistenceTests(unittest.TestCase):
         dataset_index = workflow.index("python replay_training_dataset.py")
         model_index = workflow.index("python ai_pipeline.py")
         merge_index = workflow.index("python merge_historical_replay.py")
+        evaluation_index = workflow.index("python research_evaluation.py")
         archive_index = workflow.index("python archive_historical_replay.py")
         release_index = workflow.index("gh release upload research-replay-data-v1")
         persistence_index = workflow.index("bash persist_scanner_data.sh")
@@ -115,6 +116,8 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertLess(archive_index, release_index)
         self.assertLess(release_index, merge_index)
         self.assertLess(attribution_index, merge_index)
+        self.assertLess(merge_index, evaluation_index)
+        self.assertLess(evaluation_index, persistence_index)
         self.assertLess(merge_index, persistence_index)
 
     def test_automated_data_commits_use_conventional_english_messages(self):

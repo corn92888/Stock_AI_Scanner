@@ -259,6 +259,8 @@ jobs:
           --target data/stock_scanner.db \
           --start "${{ inputs.start_date }}" \
           --end "${{ inputs.end_date }}"
+        python research_evaluation.py \
+          --replay-dataset data/replay_training_samples.csv.gz
         python research_monitor.py
 
     - name: Persist replay evidence and dashboard

@@ -1,7 +1,9 @@
 import argparse
+import hashlib
 import json
 import math
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from statistics import NormalDist
 
 import numpy as np
@@ -19,6 +21,12 @@ from database import (
 
 
 EVALUATION_FAMILY = "walk_forward_after_costs_v1"
+REPLAY_EVALUATION_FAMILY = "replay_temporal_holdout_after_costs_v1"
+REPLAY_EXECUTION_VERSION = "point_in_time_eod_replay_v2"
+DEFAULT_REPLAY_DATASET = Path("data/replay_training_samples.csv.gz")
+REPLAY_DEVELOPMENT_FRACTION = 0.60
+REPLAY_VALIDATION_FRACTION = 0.20
+REPLAY_EMBARGO_TRADE_DATES = 3
 DECISION_HORIZON = 3
 STRATEGY_ALIASES = {
     "trend": {"trend", "順勢突破"},
@@ -31,6 +39,7 @@ STRATEGY_ALIASES = {
 class PromotionGates:
     min_trade_dates: int = 120
     min_trades: int = 300
+    min_mean_net_return: float = 0.0
     min_mean_excess_return: float = 0.0
     min_probabilistic_sharpe: float = 0.95
     max_drawdown: float = -12.0
@@ -46,6 +55,8 @@ class ExperimentSpec:
     execution_version: str
     selector: str
     strategy: str | None = None
+    filters: tuple[tuple[str, str, float], ...] = ()
+    evaluation_family: str = EVALUATION_FAMILY
 
 
 BASELINE_EXPERIMENTS = (
@@ -95,6 +106,114 @@ BASELINE_EXPERIMENTS = (
 )
 
 
+REPLAY_OVERLAY_EXPERIMENTS = (
+    ExperimentSpec(
+        key="replay_formal_rule_v2",
+        name="Five-year formal rule baseline",
+        hypothesis="Measure the frozen formal rule on the final embargoed replay holdout.",
+        strategy_family="replay_baseline",
+        execution_version=REPLAY_EXECUTION_VERSION,
+        selector="replay_formal",
+        evaluation_family=REPLAY_EVALUATION_FAMILY,
+    ),
+    ExperimentSpec(
+        key="replay_market_confirmation_v1",
+        name="Market breadth confirmation",
+        hypothesis="Avoid formal entries when broad-market participation and average return are weak.",
+        strategy_family="market_regime",
+        execution_version=REPLAY_EXECUTION_VERSION,
+        selector="replay_formal",
+        filters=(("market_up_ratio", ">=", 50.0), ("market_avg_return", ">=", 0.0)),
+        evaluation_family=REPLAY_EVALUATION_FAMILY,
+    ),
+    ExperimentSpec(
+        key="replay_industry_confirmation_v1",
+        name="Industry breadth confirmation",
+        hypothesis="Require positive industry participation before accepting a formal entry.",
+        strategy_family="industry_confirmation",
+        execution_version=REPLAY_EXECUTION_VERSION,
+        selector="replay_formal",
+        filters=(("industry_up_ratio", ">=", 50.0), ("industry_avg_return", ">=", 0.0)),
+        evaluation_family=REPLAY_EVALUATION_FAMILY,
+    ),
+    ExperimentSpec(
+        key="replay_volume_expansion_v1",
+        name="Controlled volume expansion",
+        hypothesis="Test whether 20-day volume expansion adds edge when extreme bursts are excluded.",
+        strategy_family="volume_confirmation",
+        execution_version=REPLAY_EXECUTION_VERSION,
+        selector="replay_formal",
+        filters=(
+            ("volume_ratio_20", ">=", 1.5),
+            ("volume_ratio_20", "<=", 5.0),
+            ("volume_ratio_5", ">=", 1.2),
+            ("volume_ratio_5", "<=", 6.0),
+        ),
+        evaluation_family=REPLAY_EVALUATION_FAMILY,
+    ),
+    ExperimentSpec(
+        key="replay_balanced_volume_v1",
+        name="Balanced volume confirmation",
+        hypothesis="Prefer moderate volume confirmation instead of low participation or exhaustion spikes.",
+        strategy_family="volume_quality",
+        execution_version=REPLAY_EXECUTION_VERSION,
+        selector="replay_formal",
+        filters=(
+            ("volume_ratio_20", ">=", 0.8),
+            ("volume_ratio_20", "<=", 3.0),
+            ("volume_ratio_5", ">=", 1.0),
+            ("volume_ratio_5", "<=", 6.0),
+        ),
+        evaluation_family=REPLAY_EVALUATION_FAMILY,
+    ),
+    ExperimentSpec(
+        key="replay_extension_control_v1",
+        name="Price extension control",
+        hypothesis="Avoid formal entries after an excessive same-day move or urgent short-term volume burst.",
+        strategy_family="extension_control",
+        execution_version=REPLAY_EXECUTION_VERSION,
+        selector="replay_formal",
+        filters=(("pct_change", "<=", 6.5), ("volume_ratio_5", "<=", 6.0)),
+        evaluation_family=REPLAY_EVALUATION_FAMILY,
+    ),
+    ExperimentSpec(
+        key="replay_breadth_consensus_v1",
+        name="Market and industry breadth consensus",
+        hypothesis="Accept formal entries only when both the market and industry have positive participation.",
+        strategy_family="breadth_consensus",
+        execution_version=REPLAY_EXECUTION_VERSION,
+        selector="replay_formal",
+        filters=(
+            ("market_up_ratio", ">=", 50.0),
+            ("market_avg_return", ">=", 0.0),
+            ("industry_up_ratio", ">=", 50.0),
+            ("industry_avg_return", ">=", 0.0),
+        ),
+        evaluation_family=REPLAY_EVALUATION_FAMILY,
+    ),
+    ExperimentSpec(
+        key="replay_quality_stack_v1",
+        name="Breadth, volume, and extension quality stack",
+        hypothesis="Combine independent participation, volume-quality, and overextension controls.",
+        strategy_family="quality_stack",
+        execution_version=REPLAY_EXECUTION_VERSION,
+        selector="replay_formal",
+        filters=(
+            ("market_up_ratio", ">=", 50.0),
+            ("market_avg_return", ">=", 0.0),
+            ("industry_up_ratio", ">=", 50.0),
+            ("industry_avg_return", ">=", 0.0),
+            ("volume_ratio_20", ">=", 0.8),
+            ("volume_ratio_20", "<=", 3.0),
+            ("volume_ratio_5", ">=", 1.0),
+            ("volume_ratio_5", "<=", 6.0),
+            ("pct_change", "<=", 6.5),
+        ),
+        evaluation_family=REPLAY_EVALUATION_FAMILY,
+    ),
+)
+
+
 def _decode_strategies(value):
     try:
         result = json.loads(value or "[]")
@@ -120,7 +239,8 @@ def register_experiment(spec, db_path=DB_PATH):
     config = {
         "selector": spec.selector,
         "strategy": spec.strategy,
-        "evaluation_family": EVALUATION_FAMILY,
+        "filters": [list(item) for item in spec.filters],
+        "evaluation_family": spec.evaluation_family,
     }
     with get_connection(db_path) as conn:
         init_db(conn)
@@ -275,6 +395,12 @@ def evaluate_frame(frame, gates=None, fold_count=5):
     if metrics["trades"] < gates.min_trades:
         reasons.append("insufficient_trades")
     if _below_or_missing(
+        metrics["mean_net_return"],
+        gates.min_mean_net_return,
+        inclusive=True,
+    ):
+        reasons.append("non_positive_net_return")
+    if _below_or_missing(
         metrics["mean_excess_return"],
         gates.min_mean_excess_return,
         inclusive=True,
@@ -297,9 +423,11 @@ def save_evaluation(experiment_id, spec, metrics, reasons, gates=None, db_path=D
     gates = gates or PromotionGates()
     now = get_taipei_now().isoformat(timespec="seconds")
     sample_end = metrics.get("sample_end")
+    fingerprint = metrics.get("evaluation_fingerprint")
+    fingerprint_suffix = f":d{fingerprint}" if fingerprint else ""
     evaluation_version = (
-        f"{EVALUATION_FAMILY}:{spec.execution_version}:"
-        f"{sample_end or 'empty'}:n{metrics['trades']}"
+        f"{spec.evaluation_family}:{spec.execution_version}:"
+        f"{sample_end or 'empty'}:n{metrics['trades']}{fingerprint_suffix}"
     )
     payload = {**metrics, "gates": asdict(gates)}
     with get_connection(db_path) as conn:
@@ -387,11 +515,213 @@ def run_baseline_evaluations(db_path=DB_PATH, gates=None):
     ]
 
 
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_replay_formal_frame(dataset_path=DEFAULT_REPLAY_DATASET):
+    dataset_path = Path(dataset_path)
+    if not dataset_path.exists():
+        return pd.DataFrame()
+    frame = pd.read_csv(dataset_path)
+    required = {
+        "trade_date",
+        "code",
+        "rule_selected",
+        "net_return_3d",
+        "excess_return_3d",
+        "max_drawdown_3d",
+    }
+    required.update(
+        column
+        for spec in REPLAY_OVERLAY_EXPERIMENTS
+        for column, _, _ in spec.filters
+    )
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(
+            "Replay training dataset missing evaluation columns: "
+            + ", ".join(missing)
+        )
+    numeric_columns = sorted(
+        (required - {"trade_date", "code"}) | {"rule_selected"}
+    )
+    for column in numeric_columns:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame["trade_date"] = frame["trade_date"].astype(str)
+    frame = frame[
+        (frame["rule_selected"] == 1)
+        & frame["net_return_3d"].notna()
+        & frame["excess_return_3d"].notna()
+        & frame["max_drawdown_3d"].notna()
+    ].copy()
+    return frame.sort_values(["trade_date", "code"], kind="stable")
+
+
+def apply_experiment_filters(frame, spec):
+    result = frame.copy()
+    operators = {
+        ">=": lambda series, value: series >= value,
+        "<=": lambda series, value: series <= value,
+        ">": lambda series, value: series > value,
+        "<": lambda series, value: series < value,
+    }
+    for column, operator, threshold in spec.filters:
+        if column not in result.columns:
+            raise ValueError(f"Replay experiment column not found: {column}")
+        if operator not in operators:
+            raise ValueError(f"Unsupported replay experiment operator: {operator}")
+        values = pd.to_numeric(result[column], errors="coerce")
+        result = result[values.notna() & operators[operator](values, threshold)]
+    return result.copy()
+
+
+def replay_temporal_partitions(frame):
+    trade_dates = sorted(frame["trade_date"].dropna().astype(str).unique())
+    minimum_dates = REPLAY_EMBARGO_TRADE_DATES * 2 + 3
+    if len(trade_dates) < minimum_dates:
+        raise ValueError(
+            f"Replay evaluation requires at least {minimum_dates} trade dates."
+        )
+    development_end = int(len(trade_dates) * REPLAY_DEVELOPMENT_FRACTION)
+    validation_end = int(
+        len(trade_dates)
+        * (REPLAY_DEVELOPMENT_FRACTION + REPLAY_VALIDATION_FRACTION)
+    )
+    first_embargo_end = development_end + REPLAY_EMBARGO_TRADE_DATES
+    second_embargo_end = validation_end + REPLAY_EMBARGO_TRADE_DATES
+    if first_embargo_end >= validation_end or second_embargo_end >= len(trade_dates):
+        raise ValueError("Replay temporal split is too short after embargo periods.")
+    return {
+        "development": trade_dates[:development_end],
+        "development_validation_embargo": trade_dates[
+            development_end:first_embargo_end
+        ],
+        "validation": trade_dates[first_embargo_end:validation_end],
+        "validation_holdout_embargo": trade_dates[
+            validation_end:second_embargo_end
+        ],
+        "holdout": trade_dates[second_embargo_end:],
+    }
+
+
+def _phase_evaluation(frame, trade_dates, gates):
+    phase = frame[frame["trade_date"].isin(set(trade_dates))].copy()
+    metrics, reasons = evaluate_frame(phase, gates=gates)
+    metrics["sample_start"] = str(phase["trade_date"].min()) if not phase.empty else None
+    metrics["sample_end"] = str(phase["trade_date"].max()) if not phase.empty else None
+    return phase, metrics, reasons
+
+
+def evaluate_replay_overlay(
+    spec,
+    base_frame,
+    partitions,
+    dataset_fingerprint,
+    gates=None,
+    db_path=DB_PATH,
+):
+    gates = gates or PromotionGates()
+    experiment_id = register_experiment(spec, db_path=db_path)
+    filtered = apply_experiment_filters(base_frame, spec)
+    phase_results = {}
+    for phase_name in ("development", "validation", "holdout"):
+        _, phase_metrics, phase_reasons = _phase_evaluation(
+            filtered, partitions[phase_name], gates
+        )
+        phase_results[phase_name] = {
+            "metrics": phase_metrics,
+            "rejection_reasons": phase_reasons,
+        }
+
+    holdout_metrics = dict(phase_results["holdout"]["metrics"])
+    holdout_reasons = list(phase_results["holdout"]["rejection_reasons"])
+    if phase_results["development"]["rejection_reasons"]:
+        holdout_reasons.append("development_gate_failed")
+    if phase_results["validation"]["rejection_reasons"]:
+        holdout_reasons.append("validation_gate_failed")
+    holdout_reasons = list(dict.fromkeys(holdout_reasons))
+    holdout_metrics.update(
+        {
+            "evaluation_fingerprint": dataset_fingerprint[:10],
+            "dataset_fingerprint": dataset_fingerprint,
+            "dataset_rows": int(len(base_frame)),
+            "filters": [list(item) for item in spec.filters],
+            "temporal_split": {
+                "development_fraction": REPLAY_DEVELOPMENT_FRACTION,
+                "validation_fraction": REPLAY_VALIDATION_FRACTION,
+                "embargo_trade_dates": REPLAY_EMBARGO_TRADE_DATES,
+                "development_validation_embargo": partitions[
+                    "development_validation_embargo"
+                ],
+                "validation_holdout_embargo": partitions[
+                    "validation_holdout_embargo"
+                ],
+            },
+            "phase_results": phase_results,
+        }
+    )
+    version = save_evaluation(
+        experiment_id,
+        spec,
+        holdout_metrics,
+        holdout_reasons,
+        gates=gates,
+        db_path=db_path,
+    )
+    return {
+        "experimentKey": spec.key,
+        "evaluationVersion": version,
+        "qualified": not holdout_reasons,
+        "rejectionReasons": holdout_reasons,
+        **holdout_metrics,
+    }
+
+
+def run_replay_overlay_evaluations(
+    db_path=DB_PATH,
+    dataset_path=DEFAULT_REPLAY_DATASET,
+    gates=None,
+    specs=REPLAY_OVERLAY_EXPERIMENTS,
+):
+    dataset_path = Path(dataset_path)
+    base_frame = load_replay_formal_frame(dataset_path)
+    if base_frame.empty:
+        return []
+    partitions = replay_temporal_partitions(base_frame)
+    dataset_fingerprint = _file_sha256(dataset_path)
+    return [
+        evaluate_replay_overlay(
+            spec,
+            base_frame,
+            partitions,
+            dataset_fingerprint,
+            gates=gates,
+            db_path=db_path,
+        )
+        for spec in specs
+    ]
+
+
 def main():
     parser = argparse.ArgumentParser(description="Evaluate registered strategy baselines.")
     parser.add_argument("--db", default=str(DB_PATH))
+    parser.add_argument("--replay-dataset", default=str(DEFAULT_REPLAY_DATASET))
+    parser.add_argument("--skip-replay", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(run_baseline_evaluations(db_path=args.db), ensure_ascii=False, indent=2))
+    results = run_baseline_evaluations(db_path=args.db)
+    if not args.skip_replay:
+        results.extend(
+            run_replay_overlay_evaluations(
+                db_path=args.db,
+                dataset_path=args.replay_dataset,
+            )
+        )
+    print(json.dumps(results, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

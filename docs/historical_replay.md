@@ -193,6 +193,17 @@ embargo. The validation window grows adaptively for multi-year samples, and the
 challenger remains `shadow` unless it passes minimum trade count, positive net
 and excess returns, drawdown, lift, and profitable-fold stability gates.
 
+`research_evaluation.py` also runs a locked replay risk-overlay tournament on
+formal selections. The hypotheses separately test market breadth, industry
+breadth, controlled volume expansion, balanced volume, price extension,
+breadth consensus, and a combined quality stack. Replay dates are split 60/20/20
+into development, validation, and final holdout periods, with three trade dates
+removed between each phase. Dashboard metrics for these experiments come only
+from the final holdout. Positive after-cost net return, positive excess return,
+sample size, drawdown, PSR, fold stability, development, and validation must all
+pass before an overlay can enter manual promotion review. Failed experiments
+remain visible and cannot alter the formal rule.
+
 ## Research health monitor
 
 `research_monitor.py` deduplicates prospective predictions to the earliest row

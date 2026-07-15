@@ -93,15 +93,26 @@ const experimentFamilyLabels: Record<string, string> = {
   trend: "順勢突破",
   reversal: "低檔爆量",
   wave: "波段蓄勢",
+  replay_baseline: "五年正式基準",
+  market_regime: "市場確認",
+  industry_confirmation: "產業確認",
+  volume_confirmation: "量能放大",
+  volume_quality: "平衡量能",
+  extension_control: "延伸控制",
+  breadth_consensus: "廣度共識",
+  quality_stack: "綜合品質層",
 };
 
 const experimentReasonLabels: Record<string, string> = {
   insufficient_trade_dates: "交易日不足",
   insufficient_trades: "交易筆數不足",
+  non_positive_net_return: "成本後報酬未轉正",
   non_positive_excess_return: "超額報酬未轉正",
   probabilistic_sharpe_below_gate: "PSR 未達標",
   drawdown_gate_failed: "回撤超標",
   fold_stability_gate_failed: "分折穩定度不足",
+  development_gate_failed: "開發期未通過",
+  validation_gate_failed: "驗證期未通過",
 };
 
 const challengerReasonLabels: Record<string, string> = {
@@ -834,7 +845,7 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
       </section>
 
       <section className="panel">
-        <PanelHeader eyebrow="Strategy tournament" title="策略競賽與升級判定" description="以相同成交成本、T+3 口徑與時間順序分折比較；未通過者維持研究狀態" trailing={<span className="record-count">{experiments.length} 組</span>} />
+        <PanelHeader eyebrow="Strategy tournament" title="策略競賽與升級判定" description="即時策略採時間順序分折；五年風險覆蓋層顯示三日隔離後的最終 holdout，任一階段未通過即維持研究" trailing={<span className="record-count">{experiments.length} 組</span>} />
         <div className="table-scroll"><table className="data-table compact-table strategy-table"><thead><tr><th>策略實驗</th><th>樣本</th><th>成本後淨報酬</th><th>超額報酬</th><th>PSR</th><th>最大回撤</th><th>分折獲利率</th><th>判定</th></tr></thead><tbody>{experiments.length ? experiments.map((row) => <tr key={row.experimentKey} title={row.hypothesis}><td><div className="symbol-cell"><strong>{experimentFamilyLabels[row.strategyFamily] ?? row.strategyFamily}</strong><span>{row.name}</span></div></td><td><strong>{number.format(row.trades ?? 0)} 筆</strong><br /><small>{number.format(row.tradeDates ?? 0)} 日 · {row.sampleStart ?? "--"} 至 {row.sampleEnd ?? "--"}</small></td><td className={(row.meanNetReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.meanNetReturn)}</td><td className={(row.meanExcessReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.meanExcessReturn)}</td><td>{row.probabilisticSharpe == null ? "--" : `${decimal.format(row.probabilisticSharpe * 100)}%`}</td><td className="negative-text">{pct(row.maxDrawdown)}</td><td>{row.profitableFoldRate == null ? "--" : `${decimal.format(row.profitableFoldRate * 100)}%`}</td><td><span className={`status-pill ${row.qualified ? "selected" : "blocked"}`}>{row.qualified ? "符合升級門檻" : "維持研究"}</span><br /><small>{row.qualified ? "等待人工審查" : row.rejectionReasons.map((reason) => experimentReasonLabels[reason] ?? reason).join("、") || "尚無評估"}</small></td></tr>) : <tr><td colSpan={8}>每日盤後流程完成後會建立第一批策略評估。</td></tr>}</tbody></table></div>
       </section>
 
