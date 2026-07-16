@@ -80,6 +80,21 @@ jobs:
           --dataset "$RUNNER_TEMP/replay_training_samples_institutional.csv.gz" \
           --db data/stock_scanner.db
 
+    - name: Build development-only institutional attribution
+      if: steps.shards.outputs.ready == 'true'
+      run: |
+        python institutional_attribution.py \
+          --dataset "$RUNNER_TEMP/replay_training_samples_institutional.csv.gz" \
+          --output "$RUNNER_TEMP/institutional_attribution.json"
+
+    - name: Run pre-registered conditional interaction ablations
+      if: steps.shards.outputs.ready == 'true'
+      run: |
+        python institutional_conditional_research.py \
+          --dataset "$RUNNER_TEMP/replay_training_samples_institutional.csv.gz" \
+          --attribution "$RUNNER_TEMP/institutional_attribution.json" \
+          --db data/stock_scanner.db
+
     - name: Publish governed enriched dataset
       if: steps.shards.outputs.ready == 'true'
       env:
@@ -88,8 +103,9 @@ jobs:
         gh release upload research-institutional-data-v1 \
           "$RUNNER_TEMP/replay_training_samples_institutional.csv.gz" \
           "$RUNNER_TEMP/replay_training_samples_institutional.csv.gz.metadata.json" \
+          "$RUNNER_TEMP/institutional_attribution.json" \
           --clobber
 
     - name: Persist research evidence and dashboard
       if: steps.shards.outputs.ready == 'true'
-      run: 'bash persist_scanner_data.sh "chore(data): record institutional ablation evidence"'
+      run: 'bash persist_scanner_data.sh "chore(data): record institutional interaction evidence"'

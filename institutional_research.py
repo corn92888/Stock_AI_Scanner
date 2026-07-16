@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -32,6 +33,50 @@ GENERATION_2_MODEL_VERSION = "hist_gradient_peer_ranker_institutional_v1"
 GENERATION_2_COMPARISONS = 2
 GENERATION_2_PSR_GATE = 1.0 - (0.05 / GENERATION_2_COMPARISONS)
 GENERATION_2_FEATURES = tuple(MODEL_FEATURES) + tuple(INSTITUTIONAL_MODEL_FEATURES)
+
+
+@dataclass(frozen=True)
+class InstitutionalAblationStudy:
+    evaluation_family: str
+    model_version: str
+    strategy_family: str
+    selector: str
+    name_prefix: str
+    hypothesis_template: str
+    incremental_features: tuple[str, ...]
+    comparisons: int = 2
+    condition_key: str | None = None
+    condition_label: str | None = None
+
+    def __post_init__(self):
+        if self.comparisons <= 0:
+            raise ValueError("Institutional study comparisons must be positive.")
+        if not self.incremental_features or len(set(self.incremental_features)) != len(
+            self.incremental_features
+        ):
+            raise ValueError(
+                "Institutional study incremental features must be non-empty and unique."
+            )
+
+    @property
+    def psr_gate(self):
+        return 1.0 - (0.05 / self.comparisons)
+
+
+DIRECT_ABLATION_STUDY = InstitutionalAblationStudy(
+    evaluation_family=GENERATION_2_EVALUATION_FAMILY,
+    model_version=GENERATION_2_MODEL_VERSION,
+    strategy_family="generation_2_institutional_ablation",
+    selector="all_complete_institutional_replay_candidates",
+    name_prefix="Generation 2 institutional",
+    hypothesis_template=(
+        "Test whether lagged, normalized TWSE and TPEx institutional flow adds "
+        "after-cost T+{horizon} excess-return lift over the identical technical "
+        "peer-ranker control."
+    ),
+    incremental_features=tuple(INSTITUTIONAL_MODEL_FEATURES),
+    comparisons=GENERATION_2_COMPARISONS,
+)
 GENERATION_2_SPECS = (
     RankingSpec(
         method="next_open",
@@ -82,29 +127,26 @@ def _control_spec(spec):
     )
 
 
-def _experiment(spec):
+def _experiment(spec, study=DIRECT_ABLATION_STUDY):
     quantile = round(spec.prediction_quantile * 100)
     return ExperimentSpec(
         key=spec.key,
         name=(
-            f"Generation 2 institutional next-open T+{spec.horizon} "
+            f"{study.name_prefix} next-open T+{spec.horizon} "
             f"peer ranker with Q{quantile} abstention"
         ),
-        hypothesis=(
-            "Test whether lagged, normalized TWSE and TPEx institutional flow adds "
-            f"after-cost T+{spec.horizon} excess-return lift over the identical "
-            "technical peer-ranker control."
-        ),
-        strategy_family="generation_2_institutional_ablation",
+        hypothesis=study.hypothesis_template.format(horizon=spec.horizon),
+        strategy_family=study.strategy_family,
         execution_version=spec.execution_version,
-        selector="all_complete_institutional_replay_candidates",
-        evaluation_family=GENERATION_2_EVALUATION_FAMILY,
+        selector=study.selector,
+        evaluation_family=study.evaluation_family,
         parameters=(
             ("target", spec.target),
             ("prediction_quantile", spec.prediction_quantile),
             ("feature_mode", spec.feature_mode),
             ("base_features", tuple(MODEL_FEATURES)),
-            ("institutional_features", tuple(INSTITUTIONAL_MODEL_FEATURES)),
+            ("institutional_features", study.incremental_features),
+            ("condition_key", study.condition_key),
             ("top_k", spec.top_k),
             ("historical_scope", "development_validation_only"),
             ("holdout_evaluated", False),
@@ -226,11 +268,23 @@ def evaluate_institutional_spec(
     db_path=DB_PATH,
     gates=None,
     min_train_rows=500,
+    study=DIRECT_ABLATION_STUDY,
 ):
+    expected_features = tuple(MODEL_FEATURES) + tuple(study.incremental_features)
+    if tuple(spec.feature_columns) != expected_features:
+        raise ValueError(
+            f"Institutional experiment {spec.key} does not match its locked study features."
+        )
+    missing_features = sorted(set(expected_features) - set(frame.columns))
+    if missing_features:
+        raise ValueError(
+            f"Institutional experiment {spec.key} is missing features: "
+            + ", ".join(missing_features)
+        )
     gates = gates or PromotionGates(
         min_trade_dates=120,
         min_trades=300,
-        min_probabilistic_sharpe=GENERATION_2_PSR_GATE,
+        min_probabilistic_sharpe=study.psr_gate,
         max_drawdown=-12.0,
         min_profitable_fold_rate=0.80,
     )
@@ -288,19 +342,21 @@ def evaluate_institutional_spec(
             "evaluation_fingerprint": dataset_fingerprint[:10],
             "dataset_fingerprint": dataset_fingerprint,
             "dataset_rows": int(len(scoped)),
-            "model_version": GENERATION_2_MODEL_VERSION,
+            "model_version": study.model_version,
             "institutional_feature_version": INSTITUTIONAL_FEATURE_VERSION,
             "ranking_target": spec.target,
             "prediction_quantile": spec.prediction_quantile,
             "feature_mode": spec.feature_mode,
             "features": list(spec.feature_columns),
             "base_features": list(MODEL_FEATURES),
-            "institutional_features": list(INSTITUTIONAL_MODEL_FEATURES),
+            "institutional_features": list(study.incremental_features),
+            "institutional_condition": study.condition_label,
+            "institutional_condition_key": study.condition_key,
             "entry_method": spec.method,
             "holding_horizon": spec.horizon,
             "top_k": spec.top_k,
-            "multiple_testing_family_size": GENERATION_2_COMPARISONS,
-            "multiple_testing_psr_gate": GENERATION_2_PSR_GATE,
+            "multiple_testing_family_size": study.comparisons,
+            "multiple_testing_psr_gate": study.psr_gate,
             "evaluation_scope": "historical_development_validation_only",
             "holdout_evaluated": False,
             "formal_ranking_enabled": False,
@@ -324,7 +380,7 @@ def evaluate_institutional_spec(
             },
         }
     )
-    experiment = _experiment(spec)
+    experiment = _experiment(spec, study=study)
     experiment_id = register_experiment(experiment, db_path=db_path)
     version = save_evaluation(
         experiment_id,
@@ -349,6 +405,7 @@ def run_institutional_ablation(
     specs=GENERATION_2_SPECS,
     gates=None,
     min_train_rows=500,
+    study=DIRECT_ABLATION_STUDY,
 ):
     dataset_path = Path(dataset_path)
     frame = load_institutional_research_frame(dataset_path)
@@ -363,6 +420,7 @@ def run_institutional_ablation(
             db_path=db_path,
             gates=gates,
             min_train_rows=min_train_rows,
+            study=study,
         )
         for spec in specs
     ]

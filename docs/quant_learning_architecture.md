@@ -76,3 +76,5 @@ GitHub cron 只負責頻繁喚醒，`automation_guard.py` 依台北時間決定�
 正式規則為 Champion，新訓練模型為 Challenger。Challenger 只有在 expanding walk-forward 樣本外資料上達到最低交易日與交易筆數，且成本後淨報酬、超額報酬、相對 Champion 增值、最大回撤與跨折穩定度全部通過時，才會進入人工升級審查。精確門檻見 `docs/model_governance_v2.md`。
 
 LLM 只負責把新聞與研究結果轉成結構化證據、產生錯誤歸因與提出特徵假設；它不能直接修改正式權重或自動部署模型。
+
+法人資料的第二階段採兩層治理：development-only 歸因先在固定的策略、廣度、流動性、量能與法人共識矩陣中產生條件假設；被選中的條件必須先寫入版本控制，之後才可執行 validation 消融。既有 holdout 持續封存，正式升級只接受新世代前瞻與模擬投資證據。

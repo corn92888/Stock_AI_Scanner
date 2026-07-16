@@ -78,6 +78,7 @@ export type ResearchExperiment = {
   formalRankingEnabled: boolean | null;
   institutionalNetLift: number | null;
   institutionalExcessLift: number | null;
+  institutionalCondition: string | null;
   modelVersion: string | null;
   qualified: boolean;
   rejectionReasons: string[];

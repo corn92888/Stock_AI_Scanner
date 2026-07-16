@@ -410,6 +410,7 @@ def _research_experiment_snapshot(conn):
         row["institutionalExcessLift"] = metrics.get(
             "institutional_excess_lift"
         )
+        row["institutionalCondition"] = metrics.get("institutional_condition")
         row["modelVersion"] = metrics.get("model_version")
     return rows
 

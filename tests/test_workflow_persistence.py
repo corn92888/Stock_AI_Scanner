@@ -143,6 +143,10 @@ class WorkflowPersistenceTests(unittest.TestCase):
         ).read_text()
         dataset_index = workflow.index("python institutional_replay_dataset.py")
         evaluation_index = workflow.index("python institutional_research.py")
+        attribution_index = workflow.index("python institutional_attribution.py")
+        interaction_index = workflow.index(
+            "python institutional_conditional_research.py"
+        )
         release_index = workflow.index("gh release upload research-institutional-data-v1")
         persistence_index = workflow.index("bash persist_scanner_data.sh")
 
@@ -150,9 +154,14 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertIn("for year in $(seq 2020 2025)", workflow)
         self.assertIn("ready=false", workflow)
         self.assertIn("steps.shards.outputs.ready == 'true'", workflow)
+        self.assertIn(
+            '--attribution "$RUNNER_TEMP/institutional_attribution.json"', workflow
+        )
         self.assertNotIn("--allow-partial-shards", workflow)
         self.assertLess(dataset_index, evaluation_index)
-        self.assertLess(evaluation_index, release_index)
+        self.assertLess(evaluation_index, attribution_index)
+        self.assertLess(attribution_index, interaction_index)
+        self.assertLess(interaction_index, release_index)
         self.assertLess(release_index, persistence_index)
 
     def test_automated_data_commits_use_conventional_english_messages(self):
