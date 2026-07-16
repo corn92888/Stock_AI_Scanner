@@ -227,6 +227,15 @@ fold stability, and same-date formal-rule comparisons. Every T+N experiment
 also uses an embargo of at least N trading dates at development, validation and
 final holdout boundaries. Each 20-comparison family uses a 99.75% PSR gate.
 
+A third pre-registered family removes the same-date industry median from future
+benchmark excess return when at least three industry peers are available and
+falls back to the same-date candidate median otherwise. The residual is mapped
+to a centered `-1..1` daily rank. Its model combines raw inputs with same-date
+feature percentiles, making the learned signal relative to the opportunity set
+instead of the absolute market regime. Because this family follows 40 prior
+locked comparisons, its 20 experiments use a cumulative 60-test Bonferroni PSR
+gate of approximately 99.9167%.
+
 Daily EOD candidates enter the same label contract through
 `candidate_execution_research.py`. Their records mature prospectively from
 `pending` to `partial` and finally T+20 `complete`; they are never backfilled as

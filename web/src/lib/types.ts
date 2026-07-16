@@ -70,7 +70,7 @@ export type ResearchExperiment = {
   participationRatePct: number | null;
   meanDailyNetReturn: number | null;
   meanDailyExcessReturn: number | null;
-  rankingTarget: "net" | "excess" | null;
+  rankingTarget: "net" | "excess" | "peer_rank" | null;
   predictionQuantile: number | null;
   predictionThreshold: number | null;
   qualified: boolean;

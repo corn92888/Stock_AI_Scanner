@@ -24,10 +24,17 @@ RANKING_EVALUATION_FAMILY = "purged_cross_sectional_holdout_v1"
 RANKING_MODEL_VERSION = "hist_gradient_return_ranker_v1"
 ALPHA_EVALUATION_FAMILY = "purged_alpha_abstention_holdout_v1"
 ALPHA_MODEL_VERSION = "hist_gradient_excess_ranker_q80_v1"
+PEER_RANK_EVALUATION_FAMILY = "purged_peer_rank_abstention_holdout_v1"
+PEER_RANK_MODEL_VERSION = "hist_gradient_peer_rank_q80_v1"
 DEFAULT_TOP_K = 3
 MULTIPLE_TESTING_PSR_GATE = 0.9975
 ALPHA_PREDICTION_QUANTILE = 0.80
 CALIBRATION_FRACTION = 0.20
+MIN_INDUSTRY_PEERS = 3
+CUMULATIVE_LOCKED_COMPARISONS = 60
+PEER_RANK_PSR_GATE = 1.0 - (0.05 / CUMULATIVE_LOCKED_COMPARISONS)
+RAW_FEATURE_MODE = "raw"
+CROSS_SECTIONAL_FEATURE_MODE = "raw_plus_cross_sectional_rank"
 
 METHOD_NAMES = {
     "next_open": "Next-open",
@@ -44,15 +51,18 @@ class RankingSpec:
     top_k: int = DEFAULT_TOP_K
     target: str = "net"
     prediction_quantile: float | None = None
+    feature_mode: str = RAW_FEATURE_MODE
 
     def __post_init__(self):
-        if self.target not in {"net", "excess"}:
+        if self.target not in {"net", "excess", "peer_rank"}:
             raise ValueError(f"Unsupported ranking target: {self.target}")
         if (
             self.prediction_quantile is not None
             and not 0 < self.prediction_quantile < 1
         ):
             raise ValueError("prediction_quantile must be between zero and one.")
+        if self.feature_mode not in {RAW_FEATURE_MODE, CROSS_SECTIONAL_FEATURE_MODE}:
+            raise ValueError(f"Unsupported feature mode: {self.feature_mode}")
 
     @property
     def uses_abstention(self):
@@ -60,6 +70,9 @@ class RankingSpec:
 
     @property
     def key(self):
+        if self.target == "peer_rank" and self.uses_abstention:
+            quantile = round(self.prediction_quantile * 100)
+            return f"replay_peer_rank_{self.method}_t{self.horizon}_q{quantile}_v1"
         if self.target == "excess" and self.uses_abstention:
             quantile = round(self.prediction_quantile * 100)
             return f"replay_alpha_rank_{self.method}_t{self.horizon}_q{quantile}_v1"
@@ -71,6 +84,32 @@ class RankingSpec:
 
     @property
     def experiment(self):
+        if self.target == "peer_rank" and self.uses_abstention:
+            quantile = round(self.prediction_quantile * 100)
+            return ExperimentSpec(
+                key=self.key,
+                name=(
+                    f"{METHOD_NAMES[self.method]} T+{self.horizon} peer-relative "
+                    f"ranker with Q{quantile} abstention"
+                ),
+                hypothesis=(
+                    f"Rank T+{self.horizon} benchmark excess returns after removing "
+                    "the same-date industry median when at least three peers exist, "
+                    "otherwise the same-date candidate median; trade up to the daily "
+                    f"top {self.top_k} only above a training-only Q{quantile} score."
+                ),
+                strategy_family="cross_sectional_peer_ranker",
+                execution_version=self.execution_version,
+                selector="all_replay_candidates_peer_rank_abstention",
+                evaluation_family=PEER_RANK_EVALUATION_FAMILY,
+                parameters=(
+                    ("target", self.target),
+                    ("prediction_quantile", self.prediction_quantile),
+                    ("feature_mode", self.feature_mode),
+                    ("min_industry_peers", MIN_INDUSTRY_PEERS),
+                    ("top_k", self.top_k),
+                ),
+            )
         if self.target == "excess" and self.uses_abstention:
             quantile = round(self.prediction_quantile * 100)
             return ExperimentSpec(
@@ -91,6 +130,7 @@ class RankingSpec:
                 parameters=(
                     ("target", self.target),
                     ("prediction_quantile", self.prediction_quantile),
+                    ("feature_mode", self.feature_mode),
                     ("top_k", self.top_k),
                 ),
             )
@@ -125,7 +165,19 @@ ALPHA_RANKING_SPECS = tuple(
     for horizon in HORIZONS
 )
 
-ALL_RANKING_SPECS = RANKING_SPECS + ALPHA_RANKING_SPECS
+PEER_RANKING_SPECS = tuple(
+    RankingSpec(
+        method=method,
+        horizon=horizon,
+        target="peer_rank",
+        prediction_quantile=ALPHA_PREDICTION_QUANTILE,
+        feature_mode=CROSS_SECTIONAL_FEATURE_MODE,
+    )
+    for method in ENTRY_METHODS
+    for horizon in HORIZONS
+)
+
+ALL_RANKING_SPECS = RANKING_SPECS + ALPHA_RANKING_SPECS + PEER_RANKING_SPECS
 
 
 def _sha256(path):
@@ -152,7 +204,14 @@ def load_ranking_dataset(dataset_path):
     if not dataset_path.exists():
         return pd.DataFrame()
     frame = pd.read_csv(dataset_path, dtype={"trade_date": str, "code": str})
-    required = {"trade_date", "code", "rule_selected", "tradable", *MODEL_FEATURES}
+    required = {
+        "trade_date",
+        "code",
+        "industry",
+        "rule_selected",
+        "tradable",
+        *MODEL_FEATURES,
+    }
     missing = sorted(required - set(frame.columns))
     if missing:
         raise ValueError(
@@ -160,6 +219,7 @@ def load_ranking_dataset(dataset_path):
         )
     frame["trade_date"] = frame["trade_date"].astype(str)
     frame["code"] = frame["code"].astype(str)
+    frame["industry"] = frame["industry"].fillna("").astype(str).str.strip()
     for column in {"rule_selected", "tradable", *MODEL_FEATURES}:
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
     return frame.sort_values(["trade_date", "code"], kind="stable")
@@ -193,6 +253,72 @@ def _model():
     )
 
 
+def _feature_names(spec):
+    names = list(MODEL_FEATURES)
+    if spec.feature_mode == CROSS_SECTIONAL_FEATURE_MODE:
+        names.extend(f"{column}_cs_rank" for column in MODEL_FEATURES)
+    return names
+
+
+def _feature_frame(frame, spec):
+    features = frame[MODEL_FEATURES].copy()
+    if spec.feature_mode == CROSS_SECTIONAL_FEATURE_MODE:
+        ranked = features.groupby(frame["trade_date"], sort=False).rank(
+            method="average", pct=True
+        )
+        ranked.columns = [f"{column}_cs_rank" for column in ranked.columns]
+        features = pd.concat([features, ranked], axis=1)
+    return features
+
+
+def _raw_target_column(spec, columns):
+    return columns["excess"] if spec.target == "peer_rank" else columns[spec.target]
+
+
+def _peer_rank_target(frame, excess_column):
+    excess = pd.to_numeric(frame[excess_column], errors="coerce")
+    industry = frame["industry"].fillna("").astype(str).str.strip()
+    invalid_industry = industry.isin({"", "其他", "未分類", "unknown", "Unknown"})
+    date_keys = frame["trade_date"].astype(str)
+    industry_groups = [date_keys, industry]
+    industry_counts = excess.groupby(industry_groups, sort=False).transform("count")
+    industry_median = excess.groupby(industry_groups, sort=False).transform("median")
+    date_median = excess.groupby(date_keys).transform("median")
+    uses_industry = (~invalid_industry) & (industry_counts >= MIN_INDUSTRY_PEERS)
+    peer_baseline = industry_median.where(uses_industry, date_median)
+    residual = excess - peer_baseline
+    date_count = residual.groupby(date_keys).transform("count")
+    ordinal_rank = residual.groupby(date_keys).rank(method="average")
+    half_range = (date_count - 1.0) / 2.0
+    centered_rank = (ordinal_rank - (date_count + 1.0) / 2.0) / half_range.where(
+        half_range > 0
+    )
+    centered_rank = centered_rank.fillna(0.0)
+    diagnostics = {
+        "target_industry_peer_rows": int(uses_industry.sum()),
+        "target_date_fallback_rows": int((~uses_industry).sum()),
+        "target_industry_peer_rate_pct": (
+            round(float(uses_industry.mean() * 100), 4) if len(frame) else 0.0
+        ),
+        "target_mean": float(centered_rank.mean()) if len(centered_rank) else None,
+        "target_std": float(centered_rank.std(ddof=0)) if len(centered_rank) else None,
+    }
+    return centered_rank, diagnostics
+
+
+def _target_values(frame, spec, columns):
+    if spec.target == "peer_rank":
+        return _peer_rank_target(frame, columns["excess"])
+    values = pd.to_numeric(frame[columns[spec.target]], errors="coerce")
+    return values, {
+        "target_industry_peer_rows": 0,
+        "target_date_fallback_rows": 0,
+        "target_industry_peer_rate_pct": 0.0,
+        "target_mean": float(values.mean()) if len(values) else None,
+        "target_std": float(values.std(ddof=0)) if len(values) else None,
+    }
+
+
 def _standardized_returns(frame, columns):
     return pd.DataFrame(
         {
@@ -223,7 +349,7 @@ def _calibration_partition(train, horizon):
 
 def fit_rank_phase(frame, train_dates, evaluation_dates, spec, min_train_rows=500):
     columns = _label_columns(spec)
-    target_column = columns[spec.target]
+    target_column = _raw_target_column(spec, columns)
     train = frame[
         frame["trade_date"].isin(set(train_dates))
         & (frame["tradable"] == 1)
@@ -250,6 +376,13 @@ def fit_rank_phase(frame, train_dates, evaluation_dates, spec, min_train_rows=50
         "ranking_target": spec.target,
         "prediction_quantile": spec.prediction_quantile,
         "prediction_threshold": None,
+        "feature_mode": spec.feature_mode,
+        "feature_count": len(_feature_names(spec)),
+        "target_industry_peer_rows": 0,
+        "target_date_fallback_rows": 0,
+        "target_industry_peer_rate_pct": 0.0,
+        "target_mean": None,
+        "target_std": None,
     }
     if len(train) < min_train_rows or evaluation_pool.empty:
         return pd.DataFrame(), {
@@ -277,18 +410,19 @@ def fit_rank_phase(frame, train_dates, evaluation_dates, spec, min_train_rows=50
                 "calibration_embargo_trade_dates": len(calibration_embargo),
             }
 
-    model.fit(fit[MODEL_FEATURES], fit[target_column].astype(float))
+    target_values, target_diagnostics = _target_values(train, spec, columns)
+    model.fit(_feature_frame(fit, spec), target_values.loc[fit.index].astype(float))
     prediction_column = f"predicted_{spec.target}_return"
     if spec.uses_abstention:
         calibration_predictions = pd.Series(
-            model.predict(calibration[MODEL_FEATURES]), dtype=float
+            model.predict(_feature_frame(calibration, spec)), dtype=float
         )
         prediction_threshold = max(
             0.0,
             float(calibration_predictions.quantile(spec.prediction_quantile)),
         )
     evaluation_pool[prediction_column] = model.predict(
-        evaluation_pool[MODEL_FEATURES]
+        _feature_frame(evaluation_pool, spec)
     )
     eligible = evaluation_pool
     if prediction_threshold is not None:
@@ -338,6 +472,9 @@ def fit_rank_phase(frame, train_dates, evaluation_dates, spec, min_train_rows=50
         "ranking_target": spec.target,
         "prediction_quantile": spec.prediction_quantile,
         "prediction_threshold": prediction_threshold,
+        "feature_mode": spec.feature_mode,
+        "feature_count": len(_feature_names(spec)),
+        **target_diagnostics,
     }
 
 
@@ -437,10 +574,15 @@ def evaluate_ranking_spec(
     gates=None,
     min_train_rows=500,
 ):
+    psr_gate = (
+        PEER_RANK_PSR_GATE
+        if spec.target == "peer_rank"
+        else MULTIPLE_TESTING_PSR_GATE
+    )
     gates = gates or PromotionGates(
         min_trade_dates=120,
         min_trades=300,
-        min_probabilistic_sharpe=MULTIPLE_TESTING_PSR_GATE,
+        min_probabilistic_sharpe=psr_gate,
         max_drawdown=-12.0,
         min_profitable_fold_rate=0.80,
     )
@@ -492,19 +634,28 @@ def evaluate_ranking_spec(
             "dataset_fingerprint": dataset_fingerprint,
             "dataset_rows": int(len(scoped)),
             "model_version": (
-                ALPHA_MODEL_VERSION if spec.uses_abstention else RANKING_MODEL_VERSION
+                PEER_RANK_MODEL_VERSION
+                if spec.target == "peer_rank"
+                else ALPHA_MODEL_VERSION
+                if spec.uses_abstention
+                else RANKING_MODEL_VERSION
             ),
             "ranking_target": spec.target,
             "prediction_quantile": spec.prediction_quantile,
             "calibration_fraction": CALIBRATION_FRACTION,
+            "feature_mode": spec.feature_mode,
             "entry_method": spec.method,
             "holding_horizon": spec.horizon,
             "top_k": spec.top_k,
-            "features": list(MODEL_FEATURES),
-            "multiple_testing_psr_gate": MULTIPLE_TESTING_PSR_GATE,
-            "multiple_testing_family_size": len(ALPHA_RANKING_SPECS)
-            if spec.uses_abstention
-            else len(RANKING_SPECS),
+            "features": _feature_names(spec),
+            "multiple_testing_psr_gate": psr_gate,
+            "multiple_testing_family_size": (
+                CUMULATIVE_LOCKED_COMPARISONS
+                if spec.target == "peer_rank"
+                else len(ALPHA_RANKING_SPECS)
+                if spec.uses_abstention
+                else len(RANKING_SPECS)
+            ),
             "temporal_split": {
                 "embargo_trade_dates": max(spec.horizon, 3),
                 "development_internal_embargo": development_embargo,

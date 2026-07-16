@@ -8,7 +8,12 @@ import pandas as pd
 from ai_pipeline import MODEL_FEATURES
 from cross_sectional_research import (
     ALPHA_MODEL_VERSION,
+    CROSS_SECTIONAL_FEATURE_MODE,
+    PEER_RANK_MODEL_VERSION,
+    PEER_RANK_PSR_GATE,
     RankingSpec,
+    _feature_frame,
+    _peer_rank_target,
     available_ranking_specs,
     evaluate_ranking_spec,
     fit_rank_phase,
@@ -29,6 +34,7 @@ def _ranking_rows(periods=120):
             row = {
                 "trade_date": trade_date.date().isoformat(),
                 "code": str(1000 + candidate_index),
+                "industry": "Industry A" if candidate_index < 3 else "Industry B",
                 "rule_selected": int(candidate_index == 0),
                 "tradable": 1,
                 "scenario_version": EXECUTION_RESEARCH_VERSION,
@@ -208,6 +214,74 @@ class CrossSectionalResearchTests(unittest.TestCase):
         self.assertEqual(metrics["ranking_target"], "excess")
         self.assertIn("prediction_threshold", metrics)
         self.assertIn("participation_rate_pct", metrics)
+
+    def test_peer_rank_target_uses_industry_then_date_fallback(self):
+        frame = pd.DataFrame(
+            {
+                "trade_date": ["2026-01-02"] * 5,
+                "industry": ["A", "A", "A", "B", "B"],
+                "excess": [1.0, 2.0, 3.0, 10.0, 20.0],
+            }
+        )
+
+        target, diagnostics = _peer_rank_target(frame, "excess")
+
+        self.assertEqual(target.tolist(), [-1.0, -0.5, 0.0, 0.5, 1.0])
+        self.assertAlmostEqual(target.mean(), 0.0)
+        self.assertEqual(diagnostics["target_industry_peer_rows"], 3)
+        self.assertEqual(diagnostics["target_date_fallback_rows"], 2)
+        self.assertEqual(diagnostics["target_industry_peer_rate_pct"], 60.0)
+
+    def test_cross_sectional_rank_features_ignore_absolute_scale(self):
+        frame = _ranking_rows(periods=1)
+        spec = RankingSpec(
+            "next_open",
+            3,
+            target="peer_rank",
+            prediction_quantile=0.80,
+            feature_mode=CROSS_SECTIONAL_FEATURE_MODE,
+        )
+        original = _feature_frame(frame, spec)
+        rescaled = frame.copy()
+        rescaled["candidate_score"] = rescaled["candidate_score"] * 100 + 7
+        transformed = _feature_frame(rescaled, spec)
+
+        self.assertEqual(
+            original["candidate_score_cs_rank"].tolist(),
+            transformed["candidate_score_cs_rank"].tolist(),
+        )
+        self.assertNotEqual(
+            original["candidate_score"].tolist(),
+            transformed["candidate_score"].tolist(),
+        )
+
+    def test_peer_rank_evaluation_persists_cumulative_research_gate(self):
+        frame = _ranking_rows()
+        spec = RankingSpec(
+            "next_open",
+            3,
+            top_k=2,
+            target="peer_rank",
+            prediction_quantile=0.80,
+            feature_mode=CROSS_SECTIONAL_FEATURE_MODE,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            result = evaluate_ranking_spec(
+                frame,
+                spec,
+                "c" * 64,
+                db_path=Path(directory) / "scanner.db",
+                min_train_rows=30,
+            )
+
+        self.assertEqual(result["model_version"], PEER_RANK_MODEL_VERSION)
+        self.assertEqual(result["ranking_target"], "peer_rank")
+        self.assertEqual(result["feature_mode"], CROSS_SECTIONAL_FEATURE_MODE)
+        self.assertEqual(result["multiple_testing_family_size"], 60)
+        self.assertAlmostEqual(
+            result["multiple_testing_psr_gate"], PEER_RANK_PSR_GATE
+        )
+        self.assertEqual(result["phase_results"]["holdout"]["metrics"]["feature_count"], 36)
 
 
 if __name__ == "__main__":
