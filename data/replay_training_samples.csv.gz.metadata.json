@@ -1,12 +1,12 @@
 {
-  "bytes": 22343867,
+  "bytes": 22343704,
   "dataset_version": "point_in_time_replay_training_v2",
   "end_date": "2025-12-31",
   "execution_labels": {
     "coverage_pct": 100.0,
     "path": "replay_execution_labels.csv.gz",
     "rows": 69606,
-    "sha256": "bf5b6346c90c3bf5ebe735921e334cf2d9bf6f861761fbfb8b1615a5798ecdd0"
+    "sha256": "da225caa06c919b37a973388d7b741bf4f57e858b886027b99253a693e635142"
   },
   "feature_version": "candidate_features_v2",
   "model_features": [
@@ -32,7 +32,7 @@
   "output": "replay_training_samples.csv.gz",
   "positive_samples": 8111,
   "samples": 56517,
-  "sha256": "6106cb83165f5948239296703fe1cdd60a689e20662fc7705e356efcc3afdb05",
+  "sha256": "9d3166e346fee37207c54b86515ad119275d95098c1910d27800f71c5237d813",
   "source": "official_point_in_time_replay",
   "start_date": "2021-01-04",
   "symbols": 1636,

@@ -1,5 +1,5 @@
 {
-  "bytes": 23052907,
+  "bytes": 23052125,
   "config": {
     "benchmark_code": "^TWII",
     "buy_fee_rate": 0.001425,
@@ -21,7 +21,7 @@
     "next_close",
     "pullback_2pct_3d"
   ],
-  "generated_at": "2026-07-16T20:06:25+08:00",
+  "generated_at": "2026-07-16T21:02:29+08:00",
   "horizons": [
     1,
     3,
@@ -32,7 +32,7 @@
   "missing_price_events": 0,
   "output": "replay_execution_labels.csv.gz",
   "rows": 69606,
-  "sha256": "bf5b6346c90c3bf5ebe735921e334cf2d9bf6f861761fbfb8b1615a5798ecdd0",
+  "sha256": "da225caa06c919b37a973388d7b741bf4f57e858b886027b99253a693e635142",
   "source_events": 69606,
   "start_date": "2021-01-04",
   "symbols": 1678
