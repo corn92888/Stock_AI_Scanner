@@ -1,12 +1,12 @@
 {
-  "bytes": 22340941,
+  "bytes": 18043048,
   "dataset_version": "point_in_time_replay_training_v2",
   "end_date": "2025-12-31",
   "execution_labels": {
     "coverage_pct": 100.0,
     "path": "replay_execution_labels.csv.gz",
-    "rows": 69606,
-    "sha256": "59aa1b1c147f6d47d972921e2746219fdb5dca06cfcd08c30d999702ae551f66"
+    "rows": 55814,
+    "sha256": "b3c796942e3e03d429e94f2f39778944b0edea55d65a9d4a6f1af2f10aed7d10"
   },
   "feature_version": "candidate_features_v2",
   "model_features": [
@@ -30,11 +30,11 @@
     "stop_distance_pct"
   ],
   "output": "replay_training_samples.csv.gz",
-  "positive_samples": 8111,
-  "samples": 56517,
-  "sha256": "085b896acb160dba2cdd5697a7f52f54593ac1b7f917f047837447f1cb52ae7e",
+  "positive_samples": 6503,
+  "samples": 45609,
+  "sha256": "9f32d2ee3b467d57acd1f6bf931e8565a15eb5cf1871af2b25b0e1ba5bdc9726",
   "source": "official_point_in_time_replay",
-  "start_date": "2021-01-04",
-  "symbols": 1636,
-  "trade_dates": 1211
+  "start_date": "2022-01-03",
+  "symbols": 1601,
+  "trade_dates": 968
 }
