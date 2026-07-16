@@ -403,6 +403,14 @@ def _research_experiment_snapshot(conn):
         row["rankingTarget"] = metrics.get("ranking_target")
         row["predictionQuantile"] = metrics.get("prediction_quantile")
         row["predictionThreshold"] = metrics.get("prediction_threshold")
+        row["evaluationScope"] = metrics.get("evaluation_scope")
+        row["holdoutEvaluated"] = metrics.get("holdout_evaluated")
+        row["formalRankingEnabled"] = metrics.get("formal_ranking_enabled")
+        row["institutionalNetLift"] = metrics.get("institutional_net_lift")
+        row["institutionalExcessLift"] = metrics.get(
+            "institutional_excess_lift"
+        )
+        row["modelVersion"] = metrics.get("model_version")
     return rows
 
 

@@ -40,7 +40,16 @@
 - `institutional_feature_snapshots` 永久保存候選事件當下可見的衍生特徵。
 - Vercel 於台北時間每個工作日 19:20 觸發 `institutional_flow.yml`，第一次執行回補 45 個日曆日，後續只抓缺漏與當日資料。
 - `institutional_history.yml` 以年度分片平行回補歷史資料；每年分片可從 GitHub Release 獨立續傳，避免單一長任務失敗後重抓全部年份。
+- `institutional_replay_dataset.py` 將年度分片依 `known_at <= as_of` 合併到歷史 replay dataset；年度缺漏、非終態請求、SQLite 完整性失敗或同日資料都會中止研究，輸出 gzip 與 SHA-256 可重現。
+- `institutional_research.yml` 只有在 2020 至 2025 年分片全部可用後才執行。2020 年只作為 2021 年初 20 個法人交易日的暖機資料；enriched dataset 保存於 `research-institutional-data-v1` Release，不放入 Git 主庫。
 
 ## 研究治理
 
 2021 至 2025 的既有 holdout 已經歷多輪策略比較，因此不能再被視為完全未看過的最終驗證集。法人特徵的歷史回放只可用於開發、除錯與估計方向；正式升級必須依靠 Generation 2 上線後新累積的前瞻樣本，並繼續通過成本後淨報酬、超額報酬、回撤、跨折穩定度與模擬投資門檻。
+
+Generation 2 預先鎖定兩個比較，避免再用大量組合碰運氣：
+
+- 次日開盤進場、T+5 持有期、Q80 棄權的同產業相對排名。
+- 次日開盤進場、T+10 持有期、Q80 棄權的同產業相對排名。
+
+每個比較只改變一件事：技術面控制模型使用原本 18 個特徵，增量模型再加入 11 個正規化法人特徵。歷史流程只計算 development 與 validation 的同窗差異，保留 holdout 不評估，且固定寫入 `prospective_generation_required`，因此無論歷史結果多好都不能自動接管正式排名。儀表板會標示「歷史診斷」、法人淨報酬增量與超額報酬增量。

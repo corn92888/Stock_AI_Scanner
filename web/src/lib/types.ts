@@ -73,6 +73,12 @@ export type ResearchExperiment = {
   rankingTarget: "net" | "excess" | "peer_rank" | null;
   predictionQuantile: number | null;
   predictionThreshold: number | null;
+  evaluationScope: string | null;
+  holdoutEvaluated: boolean | null;
+  formalRankingEnabled: boolean | null;
+  institutionalNetLift: number | null;
+  institutionalExcessLift: number | null;
+  modelVersion: string | null;
   qualified: boolean;
   rejectionReasons: string[];
 };

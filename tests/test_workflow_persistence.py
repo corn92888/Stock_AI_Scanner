@@ -13,6 +13,7 @@ class WorkflowPersistenceTests(unittest.TestCase):
             "global_market.yml",
             "historical_replay.yml",
             "institutional_flow.yml",
+            "institutional_research.yml",
         ):
             workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
             self.assertIn("git pull --ff-only origin main", workflow)
@@ -136,6 +137,24 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertLess(evaluation_index, persistence_index)
         self.assertLess(merge_index, persistence_index)
 
+    def test_institutional_research_waits_for_complete_warmup_shards(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "institutional_research.yml"
+        ).read_text()
+        dataset_index = workflow.index("python institutional_replay_dataset.py")
+        evaluation_index = workflow.index("python institutional_research.py")
+        release_index = workflow.index("gh release upload research-institutional-data-v1")
+        persistence_index = workflow.index("bash persist_scanner_data.sh")
+
+        self.assertIn("workflow_run:", workflow)
+        self.assertIn("for year in $(seq 2020 2025)", workflow)
+        self.assertIn("ready=false", workflow)
+        self.assertIn("steps.shards.outputs.ready == 'true'", workflow)
+        self.assertNotIn("--allow-partial-shards", workflow)
+        self.assertLess(dataset_index, evaluation_index)
+        self.assertLess(evaluation_index, release_index)
+        self.assertLess(release_index, persistence_index)
+
     def test_automated_data_commits_use_conventional_english_messages(self):
         for workflow_name in (
             "intraday_scan.yml",
@@ -143,6 +162,7 @@ class WorkflowPersistenceTests(unittest.TestCase):
             "global_market.yml",
             "historical_replay.yml",
             "institutional_flow.yml",
+            "institutional_research.yml",
         ):
             workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
             self.assertRegex(

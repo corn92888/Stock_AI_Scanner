@@ -52,6 +52,8 @@ class RankingSpec:
     target: str = "net"
     prediction_quantile: float | None = None
     feature_mode: str = RAW_FEATURE_MODE
+    feature_columns: tuple[str, ...] = tuple(MODEL_FEATURES)
+    experiment_key: str | None = None
 
     def __post_init__(self):
         if self.target not in {"net", "excess", "peer_rank"}:
@@ -63,6 +65,10 @@ class RankingSpec:
             raise ValueError("prediction_quantile must be between zero and one.")
         if self.feature_mode not in {RAW_FEATURE_MODE, CROSS_SECTIONAL_FEATURE_MODE}:
             raise ValueError(f"Unsupported feature mode: {self.feature_mode}")
+        if not self.feature_columns or len(set(self.feature_columns)) != len(
+            self.feature_columns
+        ):
+            raise ValueError("feature_columns must be non-empty and unique.")
 
     @property
     def uses_abstention(self):
@@ -70,6 +76,8 @@ class RankingSpec:
 
     @property
     def key(self):
+        if self.experiment_key:
+            return self.experiment_key
         if self.target == "peer_rank" and self.uses_abstention:
             quantile = round(self.prediction_quantile * 100)
             return f"replay_peer_rank_{self.method}_t{self.horizon}_q{quantile}_v1"
@@ -106,6 +114,7 @@ class RankingSpec:
                     ("target", self.target),
                     ("prediction_quantile", self.prediction_quantile),
                     ("feature_mode", self.feature_mode),
+                    ("feature_columns", self.feature_columns),
                     ("min_industry_peers", MIN_INDUSTRY_PEERS),
                     ("top_k", self.top_k),
                 ),
@@ -131,6 +140,7 @@ class RankingSpec:
                     ("target", self.target),
                     ("prediction_quantile", self.prediction_quantile),
                     ("feature_mode", self.feature_mode),
+                    ("feature_columns", self.feature_columns),
                     ("top_k", self.top_k),
                 ),
             )
@@ -254,14 +264,14 @@ def _model():
 
 
 def _feature_names(spec):
-    names = list(MODEL_FEATURES)
+    names = list(spec.feature_columns)
     if spec.feature_mode == CROSS_SECTIONAL_FEATURE_MODE:
-        names.extend(f"{column}_cs_rank" for column in MODEL_FEATURES)
+        names.extend(f"{column}_cs_rank" for column in spec.feature_columns)
     return names
 
 
 def _feature_frame(frame, spec):
-    features = frame[MODEL_FEATURES].copy()
+    features = frame[list(spec.feature_columns)].copy()
     if spec.feature_mode == CROSS_SECTIONAL_FEATURE_MODE:
         ranked = features.groupby(frame["trade_date"], sort=False).rank(
             method="average", pct=True
