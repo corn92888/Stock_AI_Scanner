@@ -7,6 +7,7 @@ from database import INSTITUTIONAL_FEATURE_VERSION, get_connection, init_db
 from export_dashboard_snapshot import build_dashboard_snapshot
 from institutional_flow import (
     InstitutionalDataError,
+    _session,
     build_institutional_feature_snapshots,
     institutional_features,
     parse_tpex_payload,
@@ -20,6 +21,12 @@ PAYLOAD_HASH = "a" * 64
 
 
 class InstitutionalFlowTests(unittest.TestCase):
+    def test_official_source_session_retries_tpex_520_responses(self):
+        retry = _session().get_adapter("https://").max_retries
+
+        self.assertEqual(retry.total, 5)
+        self.assertIn(520, retry.status_forcelist)
+
     def test_twse_parser_maps_official_columns_and_ignores_non_four_digit_codes(self):
         stock = [
             "2330",

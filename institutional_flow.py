@@ -240,11 +240,11 @@ def parse_tpex_payload(payload, requested_date, source_url, payload_sha256, fetc
 
 def _session():
     retry = Retry(
-        total=3,
-        connect=3,
-        read=3,
-        backoff_factor=0.6,
-        status_forcelist=(429, 500, 502, 503, 504),
+        total=5,
+        connect=5,
+        read=5,
+        backoff_factor=1.0,
+        status_forcelist=(429, 500, 502, 503, 504, 520),
         allowed_methods=("GET",),
     )
     session = requests.Session()
