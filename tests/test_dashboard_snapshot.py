@@ -194,7 +194,8 @@ class DashboardSnapshotTests(unittest.TestCase):
                     ) VALUES (
                         ?, 'eval_v1', '2026-07-14T14:10:00+08:00',
                         '2026-01-01', '2026-07-14', 120, 300, 5,
-                        1.2, 0.7, 58, 1.4, 0.96, -8.5, 0.8, 1, '[]', '{}'
+                        1.2, 0.7, 58, 1.4, 0.96, -8.5, 0.8, 1, '[]',
+                        '{"decision_dates": 160, "participation_rate_pct": 75.0, "mean_daily_net_return": 0.9, "mean_daily_excess_return": 0.525, "ranking_target": "excess", "prediction_quantile": 0.8, "prediction_threshold": 0.4}'
                     )
                     """,
                     (experiment_id,),
@@ -205,6 +206,11 @@ class DashboardSnapshotTests(unittest.TestCase):
             ][0]
             self.assertEqual(experiment["experimentKey"], "trend_v2")
             self.assertEqual(experiment["meanExcessReturn"], 0.7)
+            self.assertEqual(experiment["decisionDates"], 160)
+            self.assertEqual(experiment["participationRatePct"], 75.0)
+            self.assertEqual(experiment["meanDailyNetReturn"], 0.9)
+            self.assertEqual(experiment["rankingTarget"], "excess")
+            self.assertEqual(experiment["predictionThreshold"], 0.4)
             self.assertTrue(experiment["qualified"])
             self.assertEqual(experiment["rejectionReasons"], [])
 

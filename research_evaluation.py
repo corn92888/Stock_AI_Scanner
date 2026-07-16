@@ -56,6 +56,7 @@ class ExperimentSpec:
     selector: str
     strategy: str | None = None
     filters: tuple[tuple[str, str, float], ...] = ()
+    parameters: tuple[tuple[str, object], ...] = ()
     evaluation_family: str = EVALUATION_FAMILY
 
 
@@ -240,6 +241,7 @@ def register_experiment(spec, db_path=DB_PATH):
         "selector": spec.selector,
         "strategy": spec.strategy,
         "filters": [list(item) for item in spec.filters],
+        "parameters": dict(spec.parameters),
         "evaluation_family": spec.evaluation_family,
     }
     with get_connection(db_path) as conn:
@@ -335,7 +337,13 @@ def _max_drawdown(daily_returns):
     return float(drawdown.min())
 
 
-def evaluate_frame(frame, gates=None, fold_count=5, decision_horizon=DECISION_HORIZON):
+def evaluate_frame(
+    frame,
+    gates=None,
+    fold_count=5,
+    decision_horizon=DECISION_HORIZON,
+    observation_dates=None,
+):
     gates = gates or PromotionGates()
     if frame.empty:
         metrics = {
@@ -349,12 +357,23 @@ def evaluate_frame(frame, gates=None, fold_count=5, decision_horizon=DECISION_HO
             "probabilistic_sharpe": None,
             "max_drawdown": None,
             "profitable_fold_rate": None,
+            "decision_dates": len(set(observation_dates or [])),
+            "participation_rate_pct": 0.0,
+            "mean_daily_net_return": 0.0 if observation_dates else None,
+            "mean_daily_excess_return": 0.0 if observation_dates else None,
         }
     else:
         daily = frame.groupby("trade_date", sort=True).agg(
             net_return=("net_return_3d", "mean"),
             excess_return=("excess_return_3d", "mean"),
         )
+        active_trade_dates = int(len(daily))
+        if observation_dates is not None:
+            decision_dates = sorted(
+                set(str(value) for value in observation_dates).union(daily.index.astype(str))
+            )
+            daily.index = daily.index.astype(str)
+            daily = daily.reindex(decision_dates, fill_value=0.0)
         daily["portfolio_return"] = daily["net_return"] / decision_horizon
         daily["portfolio_excess"] = daily["excess_return"] / decision_horizon
         std = (
@@ -375,7 +394,7 @@ def evaluate_frame(frame, gates=None, fold_count=5, decision_horizon=DECISION_HO
             float(fold["portfolio_excess"].mean()) > 0 for fold in folds
         ]
         metrics = {
-            "trade_dates": int(len(daily)),
+            "trade_dates": active_trade_dates,
             "trades": int(len(frame)),
             "folds": int(len(folds)),
             "mean_net_return": float(frame["net_return_3d"].mean()),
@@ -387,6 +406,10 @@ def evaluate_frame(frame, gates=None, fold_count=5, decision_horizon=DECISION_HO
             ),
             "max_drawdown": _max_drawdown(daily["portfolio_return"]),
             "profitable_fold_rate": float(np.mean(profitable)) if profitable else None,
+            "decision_dates": int(len(daily)),
+            "participation_rate_pct": float(active_trade_dates / len(daily) * 100),
+            "mean_daily_net_return": float(daily["net_return"].mean()),
+            "mean_daily_excess_return": float(daily["excess_return"].mean()),
         }
 
     reasons = []

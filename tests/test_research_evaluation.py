@@ -84,6 +84,44 @@ class ResearchEvaluationTests(unittest.TestCase):
         self.assertIn("non_positive_net_return", reasons)
         self.assertNotIn("non_positive_excess_return", reasons)
 
+    def test_observation_calendar_includes_abstention_as_cash(self):
+        frame = pd.DataFrame(
+            [
+                {
+                    "trade_date": "2026-01-02",
+                    "net_return_3d": 2.0,
+                    "excess_return_3d": 1.0,
+                },
+                {
+                    "trade_date": "2026-01-05",
+                    "net_return_3d": 2.0,
+                    "excess_return_3d": 1.0,
+                },
+            ]
+        )
+        metrics, _ = evaluate_frame(
+            frame,
+            gates=PromotionGates(
+                min_trade_dates=1,
+                min_trades=1,
+                min_probabilistic_sharpe=0.0,
+                max_drawdown=-100.0,
+                min_profitable_fold_rate=0.0,
+            ),
+            observation_dates=[
+                "2026-01-02",
+                "2026-01-05",
+                "2026-01-06",
+                "2026-01-07",
+            ],
+        )
+
+        self.assertEqual(metrics["trade_dates"], 2)
+        self.assertEqual(metrics["decision_dates"], 4)
+        self.assertEqual(metrics["participation_rate_pct"], 50.0)
+        self.assertEqual(metrics["mean_daily_net_return"], 1.0)
+        self.assertEqual(metrics["mean_daily_excess_return"], 0.5)
+
     def test_replay_overlay_uses_embargoed_temporal_holdout(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "scanner.db"

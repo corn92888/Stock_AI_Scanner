@@ -232,7 +232,8 @@ def _research_experiment_snapshot(conn):
             latest.max_drawdown AS maxDrawdown,
             latest.profitable_fold_rate AS profitableFoldRate,
             latest.qualified,
-            latest.rejection_reasons_json AS rejectionReasonsJson
+            latest.rejection_reasons_json AS rejectionReasonsJson,
+            latest.metrics_json AS metricsJson
         FROM research_experiments re
         LEFT JOIN latest
           ON latest.experiment_id=re.id AND latest.row_number=1
@@ -246,6 +247,14 @@ def _research_experiment_snapshot(conn):
         row["rejectionReasons"] = _decode_list(
             row.pop("rejectionReasonsJson", "")
         )
+        metrics = _decode_object(row.pop("metricsJson", ""))
+        row["decisionDates"] = metrics.get("decision_dates")
+        row["participationRatePct"] = metrics.get("participation_rate_pct")
+        row["meanDailyNetReturn"] = metrics.get("mean_daily_net_return")
+        row["meanDailyExcessReturn"] = metrics.get("mean_daily_excess_return")
+        row["rankingTarget"] = metrics.get("ranking_target")
+        row["predictionQuantile"] = metrics.get("prediction_quantile")
+        row["predictionThreshold"] = metrics.get("prediction_threshold")
     return rows
 
 

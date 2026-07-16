@@ -22,8 +22,12 @@ from research_evaluation import (
 
 RANKING_EVALUATION_FAMILY = "purged_cross_sectional_holdout_v1"
 RANKING_MODEL_VERSION = "hist_gradient_return_ranker_v1"
+ALPHA_EVALUATION_FAMILY = "purged_alpha_abstention_holdout_v1"
+ALPHA_MODEL_VERSION = "hist_gradient_excess_ranker_q80_v1"
 DEFAULT_TOP_K = 3
 MULTIPLE_TESTING_PSR_GATE = 0.9975
+ALPHA_PREDICTION_QUANTILE = 0.80
+CALIBRATION_FRACTION = 0.20
 
 METHOD_NAMES = {
     "next_open": "Next-open",
@@ -38,9 +42,27 @@ class RankingSpec:
     method: str
     horizon: int
     top_k: int = DEFAULT_TOP_K
+    target: str = "net"
+    prediction_quantile: float | None = None
+
+    def __post_init__(self):
+        if self.target not in {"net", "excess"}:
+            raise ValueError(f"Unsupported ranking target: {self.target}")
+        if (
+            self.prediction_quantile is not None
+            and not 0 < self.prediction_quantile < 1
+        ):
+            raise ValueError("prediction_quantile must be between zero and one.")
+
+    @property
+    def uses_abstention(self):
+        return self.prediction_quantile is not None
 
     @property
     def key(self):
+        if self.target == "excess" and self.uses_abstention:
+            quantile = round(self.prediction_quantile * 100)
+            return f"replay_alpha_rank_{self.method}_t{self.horizon}_q{quantile}_v1"
         return f"replay_rank_{self.method}_t{self.horizon}_v1"
 
     @property
@@ -49,6 +71,29 @@ class RankingSpec:
 
     @property
     def experiment(self):
+        if self.target == "excess" and self.uses_abstention:
+            quantile = round(self.prediction_quantile * 100)
+            return ExperimentSpec(
+                key=self.key,
+                name=(
+                    f"{METHOD_NAMES[self.method]} T+{self.horizon} alpha ranker "
+                    f"with Q{quantile} abstention"
+                ),
+                hypothesis=(
+                    f"Predict benchmark-relative T+{self.horizon} return and hold up "
+                    f"to the daily top {self.top_k} only when the score clears a "
+                    f"training-only Q{quantile} calibration threshold."
+                ),
+                strategy_family="cross_sectional_alpha_ranker",
+                execution_version=self.execution_version,
+                selector="all_replay_candidates_alpha_abstention",
+                evaluation_family=ALPHA_EVALUATION_FAMILY,
+                parameters=(
+                    ("target", self.target),
+                    ("prediction_quantile", self.prediction_quantile),
+                    ("top_k", self.top_k),
+                ),
+            )
         return ExperimentSpec(
             key=self.key,
             name=f"{METHOD_NAMES[self.method]} T+{self.horizon} ranker",
@@ -68,6 +113,19 @@ RANKING_SPECS = tuple(
     for method in ENTRY_METHODS
     for horizon in HORIZONS
 )
+
+ALPHA_RANKING_SPECS = tuple(
+    RankingSpec(
+        method=method,
+        horizon=horizon,
+        target="excess",
+        prediction_quantile=ALPHA_PREDICTION_QUANTILE,
+    )
+    for method in ENTRY_METHODS
+    for horizon in HORIZONS
+)
+
+ALL_RANKING_SPECS = RANKING_SPECS + ALPHA_RANKING_SPECS
 
 
 def _sha256(path):
@@ -107,7 +165,7 @@ def load_ranking_dataset(dataset_path):
     return frame.sort_values(["trade_date", "code"], kind="stable")
 
 
-def available_ranking_specs(frame, specs=RANKING_SPECS):
+def available_ranking_specs(frame, specs=ALL_RANKING_SPECS):
     available = []
     for spec in specs:
         columns = _label_columns(spec)
@@ -152,34 +210,94 @@ def _standardized_returns(frame, columns):
     )
 
 
+def _calibration_partition(train, horizon):
+    dates = sorted(train["trade_date"].astype(str).unique())
+    calibration_start = int(len(dates) * (1.0 - CALIBRATION_FRACTION))
+    fit_end = max(0, calibration_start - max(horizon, 3))
+    return (
+        dates[:fit_end],
+        dates[fit_end:calibration_start],
+        dates[calibration_start:],
+    )
+
+
 def fit_rank_phase(frame, train_dates, evaluation_dates, spec, min_train_rows=500):
     columns = _label_columns(spec)
+    target_column = columns[spec.target]
     train = frame[
         frame["trade_date"].isin(set(train_dates))
         & (frame["tradable"] == 1)
-        & frame[columns["net"]].notna()
+        & frame[target_column].notna()
     ].copy()
     evaluation_pool = frame[
         frame["trade_date"].isin(set(evaluation_dates))
         & (frame["tradable"] == 1)
     ].copy()
+    empty_diagnostics = {
+        "train_rows": int(len(train)),
+        "fit_rows": 0,
+        "calibration_rows": 0,
+        "calibration_embargo_trade_dates": 0,
+        "evaluation_candidates": int(len(evaluation_pool)),
+        "evaluation_trade_dates": int(len(set(evaluation_dates))),
+        "eligible_candidates": 0,
+        "selected_candidates": 0,
+        "participating_trade_dates": 0,
+        "abstained_trade_dates": int(len(set(evaluation_dates))),
+        "participation_rate_pct": 0.0,
+        "filled_trades": 0,
+        "fill_rate_pct": None,
+        "ranking_target": spec.target,
+        "prediction_quantile": spec.prediction_quantile,
+        "prediction_threshold": None,
+    }
     if len(train) < min_train_rows or evaluation_pool.empty:
         return pd.DataFrame(), {
-            "train_rows": int(len(train)),
-            "evaluation_candidates": int(len(evaluation_pool)),
-            "selected_candidates": 0,
-            "filled_trades": 0,
-            "fill_rate_pct": None,
+            **empty_diagnostics,
         }
 
+    fit = train
+    calibration = pd.DataFrame()
+    calibration_embargo = []
     model = _model()
-    model.fit(train[MODEL_FEATURES], train[columns["net"]].astype(float))
-    evaluation_pool["predicted_net_return"] = model.predict(
+    prediction_threshold = None
+    if spec.uses_abstention:
+        fit_dates, calibration_embargo, calibration_dates = _calibration_partition(
+            train, spec.horizon
+        )
+        fit = train[train["trade_date"].isin(set(fit_dates))].copy()
+        calibration = train[
+            train["trade_date"].isin(set(calibration_dates))
+        ].copy()
+        if len(fit) < min_train_rows or calibration.empty:
+            return pd.DataFrame(), {
+                **empty_diagnostics,
+                "fit_rows": int(len(fit)),
+                "calibration_rows": int(len(calibration)),
+                "calibration_embargo_trade_dates": len(calibration_embargo),
+            }
+
+    model.fit(fit[MODEL_FEATURES], fit[target_column].astype(float))
+    prediction_column = f"predicted_{spec.target}_return"
+    if spec.uses_abstention:
+        calibration_predictions = pd.Series(
+            model.predict(calibration[MODEL_FEATURES]), dtype=float
+        )
+        prediction_threshold = max(
+            0.0,
+            float(calibration_predictions.quantile(spec.prediction_quantile)),
+        )
+    evaluation_pool[prediction_column] = model.predict(
         evaluation_pool[MODEL_FEATURES]
     )
+    eligible = evaluation_pool
+    if prediction_threshold is not None:
+        eligible = evaluation_pool[
+            evaluation_pool[prediction_column] > prediction_threshold
+        ].copy()
     selected = (
-        evaluation_pool.sort_values(
-            ["trade_date", "predicted_net_return", "code"],
+        eligible.sort_values(
+            ["trade_date", prediction_column, "code"],
             ascending=[True, False, True],
             kind="stable",
         )
@@ -189,20 +307,37 @@ def fit_rank_phase(frame, train_dates, evaluation_dates, spec, min_train_rows=50
     )
     selected["rank_order"] = selected.groupby("trade_date").cumcount() + 1
     selected_returns = _standardized_returns(selected, columns)
-    selected_returns["predicted_net_return"] = selected["predicted_net_return"]
+    selected_returns[prediction_column] = selected[prediction_column]
     selected_returns["rank_order"] = selected["rank_order"]
     filled = selected_returns[
         selected_returns["net_return_3d"].notna()
         & selected_returns["excess_return_3d"].notna()
     ].copy()
+    evaluation_trade_dates = int(len(set(evaluation_dates)))
+    participating_trade_dates = int(filled["trade_date"].nunique())
     return filled, {
         "train_rows": int(len(train)),
+        "fit_rows": int(len(fit)),
+        "calibration_rows": int(len(calibration)),
+        "calibration_embargo_trade_dates": len(calibration_embargo),
         "evaluation_candidates": int(len(evaluation_pool)),
+        "evaluation_trade_dates": evaluation_trade_dates,
+        "eligible_candidates": int(len(eligible)),
         "selected_candidates": int(len(selected)),
+        "participating_trade_dates": participating_trade_dates,
+        "abstained_trade_dates": evaluation_trade_dates - participating_trade_dates,
+        "participation_rate_pct": (
+            round(participating_trade_dates / evaluation_trade_dates * 100, 4)
+            if evaluation_trade_dates
+            else 0.0
+        ),
         "filled_trades": int(len(filled)),
         "fill_rate_pct": (
             round(len(filled) / len(selected) * 100, 4) if len(selected) else None
         ),
+        "ranking_target": spec.target,
+        "prediction_quantile": spec.prediction_quantile,
+        "prediction_threshold": prediction_threshold,
     }
 
 
@@ -232,12 +367,19 @@ def _evaluate_phase(
         spec,
         min_train_rows=min_train_rows,
     )
+    observation_dates = evaluation_dates if spec.uses_abstention else None
     metrics, reasons = evaluate_frame(
-        selected, gates=gates, decision_horizon=spec.horizon
+        selected,
+        gates=gates,
+        decision_horizon=spec.horizon,
+        observation_dates=observation_dates,
     )
     baseline = _formal_baseline(frame, evaluation_dates, spec)
     baseline_metrics, _ = evaluate_frame(
-        baseline, gates=gates, decision_horizon=spec.horizon
+        baseline,
+        gates=gates,
+        decision_horizon=spec.horizon,
+        observation_dates=observation_dates,
     )
     metrics.update(diagnostics)
     metrics["sample_start"] = (
@@ -253,16 +395,26 @@ def _evaluate_phase(
     metrics["formal_baseline_mean_excess_return"] = baseline_metrics[
         "mean_excess_return"
     ]
+    metrics["formal_baseline_mean_daily_net_return"] = baseline_metrics[
+        "mean_daily_net_return"
+    ]
+    metrics["formal_baseline_mean_daily_excess_return"] = baseline_metrics[
+        "mean_daily_excess_return"
+    ]
+    net_metric = "mean_daily_net_return" if spec.uses_abstention else "mean_net_return"
+    excess_metric = (
+        "mean_daily_excess_return" if spec.uses_abstention else "mean_excess_return"
+    )
     if (
-        metrics["mean_net_return"] is None
-        or baseline_metrics["mean_net_return"] is None
-        or metrics["mean_net_return"] <= baseline_metrics["mean_net_return"]
+        metrics[net_metric] is None
+        or baseline_metrics[net_metric] is None
+        or metrics[net_metric] <= baseline_metrics[net_metric]
     ):
         reasons.append("no_formal_net_lift")
     if (
-        metrics["mean_excess_return"] is None
-        or baseline_metrics["mean_excess_return"] is None
-        or metrics["mean_excess_return"] <= baseline_metrics["mean_excess_return"]
+        metrics[excess_metric] is None
+        or baseline_metrics[excess_metric] is None
+        or metrics[excess_metric] <= baseline_metrics[excess_metric]
     ):
         reasons.append("no_formal_excess_lift")
     return metrics, list(dict.fromkeys(reasons))
@@ -339,12 +491,20 @@ def evaluate_ranking_spec(
             "evaluation_fingerprint": dataset_fingerprint[:10],
             "dataset_fingerprint": dataset_fingerprint,
             "dataset_rows": int(len(scoped)),
-            "model_version": RANKING_MODEL_VERSION,
+            "model_version": (
+                ALPHA_MODEL_VERSION if spec.uses_abstention else RANKING_MODEL_VERSION
+            ),
+            "ranking_target": spec.target,
+            "prediction_quantile": spec.prediction_quantile,
+            "calibration_fraction": CALIBRATION_FRACTION,
             "entry_method": spec.method,
             "holding_horizon": spec.horizon,
             "top_k": spec.top_k,
             "features": list(MODEL_FEATURES),
             "multiple_testing_psr_gate": MULTIPLE_TESTING_PSR_GATE,
+            "multiple_testing_family_size": len(ALPHA_RANKING_SPECS)
+            if spec.uses_abstention
+            else len(RANKING_SPECS),
             "temporal_split": {
                 "embargo_trade_dates": max(spec.horizon, 3),
                 "development_internal_embargo": development_embargo,
@@ -380,7 +540,7 @@ def evaluate_ranking_spec(
 def run_cross_sectional_evaluations(
     dataset_path,
     db_path=DB_PATH,
-    specs=RANKING_SPECS,
+    specs=ALL_RANKING_SPECS,
     gates=None,
     min_train_rows=500,
 ):

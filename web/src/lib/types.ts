@@ -66,6 +66,13 @@ export type ResearchExperiment = {
   probabilisticSharpe: number | null;
   maxDrawdown: number | null;
   profitableFoldRate: number | null;
+  decisionDates: number | null;
+  participationRatePct: number | null;
+  meanDailyNetReturn: number | null;
+  meanDailyExcessReturn: number | null;
+  rankingTarget: "net" | "excess" | null;
+  predictionQuantile: number | null;
+  predictionThreshold: number | null;
   qualified: boolean;
   rejectionReasons: string[];
 };

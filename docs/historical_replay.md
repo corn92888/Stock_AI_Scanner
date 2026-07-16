@@ -217,11 +217,15 @@ presented as historical VWAP.
 The deterministic `replay_execution_labels.csv.gz` artifact is merged into
 `replay_training_samples.csv.gz`; both files include SHA-256 metadata and are
 stored in the durable replay archive. `cross_sectional_research.py` trains only
-on tradable candidates, ranks the complete candidate pool by predicted net
-return, and evaluates the daily top three. Every T+N experiment uses an embargo
-of at least N trading dates at development, validation and final holdout
-boundaries. The 20 locked method/horizon comparisons use a 99.75% PSR gate and
-must also beat the formal rule on the same dates.
+on tradable candidates. The frozen family ranks the complete pool by predicted
+net return; a second locked family predicts benchmark-relative excess return.
+The alpha family reserves the final 20% of each training phase for chronological
+calibration, applies a horizon-sized embargo before it, and trades only scores
+above both zero and the calibration Q80. It may select up to three names or
+abstain completely. Cash days are included as zero returns in PSR, drawdown,
+fold stability, and same-date formal-rule comparisons. Every T+N experiment
+also uses an embargo of at least N trading dates at development, validation and
+final holdout boundaries. Each 20-comparison family uses a 99.75% PSR gate.
 
 Daily EOD candidates enter the same label contract through
 `candidate_execution_research.py`. Their records mature prospectively from
