@@ -451,6 +451,53 @@ export type GlobalMarketSnapshot = {
   };
 };
 
+export type InstitutionalFlowSnapshot = {
+  featureVersion: string;
+  researchGeneration: string;
+  latestTradeDate: string;
+  fetchedAt: string;
+  rawRows: number;
+  symbols: number;
+  candidateTargets: number;
+  featureSnapshots: number;
+  completeFeatures: number;
+  coveragePct: number;
+  completeCoveragePct: number;
+  sources: Array<{
+    market: string;
+    status: string;
+    reportDate: string | null;
+    rowCount: number;
+    sourceName: string;
+    sourceUrl: string;
+    fetchedAt: string;
+    errorText: string | null;
+  }>;
+  candidates: Array<{
+    code: string;
+    name: string;
+    industry: string;
+    score: number | null;
+    sourceTradeDate: string | null;
+    observations20d: number | null;
+    coverageStatus: string | null;
+    foreignNetZ20: number | null;
+    trustNetZ20: number | null;
+    totalNetZ20: number | null;
+    foreignStreakDays: number | null;
+    trustStreakDays: number | null;
+    totalStreakDays: number | null;
+    agreementScore1d: number | null;
+  }>;
+  quality: {
+    status: string;
+    formalRankingEnabled: boolean;
+    historicalUse: string;
+    promotionGate: string;
+    warnings: string[];
+  };
+};
+
 export type DashboardSnapshot = {
   schemaVersion: string;
   generatedAt: string;
@@ -472,6 +519,7 @@ export type DashboardSnapshot = {
   paperEquity: PaperEquityPoint[];
   paperTrades: PaperTrade[];
   globalMarket: GlobalMarketSnapshot;
+  institutionalFlow: InstitutionalFlowSnapshot;
 };
 
 export type WorkflowRun = {

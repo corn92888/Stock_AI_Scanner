@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from database import CANDIDATE_EXECUTION_VERSION
+from database import CANDIDATE_EXECUTION_VERSION, INSTITUTIONAL_FEATURE_VERSION
 
 
 TAIPEI_TZ = dt.timezone(dt.timedelta(hours=8), name="Asia/Taipei")
@@ -117,6 +117,154 @@ def _empty_global_market():
             "missingKeys": [],
             "warnings": ["跨市場資料尚未完成第一次收集。"],
             "formalRankingEnabled": False,
+        },
+    }
+
+
+def _empty_institutional_flow():
+    return {
+        "featureVersion": INSTITUTIONAL_FEATURE_VERSION,
+        "researchGeneration": "generation_2_institutional",
+        "latestTradeDate": "",
+        "fetchedAt": "",
+        "rawRows": 0,
+        "symbols": 0,
+        "candidateTargets": 0,
+        "featureSnapshots": 0,
+        "completeFeatures": 0,
+        "coveragePct": 0,
+        "completeCoveragePct": 0,
+        "sources": [],
+        "candidates": [],
+        "quality": {
+            "status": "unavailable",
+            "formalRankingEnabled": False,
+            "historicalUse": "development_only",
+            "promotionGate": "prospective_generation_2_evidence",
+            "warnings": ["法人籌碼資料尚未完成第一次官方收集。"],
+        },
+    }
+
+
+def _institutional_flow_snapshot(conn):
+    required = {
+        "institutional_flow_daily",
+        "institutional_flow_fetches",
+        "institutional_feature_snapshots",
+    }
+    if any(not _table_exists(conn, table) for table in required):
+        return _empty_institutional_flow()
+    latest = conn.execute(
+        "SELECT MAX(trade_date) AS trade_date, MAX(fetched_at) AS fetched_at "
+        "FROM institutional_flow_daily"
+    ).fetchone()
+    latest_date = latest["trade_date"] if latest else None
+    if not latest_date:
+        return _empty_institutional_flow()
+    latest_scan_date = conn.execute(
+        "SELECT MAX(trade_date) FROM scan_runs"
+    ).fetchone()[0]
+    candidate_targets = conn.execute(
+        """
+        SELECT COUNT(*) FROM (
+            SELECT DISTINCT ce.run_id, ce.code
+            FROM candidate_events ce
+            JOIN scan_runs sr ON sr.id=ce.run_id
+            WHERE sr.trade_date=?
+        )
+        """,
+        (latest_scan_date,),
+    ).fetchone()[0]
+    feature_counts = conn.execute(
+        """
+        SELECT COUNT(*) AS features,
+               SUM(CASE WHEN ifs.coverage_status='complete' THEN 1 ELSE 0 END) AS complete
+        FROM institutional_feature_snapshots ifs
+        JOIN scan_runs sr ON sr.id=ifs.run_id
+        WHERE sr.trade_date=? AND ifs.feature_version=?
+        """,
+        (latest_scan_date, INSTITUTIONAL_FEATURE_VERSION),
+    ).fetchone()
+    feature_count = int(feature_counts["features"] or 0)
+    complete_count = int(feature_counts["complete"] or 0)
+    coverage_pct = feature_count / candidate_targets * 100 if candidate_targets else 0
+    complete_pct = complete_count / candidate_targets * 100 if candidate_targets else 0
+    source_rows = _read_records(
+        conn,
+        """
+        SELECT market, status, report_date AS reportDate, row_count AS rowCount,
+               source_name AS sourceName, source_url AS sourceUrl,
+               fetched_at AS fetchedAt, error_text AS errorText
+        FROM institutional_flow_fetches
+        WHERE trade_date=?
+        ORDER BY market
+        """,
+        (latest_date,),
+    )
+    candidates = _read_records(
+        conn,
+        """
+        SELECT ce.code, ce.name, ce.industry, ce.score,
+               ifs.source_trade_date AS sourceTradeDate,
+               ifs.observations_20d AS observations20d,
+               ifs.coverage_status AS coverageStatus,
+               ifs.foreign_net_z20 AS foreignNetZ20,
+               ifs.trust_net_z20 AS trustNetZ20,
+               ifs.total_net_z20 AS totalNetZ20,
+               ifs.foreign_streak_days AS foreignStreakDays,
+               ifs.trust_streak_days AS trustStreakDays,
+               ifs.total_streak_days AS totalStreakDays,
+               ifs.agreement_score_1d AS agreementScore1d
+        FROM candidate_events ce
+        LEFT JOIN institutional_feature_snapshots ifs
+          ON ifs.run_id=ce.run_id AND ifs.code=ce.code
+         AND ifs.feature_version=?
+        WHERE ce.run_id=(SELECT MAX(id) FROM scan_runs)
+        ORDER BY ce.score DESC, ce.raw_rank, ce.code
+        LIMIT 30
+        """,
+        (INSTITUTIONAL_FEATURE_VERSION,),
+    )
+    raw = conn.execute(
+        "SELECT COUNT(*) AS rows, COUNT(DISTINCT code) AS symbols "
+        "FROM institutional_flow_daily"
+    ).fetchone()
+    available_sources = sum(row.get("status") == "available" for row in source_rows)
+    status = (
+        "ready"
+        if available_sources == 2 and complete_pct >= 90
+        else "building"
+        if available_sources
+        else "warning"
+    )
+    warnings = [
+        "法人資料採隔日上午 08:30 可用的保守時間點，不會影響同日決策。",
+        "Generation 2 必須累積新的前瞻樣本，歷史資料只供開發，不可直接升級正式排名。",
+    ]
+    if available_sources < 2:
+        warnings.insert(0, "最新交易日的上市或上櫃官方報表尚未完整。")
+    if complete_pct < 90:
+        warnings.insert(0, "候選股尚未累積完整 20 日法人特徵。")
+    return {
+        "featureVersion": INSTITUTIONAL_FEATURE_VERSION,
+        "researchGeneration": "generation_2_institutional",
+        "latestTradeDate": latest_date,
+        "fetchedAt": latest["fetched_at"] or "",
+        "rawRows": int(raw["rows"] or 0),
+        "symbols": int(raw["symbols"] or 0),
+        "candidateTargets": int(candidate_targets or 0),
+        "featureSnapshots": feature_count,
+        "completeFeatures": complete_count,
+        "coveragePct": coverage_pct,
+        "completeCoveragePct": complete_pct,
+        "sources": source_rows,
+        "candidates": candidates,
+        "quality": {
+            "status": status,
+            "formalRankingEnabled": False,
+            "historicalUse": "development_only",
+            "promotionGate": "prospective_generation_2_evidence",
+            "warnings": warnings,
         },
     }
 
@@ -1033,6 +1181,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             if row.get("evidenceMode") == "prospective_only"
         )
         global_market = _global_market_snapshot(conn)
+        institutional_flow = _institutional_flow_snapshot(conn)
         research_experiments = _research_experiment_snapshot(conn)
         model_challengers = _model_challenger_snapshot(conn)
         research_health = _research_health_snapshot(conn)
@@ -1059,6 +1208,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "paperEquity": paper_equity,
             "paperTrades": paper_trades,
             "globalMarket": global_market,
+            "institutionalFlow": institutional_flow,
         }
     finally:
         conn.close()

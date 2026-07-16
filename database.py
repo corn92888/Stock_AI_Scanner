@@ -13,6 +13,7 @@ PAPER_POLICY_VERSION = "risk_budget_portfolio_v2"
 HISTORICAL_REPLAY_VERSION = "point_in_time_eod_replay_v2"
 HISTORICAL_REPLAY_EXECUTION_VERSION = "next_open_after_costs_t3_v1"
 HISTORICAL_ATTRIBUTION_VERSION = "replay_attribution_v1"
+INSTITUTIONAL_FEATURE_VERSION = "institutional_flow_v1_conservative_lag"
 
 
 def get_taipei_now():
@@ -158,6 +159,7 @@ def init_db(conn):
     _create_research_tables(conn)
     _create_historical_replay_tables(conn)
     _create_global_market_tables(conn)
+    _create_institutional_flow_tables(conn)
     _migrate_quant_tables(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_trade_date ON stock_signals(trade_date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_strategy ON stock_signals(strategy)")
@@ -224,6 +226,14 @@ def init_db(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_market_regime_time "
         "ON market_regime_snapshots(snapshot_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_institutional_flow_code_date "
+        "ON institutional_flow_daily(code, trade_date DESC, known_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_institutional_feature_run "
+        "ON institutional_feature_snapshots(run_id, coverage_status)"
     )
     conn.commit()
 
@@ -1047,6 +1057,92 @@ def _create_global_market_tables(conn):
             drivers_json TEXT NOT NULL,
             quality_json TEXT NOT NULL,
             created_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _create_institutional_flow_tables(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS institutional_flow_daily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_date TEXT NOT NULL,
+            code TEXT NOT NULL,
+            name TEXT,
+            market TEXT NOT NULL,
+            foreign_buy_shares INTEGER NOT NULL,
+            foreign_sell_shares INTEGER NOT NULL,
+            foreign_net_shares INTEGER NOT NULL,
+            trust_buy_shares INTEGER NOT NULL,
+            trust_sell_shares INTEGER NOT NULL,
+            trust_net_shares INTEGER NOT NULL,
+            dealer_buy_shares INTEGER NOT NULL,
+            dealer_sell_shares INTEGER NOT NULL,
+            dealer_net_shares INTEGER NOT NULL,
+            total_net_shares INTEGER NOT NULL,
+            known_at TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            source_url TEXT NOT NULL,
+            payload_sha256 TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            UNIQUE (trade_date, code, market)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS institutional_flow_fetches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_date TEXT NOT NULL,
+            market TEXT NOT NULL,
+            status TEXT NOT NULL,
+            report_date TEXT,
+            row_count INTEGER NOT NULL DEFAULT 0,
+            source_name TEXT NOT NULL,
+            source_url TEXT NOT NULL,
+            payload_sha256 TEXT,
+            fetched_at TEXT NOT NULL,
+            error_text TEXT,
+            UNIQUE (trade_date, market)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS institutional_feature_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            code TEXT NOT NULL,
+            decision_at TEXT NOT NULL,
+            source_trade_date TEXT,
+            known_at TEXT,
+            feature_version TEXT NOT NULL,
+            observations_20d INTEGER NOT NULL DEFAULT 0,
+            coverage_status TEXT NOT NULL,
+            foreign_net_shares_1d INTEGER,
+            trust_net_shares_1d INTEGER,
+            dealer_net_shares_1d INTEGER,
+            total_net_shares_1d INTEGER,
+            foreign_net_shares_5d INTEGER,
+            trust_net_shares_5d INTEGER,
+            dealer_net_shares_5d INTEGER,
+            total_net_shares_5d INTEGER,
+            foreign_net_z20 REAL,
+            trust_net_z20 REAL,
+            dealer_net_z20 REAL,
+            total_net_z20 REAL,
+            foreign_buy_ratio_5d REAL,
+            trust_buy_ratio_5d REAL,
+            total_buy_ratio_5d REAL,
+            foreign_streak_days INTEGER,
+            trust_streak_days INTEGER,
+            total_streak_days INTEGER,
+            agreement_score_1d INTEGER,
+            lineage_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (run_id) REFERENCES scan_runs(id),
+            UNIQUE (run_id, code, feature_version)
         )
         """
     )

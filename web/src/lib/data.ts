@@ -3,7 +3,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { DashboardSnapshot, GlobalMarketSnapshot, ReplayAttribution, ResearchHealth, ResearchQuality, WorkflowRun } from "./types";
+import type { DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, ReplayAttribution, ResearchHealth, ResearchQuality, WorkflowRun } from "./types";
 
 const DEFAULT_DATA_URL =
   "https://raw.githubusercontent.com/corn92888/Stock_AI_Scanner/main/data/dashboard_snapshot.json";
@@ -109,6 +109,29 @@ const EMPTY_GLOBAL_MARKET: GlobalMarketSnapshot = {
   },
 };
 
+const EMPTY_INSTITUTIONAL_FLOW: InstitutionalFlowSnapshot = {
+  featureVersion: "institutional_flow_v1_conservative_lag",
+  researchGeneration: "generation_2_institutional",
+  latestTradeDate: "",
+  fetchedAt: "",
+  rawRows: 0,
+  symbols: 0,
+  candidateTargets: 0,
+  featureSnapshots: 0,
+  completeFeatures: 0,
+  coveragePct: 0,
+  completeCoveragePct: 0,
+  sources: [],
+  candidates: [],
+  quality: {
+    status: "unavailable",
+    formalRankingEnabled: false,
+    historicalUse: "development_only",
+    promotionGate: "prospective_generation_2_evidence",
+    warnings: ["法人籌碼資料尚未完成第一次官方收集。"],
+  },
+};
+
 function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnapshot {
   return {
     ...snapshot,
@@ -160,6 +183,18 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
       drivers: snapshot.globalMarket?.drivers ?? [],
       instruments: snapshot.globalMarket?.instruments ?? [],
       history: snapshot.globalMarket?.history ?? [],
+    },
+    institutionalFlow: {
+      ...EMPTY_INSTITUTIONAL_FLOW,
+      ...(snapshot.institutionalFlow ?? {}),
+      sources: snapshot.institutionalFlow?.sources ?? [],
+      candidates: snapshot.institutionalFlow?.candidates ?? [],
+      quality: {
+        ...EMPTY_INSTITUTIONAL_FLOW.quality,
+        ...(snapshot.institutionalFlow?.quality ?? {}),
+        warnings: snapshot.institutionalFlow?.quality?.warnings
+          ?? EMPTY_INSTITUTIONAL_FLOW.quality.warnings,
+      },
     },
   };
 }

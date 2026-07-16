@@ -1,0 +1,161 @@
+name: Historical Institutional Flow Archive
+run-name: Institutional history (${{ inputs.start_year }} to ${{ inputs.end_year }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_year:
+        description: First calendar year to backfill
+        required: true
+        default: "2021"
+        type: string
+      end_year:
+        description: Last calendar year to backfill
+        required: true
+        default: "2025"
+        type: string
+      refresh:
+        description: Re-fetch reports already present in annual shards
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      years: ${{ steps.range.outputs.years }}
+    steps:
+    - name: Validate annual range
+      id: range
+      env:
+        START_YEAR: ${{ inputs.start_year }}
+        END_YEAR: ${{ inputs.end_year }}
+      run: |
+        years=$(python - <<'PY'
+        import json
+        import os
+
+        start = int(os.environ["START_YEAR"])
+        end = int(os.environ["END_YEAR"])
+        if start < 2004 or end < start or end - start > 9:
+            raise SystemExit("Year range must be ordered, start at 2004 or later, and span at most 10 years.")
+        print(json.dumps(list(range(start, end + 1))))
+        PY
+        )
+        echo "years=$years" >> "$GITHUB_OUTPUT"
+
+    - name: Ensure durable research release exists
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if ! gh release view research-institutional-data-v1 \
+          --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          gh release create research-institutional-data-v1 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target main \
+            --title "Historical institutional flow research data" \
+            --notes "Annual point-in-time TWSE and TPEx institutional flow shards."
+        fi
+
+  backfill:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        year: ${{ fromJSON(needs.prepare.outputs.years) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+        cache-dependency-path: requirements-market.txt
+
+    - name: Install collection dependencies
+      run: pip install --prefer-binary -r requirements-market.txt
+
+    - name: Restore annual point-in-time shard
+      env:
+        GH_TOKEN: ${{ github.token }}
+        YEAR: ${{ matrix.year }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/institutional"
+        asset="institutional-flow-${YEAR}.db.gz"
+        if gh release download research-institutional-data-v1 \
+          --repo "$GITHUB_REPOSITORY" \
+          --pattern "$asset" \
+          --dir "$RUNNER_TEMP/institutional" \
+          --clobber; then
+          gzip -dc "$RUNNER_TEMP/institutional/$asset" \
+            > "$RUNNER_TEMP/institutional/institutional-flow-${YEAR}.db"
+        fi
+
+    - name: Backfill official annual reports
+      env:
+        YEAR: ${{ matrix.year }}
+        REFRESH: ${{ inputs.refresh }}
+      run: |
+        args=(
+          --database "$RUNNER_TEMP/institutional/institutional-flow-${YEAR}.db"
+          --start "${YEAR}-01-01"
+          --end "${YEAR}-12-31"
+          --retention-days 0
+          --no-build-features
+        )
+        if [ "$REFRESH" = "true" ]; then
+          args+=(--refresh)
+        fi
+        python institutional_flow.py "${args[@]}"
+
+    - name: Package deterministic annual shard
+      env:
+        YEAR: ${{ matrix.year }}
+      run: |
+        gzip -n -9 -c "$RUNNER_TEMP/institutional/institutional-flow-${YEAR}.db" \
+          > "$RUNNER_TEMP/institutional/institutional-flow-${YEAR}.db.gz"
+        sha256sum "$RUNNER_TEMP/institutional/institutional-flow-${YEAR}.db.gz" \
+          > "$RUNNER_TEMP/institutional/institutional-flow-${YEAR}.db.gz.sha256"
+
+    - name: Publish durable annual shard
+      env:
+        GH_TOKEN: ${{ github.token }}
+        YEAR: ${{ matrix.year }}
+      run: |
+        gh release upload research-institutional-data-v1 \
+          --repo "$GITHUB_REPOSITORY" \
+          "$RUNNER_TEMP/institutional/institutional-flow-${YEAR}.db.gz" \
+          "$RUNNER_TEMP/institutional/institutional-flow-${YEAR}.db.gz.sha256" \
+          --clobber
+
+    - name: Verify annual shard completeness
+      env:
+        YEAR: ${{ matrix.year }}
+      run: |
+        errors=$(sqlite3 "$RUNNER_TEMP/institutional/institutional-flow-${YEAR}.db" \
+          "SELECT COUNT(*) FROM institutional_flow_fetches WHERE status='error';")
+        if [ "$errors" -gt 0 ]; then
+          echo "$errors official source requests remain incomplete; the partial shard was published for resume."
+          exit 1
+        fi
+
+    - name: Upload annual research artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: institutional-flow-${{ matrix.year }}
+        path: |
+          ${{ runner.temp }}/institutional/institutional-flow-${{ matrix.year }}.db.gz
+          ${{ runner.temp }}/institutional/institutional-flow-${{ matrix.year }}.db.gz.sha256
+        retention-days: 30
+        if-no-files-found: warn

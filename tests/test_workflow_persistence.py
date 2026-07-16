@@ -12,6 +12,7 @@ class WorkflowPersistenceTests(unittest.TestCase):
             "daily_scan.yml",
             "global_market.yml",
             "historical_replay.yml",
+            "institutional_flow.yml",
         ):
             workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
             self.assertIn("git pull --ff-only origin main", workflow)
@@ -36,18 +37,23 @@ class WorkflowPersistenceTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "intraday_scan.yml").read_text()
         daily_workflow = (ROOT / ".github" / "workflows" / "daily_scan.yml").read_text()
         market_workflow = (ROOT / ".github" / "workflows" / "global_market.yml").read_text()
+        institutional_workflow = (
+            ROOT / ".github" / "workflows" / "institutional_flow.yml"
+        ).read_text()
         vercel = (ROOT / "web" / "vercel.json").read_text()
 
         self.assertNotIn("schedule:", workflow)
         self.assertNotIn("schedule:", daily_workflow)
         self.assertNotIn("schedule:", market_workflow)
+        self.assertNotIn("schedule:", institutional_workflow)
         self.assertIn('"schedule": "0,30 1-5 * * 1-5"', vercel)
         self.assertIn('"schedule": "17 6 * * 1-5"', vercel)
         self.assertIn('"schedule": "17 * * * 1-5"', vercel)
+        self.assertIn('"schedule": "20 11 * * 1-5"', vercel)
         self.assertIn('SCHEDULED_CRON: ${{ inputs.scheduled_cron }}', workflow)
 
     def test_vercel_cron_routes_fail_closed_with_cron_secret(self):
-        for route_name in ("intraday", "daily", "market"):
+        for route_name in ("intraday", "daily", "market", "institutional"):
             route = (
                 ROOT / "web" / "src" / "app" / "api" / "cron" / route_name / "route.ts"
             ).read_text()
@@ -136,6 +142,7 @@ class WorkflowPersistenceTests(unittest.TestCase):
             "daily_scan.yml",
             "global_market.yml",
             "historical_replay.yml",
+            "institutional_flow.yml",
         ):
             workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
             self.assertRegex(
