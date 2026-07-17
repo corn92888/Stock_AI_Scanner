@@ -84,6 +84,68 @@ export type ResearchExperiment = {
   rejectionReasons: string[];
 };
 
+export type LearnabilityPortfolio = {
+  trades: number;
+  decisionDates: number;
+  participatingDates: number;
+  participationRatePct: number | null;
+  meanDailyNetReturn: number | null;
+  meanDailyExcessReturn: number | null;
+  positiveDayRate: number | null;
+  maxDrawdown: number | null;
+  profitableFoldRate: number | null;
+};
+
+export type LearnabilityAuditRow = {
+  key: string;
+  entryMethod: string;
+  holdingHorizon: number;
+  diagnosis: string;
+  predictionThreshold: number | null;
+  pool: LearnabilityPortfolio & {
+    filledCandidates: number;
+    fillRatePct: number | null;
+    positiveCandidateRate: number | null;
+    profitableTopKCapacityRatePct: number | null;
+  };
+  oracle: LearnabilityPortfolio;
+  formalRule: LearnabilityPortfolio;
+  model: LearnabilityPortfolio & {
+    selectedFillRatePct: number | null;
+    oracleOverlapRatePct: number | null;
+    opportunityCapturePct: number | null;
+    oracleHeadroom: number | null;
+  };
+  rankability: {
+    icDates: number;
+    meanRankIc: number | null;
+    rankIcCi95Low: number | null;
+    rankIcCi95High: number | null;
+    positiveRankIcRate: number | null;
+    topBottomNetSpread: number | null;
+    topBottomExcessSpread: number | null;
+    topBottomDates: number;
+  };
+};
+
+export type CandidateLearnabilityAudit = {
+  auditVersion: string;
+  evaluatedAt: string | null;
+  evaluationScope: string;
+  trainingStart: string | null;
+  trainingEnd: string | null;
+  validationStart: string | null;
+  validationEnd: string | null;
+  holdoutEvaluated: boolean;
+  formalRankingEnabled: boolean;
+  reservedHoldoutTradeDates: number;
+  primarySpecKey: string | null;
+  primaryDiagnosis: string;
+  bestDiagnosticSpecKey: string | null;
+  primary: LearnabilityAuditRow | null;
+  rows: LearnabilityAuditRow[];
+};
+
 export type ResearchHealth = {
   status: "healthy" | "building" | "warning" | "critical";
   checkedAt: string;
@@ -514,6 +576,7 @@ export type DashboardSnapshot = {
   researchHealth: ResearchHealth;
   replayAttribution: ReplayAttribution;
   researchExperiments: ResearchExperiment[];
+  learnabilityAudit: CandidateLearnabilityAudit;
   candidates: Candidate[];
   dailyCandidates: DailyCandidate[];
   statusCounts: { status: string; count: number; label: string }[];

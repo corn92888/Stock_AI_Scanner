@@ -1,0 +1,58 @@
+name: Candidate Learnability Audit
+run-name: Candidate-pool learnability audit
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+    - Historical Point-in-Time Replay
+    types:
+    - completed
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: stock-scanner-automation
+      cancel-in-progress: false
+
+    steps:
+    - name: Checkout latest repository
+      uses: actions/checkout@v4
+
+    - name: Synchronize latest research database
+      run: git pull --ff-only origin main
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    - name: Install research dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-intraday.txt
+
+    - name: Run leakage-safe candidate learnability audit
+      run: |
+        python candidate_learnability_audit.py \
+          --dataset data/replay_training_samples.csv.gz \
+          --db data/stock_scanner.db \
+          --output "$RUNNER_TEMP/candidate_learnability_audit.json"
+
+    - name: Upload diagnostic audit artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: candidate-learnability-audit
+        path: ${{ runner.temp }}/candidate_learnability_audit.json
+        retention-days: 90
+        if-no-files-found: error
+
+    - name: Persist learnability evidence and dashboard
+      run: 'bash persist_scanner_data.sh "chore(data): record candidate learnability evidence"'

@@ -3,7 +3,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, ReplayAttribution, ResearchHealth, ResearchQuality, WorkflowRun } from "./types";
+import type { CandidateLearnabilityAudit, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, ReplayAttribution, ResearchHealth, ResearchQuality, WorkflowRun } from "./types";
 
 const DEFAULT_DATA_URL =
   "https://raw.githubusercontent.com/corn92888/Stock_AI_Scanner/main/data/dashboard_snapshot.json";
@@ -86,6 +86,24 @@ const EMPTY_REPLAY_ATTRIBUTION: ReplayAttribution = {
   rows: [],
 };
 
+const EMPTY_LEARNABILITY_AUDIT: CandidateLearnabilityAudit = {
+  auditVersion: "",
+  evaluatedAt: null,
+  evaluationScope: "historical_development_validation_diagnostic",
+  trainingStart: null,
+  trainingEnd: null,
+  validationStart: null,
+  validationEnd: null,
+  holdoutEvaluated: false,
+  formalRankingEnabled: false,
+  reservedHoldoutTradeDates: 0,
+  primarySpecKey: null,
+  primaryDiagnosis: "not_available",
+  bestDiagnosticSpecKey: null,
+  primary: null,
+  rows: [],
+};
+
 const EMPTY_GLOBAL_MARKET: GlobalMarketSnapshot = {
   modelVersion: "global_regime_shadow_v1",
   snapshotAt: "",
@@ -161,6 +179,11 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
       ...(snapshot.replayAttribution ?? {}),
       dimensions: snapshot.replayAttribution?.dimensions ?? [],
       rows: snapshot.replayAttribution?.rows ?? [],
+    },
+    learnabilityAudit: {
+      ...EMPTY_LEARNABILITY_AUDIT,
+      ...(snapshot.learnabilityAudit ?? {}),
+      rows: snapshot.learnabilityAudit?.rows ?? [],
     },
     researchExperiments: snapshot.researchExperiments ?? [],
     aiModels: snapshot.aiModels ?? [],

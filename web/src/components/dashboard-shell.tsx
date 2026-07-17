@@ -135,6 +135,22 @@ const challengerReasonLabels: Record<string, string> = {
   challenger_fold_stability_failed: "AI 分折穩定度不足",
 };
 
+const executionMethodLabels: Record<string, string> = {
+  next_open: "隔日開盤",
+  next_ohlc4_proxy: "隔日 OHLC4",
+  next_close: "隔日收盤",
+  pullback_2pct_3d: "三日回檔 2%",
+};
+
+const learnabilityDiagnosisLabels: Record<string, string> = {
+  candidate_opportunity_gap: "候選池缺乏成本後機會",
+  feature_rankability_gap: "現有特徵無法穩定排序",
+  execution_fill_gap: "進場成交率不足",
+  portfolio_construction_gap: "門檻與組合建構未捕捉機會",
+  historical_edge_not_promotable: "歷史診斷有優勢，仍不可升級",
+  not_available: "尚未完成稽核",
+};
+
 const tooltipStyle = {
   background: "#151719",
   border: "1px solid #363a3d",
@@ -789,6 +805,8 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const health = snapshot.researchHealth;
   const institutional = snapshot.institutionalFlow;
   const experiments = snapshot.researchExperiments ?? [];
+  const learnability = snapshot.learnabilityAudit;
+  const learnabilityPrimary = learnability.primary;
   const attribution = snapshot.replayAttribution;
   const [attributionDimension, setAttributionDimension] = useState("strategy");
   const [attributionScope, setAttributionScope] = useState<"all" | "selected" | "rejected">("all");
@@ -854,6 +872,22 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
         <Metric label="選股增值" value={pct(research.selectionNetLift3d)} detail={`落選組 ${pct(research.rejectedMeanNetReturn3d)}`} tone={selectionLift > 0 ? "positive" : "danger"} icon={Target} />
         <Metric label="獨立交易日" value={number.format(research.uniqueTradeDates)} detail={research.executionVersion} tone={research.uniqueTradeDates >= 120 ? "positive" : "warning"} icon={Clock3} />
       </section>
+
+      {learnabilityPrimary ? <>
+        <section className="metrics-grid metrics-grid-five">
+          <Metric label="候選池 Oracle 上限" value={pct(learnabilityPrimary.oracle.meanDailyNetReturn)} detail={`T+${learnabilityPrimary.holdingHorizon} · 事後每日 Top 3`} tone={(learnabilityPrimary.oracle.meanDailyNetReturn ?? 0) > 0 ? "positive" : "danger"} icon={Target} />
+          <Metric label="AI 樣本外淨報酬" value={pct(learnabilityPrimary.model.meanDailyNetReturn)} detail={`超額 ${pct(learnabilityPrimary.model.meanDailyExcessReturn)}`} tone={(learnabilityPrimary.model.meanDailyNetReturn ?? 0) > 0 && (learnabilityPrimary.model.meanDailyExcessReturn ?? 0) > 0 ? "positive" : "danger"} icon={Bot} />
+          <Metric label="樣本外 Rank IC" value={learnabilityPrimary.rankability.meanRankIc == null ? "--" : decimal.format(learnabilityPrimary.rankability.meanRankIc)} detail={`${number.format(learnabilityPrimary.rankability.icDates)} 個橫斷面交易日`} tone={(learnabilityPrimary.rankability.rankIcCi95Low ?? -1) > 0 ? "positive" : "warning"} icon={BarChart3} />
+          <Metric label="預測前後分位差" value={pct(learnabilityPrimary.rankability.topBottomExcessSpread)} detail="前 20% 減後 20% 超額" tone={(learnabilityPrimary.rankability.topBottomExcessSpread ?? 0) > 0 ? "positive" : "danger"} icon={Layers3} />
+          <Metric label="Oracle 捕捉率" value={rate(learnabilityPrimary.model.opportunityCapturePct)} detail={`重疊 ${rate(learnabilityPrimary.model.oracleOverlapRatePct)}`} tone={(learnabilityPrimary.model.opportunityCapturePct ?? 0) > 0 ? "positive" : "danger"} icon={Gauge} />
+        </section>
+
+        <section className="panel">
+          <PanelHeader eyebrow="Candidate learnability audit" title="候選池可學習性稽核" description={`訓練 ${learnability.trainingStart ?? "--"} 至 ${learnability.trainingEnd ?? "--"} · 驗證 ${learnability.validationStart ?? "--"} 至 ${learnability.validationEnd ?? "--"} · 保留 ${number.format(learnability.reservedHoldoutTradeDates)} 個 holdout 交易日`} trailing={<span className="record-count">{learnability.auditVersion}</span>} />
+          <div className="readiness-callout"><CircleAlert size={19} /><div><strong>主要診斷：{learnabilityDiagnosisLabels[learnability.primaryDiagnosis] ?? learnability.primaryDiagnosis}</strong><p>Oracle 是不可交易的事後上限，只用來確認候選池是否存在機會。所有 AI 指標均由 development 訓練、validation 評估；正式排名維持關閉，既有 holdout 未被讀取。</p></div></div>
+          <div className="table-scroll"><table className="data-table compact-table strategy-table"><thead><tr><th>進場 / 持有</th><th>候選池</th><th>Oracle 上限</th><th>AI 淨報酬 / 超額</th><th>Rank IC</th><th>前後分位超額差</th><th>成交 / 捕捉</th><th>診斷</th></tr></thead><tbody>{learnability.rows.map((row) => <tr key={row.key}><td><strong>{executionMethodLabels[row.entryMethod] ?? row.entryMethod}</strong><br /><small>T+{row.holdingHorizon} · Q80</small></td><td><strong>{number.format(row.pool.filledCandidates)} 筆</strong><br /><small>正報酬 {rate(row.pool.positiveCandidateRate)} · 可湊 Top 3 {rate(row.pool.profitableTopKCapacityRatePct)}</small></td><td className={(row.oracle.meanDailyNetReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.oracle.meanDailyNetReturn)}<br /><small>超額 {pct(row.oracle.meanDailyExcessReturn)}</small></td><td className={(row.model.meanDailyNetReturn ?? 0) >= 0 && (row.model.meanDailyExcessReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.model.meanDailyNetReturn)} / {pct(row.model.meanDailyExcessReturn)}<br /><small>{number.format(row.model.trades)} 筆 · 參與 {rate(row.model.participationRatePct)}</small></td><td>{row.rankability.meanRankIc == null ? "--" : decimal.format(row.rankability.meanRankIc)}<br /><small>{row.rankability.rankIcCi95Low == null || row.rankability.rankIcCi95High == null ? "區間不足" : `${decimal.format(row.rankability.rankIcCi95Low)} ～ ${decimal.format(row.rankability.rankIcCi95High)}`}</small></td><td className={(row.rankability.topBottomExcessSpread ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.rankability.topBottomExcessSpread)}<br /><small>{number.format(row.rankability.topBottomDates)} 日</small></td><td>成交 {rate(row.model.selectedFillRatePct)}<br /><small>捕捉 {rate(row.model.opportunityCapturePct)} · 重疊 {rate(row.model.oracleOverlapRatePct)}</small></td><td><span className={`status-pill ${row.diagnosis === "historical_edge_not_promotable" ? "selected" : "blocked"}`}>{learnabilityDiagnosisLabels[row.diagnosis] ?? row.diagnosis}</span></td></tr>)}</tbody></table></div>
+        </section>
+      </> : null}
 
       <section className="panel">
         <PanelHeader eyebrow="Strategy tournament" title="策略競賽與升級判定" description="正式實驗顯示隔離 holdout；法人研究只顯示開發與驗證期消融，保留全新前瞻世代作最終確認" trailing={<span className="record-count">{experiments.length} 組</span>} />

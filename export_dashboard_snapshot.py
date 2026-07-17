@@ -385,6 +385,7 @@ def _research_experiment_snapshot(conn):
         FROM research_experiments re
         LEFT JOIN latest
           ON latest.experiment_id=re.id AND latest.row_number=1
+        WHERE re.strategy_family <> 'diagnostic_learnability'
         ORDER BY COALESCE(latest.qualified, 0) DESC,
                  COALESCE(latest.mean_excess_return, -999999) DESC,
                  re.id
@@ -413,6 +414,131 @@ def _research_experiment_snapshot(conn):
         row["institutionalCondition"] = metrics.get("institutional_condition")
         row["modelVersion"] = metrics.get("model_version")
     return rows
+
+
+def _empty_learnability_audit():
+    return {
+        "auditVersion": "",
+        "evaluatedAt": None,
+        "evaluationScope": "historical_development_validation_diagnostic",
+        "trainingStart": None,
+        "trainingEnd": None,
+        "validationStart": None,
+        "validationEnd": None,
+        "holdoutEvaluated": False,
+        "formalRankingEnabled": False,
+        "reservedHoldoutTradeDates": 0,
+        "primarySpecKey": None,
+        "primaryDiagnosis": "not_available",
+        "bestDiagnosticSpecKey": None,
+        "primary": None,
+        "rows": [],
+    }
+
+
+def _learnability_portfolio(metrics):
+    metrics = metrics if isinstance(metrics, dict) else {}
+    return {
+        "trades": metrics.get("trades", 0),
+        "decisionDates": metrics.get("decision_dates", 0),
+        "participatingDates": metrics.get("participating_dates", 0),
+        "participationRatePct": metrics.get("participation_rate_pct"),
+        "meanDailyNetReturn": metrics.get("mean_daily_net_return"),
+        "meanDailyExcessReturn": metrics.get("mean_daily_excess_return"),
+        "positiveDayRate": metrics.get("positive_day_rate"),
+        "maxDrawdown": metrics.get("max_drawdown"),
+        "profitableFoldRate": metrics.get("profitable_fold_rate"),
+    }
+
+
+def _learnability_row(metrics):
+    metrics = metrics if isinstance(metrics, dict) else {}
+    pool = metrics.get("pool") or {}
+    model = metrics.get("model") or {}
+    rankability = metrics.get("rankability") or {}
+    training = metrics.get("training") or {}
+    return {
+        "key": metrics.get("key", ""),
+        "entryMethod": metrics.get("entry_method", ""),
+        "holdingHorizon": metrics.get("holding_horizon", 0),
+        "diagnosis": metrics.get("diagnosis", "not_available"),
+        "predictionThreshold": training.get("prediction_threshold"),
+        "pool": {
+            **_learnability_portfolio(pool),
+            "filledCandidates": pool.get("filled_candidates", 0),
+            "fillRatePct": pool.get("fill_rate_pct"),
+            "positiveCandidateRate": pool.get("positive_candidate_rate"),
+            "profitableTopKCapacityRatePct": pool.get(
+                "profitable_top_k_capacity_rate_pct"
+            ),
+        },
+        "oracle": _learnability_portfolio(metrics.get("oracle")),
+        "formalRule": _learnability_portfolio(metrics.get("formal_rule")),
+        "model": {
+            **_learnability_portfolio(model),
+            "selectedFillRatePct": model.get("selected_fill_rate_pct"),
+            "oracleOverlapRatePct": model.get("oracle_overlap_rate_pct"),
+            "opportunityCapturePct": model.get("opportunity_capture_pct"),
+            "oracleHeadroom": model.get("oracle_headroom"),
+        },
+        "rankability": {
+            "icDates": rankability.get("ic_dates", 0),
+            "meanRankIc": rankability.get("mean_rank_ic"),
+            "rankIcCi95Low": rankability.get("rank_ic_ci95_low"),
+            "rankIcCi95High": rankability.get("rank_ic_ci95_high"),
+            "positiveRankIcRate": rankability.get("positive_rank_ic_rate"),
+            "topBottomNetSpread": rankability.get("top_bottom_net_spread"),
+            "topBottomExcessSpread": rankability.get(
+                "top_bottom_excess_spread"
+            ),
+            "topBottomDates": rankability.get("top_bottom_dates", 0),
+        },
+    }
+
+
+def _learnability_audit_snapshot(conn):
+    if not _table_exists(conn, "research_experiments") or not _table_exists(
+        conn, "experiment_evaluations"
+    ):
+        return _empty_learnability_audit()
+    row = conn.execute(
+        """
+        SELECT ee.evaluated_at, ee.metrics_json
+        FROM research_experiments re
+        JOIN experiment_evaluations ee ON ee.experiment_id=re.id
+        WHERE re.experiment_key='candidate_pool_learnability_audit_v1'
+        ORDER BY ee.evaluated_at DESC, ee.id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if not row:
+        return _empty_learnability_audit()
+    metrics = _decode_object(row["metrics_json"])
+    return {
+        "auditVersion": metrics.get("audit_version", ""),
+        "evaluatedAt": row["evaluated_at"],
+        "evaluationScope": metrics.get("evaluation_scope"),
+        "trainingStart": metrics.get("training_start"),
+        "trainingEnd": metrics.get("training_end"),
+        "validationStart": metrics.get("validation_start"),
+        "validationEnd": metrics.get("validation_end"),
+        "holdoutEvaluated": bool(metrics.get("holdout_evaluated", False)),
+        "formalRankingEnabled": bool(
+            metrics.get("formal_ranking_enabled", False)
+        ),
+        "reservedHoldoutTradeDates": metrics.get(
+            "reserved_holdout_trade_dates", 0
+        ),
+        "primarySpecKey": metrics.get("primary_spec_key"),
+        "primaryDiagnosis": metrics.get("primary_diagnosis", "not_available"),
+        "bestDiagnosticSpecKey": metrics.get("best_diagnostic_spec_key"),
+        "primary": (
+            _learnability_row(metrics.get("primary"))
+            if metrics.get("primary")
+            else None
+        ),
+        "rows": [_learnability_row(item) for item in metrics.get("rows", [])],
+    }
 
 
 def _model_challenger_snapshot(conn):
@@ -1192,6 +1318,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
         global_market = _global_market_snapshot(conn)
         institutional_flow = _institutional_flow_snapshot(conn)
         research_experiments = _research_experiment_snapshot(conn)
+        learnability_audit = _learnability_audit_snapshot(conn)
         model_challengers = _model_challenger_snapshot(conn)
         research_health = _research_health_snapshot(conn)
         replay_attribution = _replay_attribution_snapshot(conn)
@@ -1205,6 +1332,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "researchHealth": research_health,
             "replayAttribution": replay_attribution,
             "researchExperiments": research_experiments,
+            "learnabilityAudit": learnability_audit,
             "candidates": candidates,
             "dailyCandidates": daily_candidates,
             "statusCounts": status_counts,

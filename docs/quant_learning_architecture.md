@@ -78,3 +78,5 @@ GitHub cron 只負責頻繁喚醒，`automation_guard.py` 依台北時間決定�
 LLM 只負責把新聞與研究結果轉成結構化證據、產生錯誤歸因與提出特徵假設；它不能直接修改正式權重或自動部署模型。
 
 法人資料的第二階段採兩層治理：development-only 歸因先在固定的策略、廣度、流動性、量能與法人共識矩陣中產生條件假設；被選中的條件必須先寫入版本控制，之後才可執行 validation 消融。既有 holdout 持續封存，正式升級只接受新世代前瞻與模擬投資證據。
+
+當增量研究仍為負時，`candidate_learnability_audit.py` 先比較候選池 Oracle 上限、樣本外 Rank IC、預測前後分位差、Q80 Top 3 捕捉率與四種執行情境，再判斷應重做候選生成、特徵、組合門檻或進場方式。此稽核只使用 development 與 validation，不能產生升級資格。

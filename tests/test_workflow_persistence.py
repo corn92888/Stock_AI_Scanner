@@ -172,12 +172,28 @@ class WorkflowPersistenceTests(unittest.TestCase):
             "historical_replay.yml",
             "institutional_flow.yml",
             "institutional_research.yml",
+            "learnability_audit.yml",
         ):
             workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
             self.assertRegex(
                 workflow,
                 r'bash persist_scanner_data\.sh "chore\(data\): (record|refresh)',
             )
+
+    def test_learnability_audit_runs_after_replay_and_preserves_holdout(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "learnability_audit.yml"
+        ).read_text()
+        audit_index = workflow.index("python candidate_learnability_audit.py")
+        artifact_index = workflow.index("actions/upload-artifact@v4")
+        persistence_index = workflow.index("bash persist_scanner_data.sh")
+
+        self.assertIn("workflow_run:", workflow)
+        self.assertIn("Historical Point-in-Time Replay", workflow)
+        self.assertIn("data/replay_training_samples.csv.gz", workflow)
+        self.assertIn("retention-days: 90", workflow)
+        self.assertLess(audit_index, artifact_index)
+        self.assertLess(artifact_index, persistence_index)
 
 
 if __name__ == "__main__":
