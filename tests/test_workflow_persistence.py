@@ -15,12 +15,14 @@ class WorkflowPersistenceTests(unittest.TestCase):
             "institutional_flow.yml",
             "institutional_research.yml",
             "learnability_audit.yml",
+            "cloud_evidence_audit.yml",
         ):
             workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
             self.assertIn("git pull --ff-only origin main", workflow)
             self.assertIn("bash restore_scanner_data.sh", workflow)
             self.assertIn("bash persist_scanner_data.sh", workflow)
             self.assertIn("SUPABASE_SERVICE_ROLE_KEY", workflow)
+            self.assertIn("CLOUD_EVIDENCE_MODE", workflow)
             self.assertNotIn("git pull --rebase origin main\n            git push", workflow)
 
     def test_snapshot_is_exported_after_main_is_synchronized(self):
@@ -41,6 +43,29 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertIn('CLOUD_EVIDENCE_ARCHIVE: "true"', workflow)
         self.assertIn("cloud_args+=(--archive-daily)", script)
         self.assertIn("cloud_args+=(--required)", script)
+        self.assertIn("cloud_evidence.py prune", script)
+        self.assertIn("CLOUD_EVIDENCE_RETENTION_DAYS", script)
+
+    def test_cloud_primary_requires_restore_and_stops_committing_sqlite(self):
+        restore_script = (ROOT / "restore_scanner_data.sh").read_text()
+        persist_script = (ROOT / "persist_scanner_data.sh").read_text()
+        gitignore = (ROOT / ".gitignore").read_text()
+
+        self.assertIn("cloud_primary)", restore_script)
+        self.assertIn("args=(restore --database data/stock_scanner.db --required)", restore_script)
+        self.assertIn('if [ "$migration_mode" = "dual_write" ]; then', persist_script)
+        self.assertIn("git add data/stock_scanner.db", persist_script)
+        self.assertIn("data/stock_scanner.db", gitignore)
+
+    def test_manual_cloud_audit_publishes_a_machine_readable_gate(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "cloud_evidence_audit.yml"
+        ).read_text()
+        self.assertIn("cloud_evidence.py audit", workflow)
+        self.assertIn('--github-output "$GITHUB_OUTPUT"', workflow)
+        self.assertIn("cloud-evidence-cutover-audit", workflow)
+        self.assertIn("steps.audit.outputs.ready", workflow)
+        self.assertIn("chore(data): record cloud cutover audit", workflow)
 
     def test_intraday_workflow_installs_only_runtime_dependencies(self):
         workflow = (ROOT / ".github" / "workflows" / "intraday_scan.yml").read_text()
@@ -186,6 +211,7 @@ class WorkflowPersistenceTests(unittest.TestCase):
             "institutional_flow.yml",
             "institutional_research.yml",
             "learnability_audit.yml",
+            "cloud_evidence_audit.yml",
         ):
             workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
             self.assertRegex(

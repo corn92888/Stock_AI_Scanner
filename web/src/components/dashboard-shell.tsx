@@ -1101,6 +1101,7 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
   const lastBacktest = snapshot.backtestRuns[0];
   const cloudEvidence = snapshot.cloudEvidence;
   const cloudVerified = cloudEvidence.status === "verified";
+  const cutoverReady = cloudEvidence.cutoverReady;
   const healthChecks = [
     { label: "公開資料快照", ok: snapshotFresh, detail: formatDateTime(snapshot.generatedAt) },
     { label: "GitHub Actions API", ok: workflowRuns.length > 0, detail: `${workflowRuns.length} 筆執行紀錄` },
@@ -1109,6 +1110,7 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
     { label: "前瞻標註未逾期", ok: snapshot.researchHealth.staleOutcomes === 0, detail: `${snapshot.researchHealth.staleOutcomes} 筆逾期` },
     { label: "歷史重播證據", ok: snapshot.researchHealth.completedReplayRuns > 0, detail: snapshot.researchHealth.latestReplayAt ? formatDateTime(snapshot.researchHealth.latestReplayAt) : "尚未執行" },
     { label: "Supabase 證據快照", ok: cloudVerified, detail: cloudEvidence.eventAt ? `${formatDateTime(cloudEvidence.eventAt)} · run ${cloudEvidence.latestScanRunId ?? "--"}` : "尚未驗證" },
+    { label: "Cloud Primary 切換閘門", ok: cutoverReady, detail: cloudEvidence.auditAt ? `${cloudEvidence.passedChecks}/${cloudEvidence.totalChecks} · ${formatDateTime(cloudEvidence.auditAt)}` : "尚未執行驗收" },
   ];
   return (
     <div className="view-stack">
@@ -1117,7 +1119,7 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
         <Metric label="執行成功率" value={`${decimal.format(workflowSuccessRate)}%`} detail={`最近 ${completed.length} 筆已完成`} tone={workflowSuccessRate >= 80 ? "positive" : "warning"} icon={CheckCircle2} />
         <Metric label="最近成功" value={latestSuccess ? modeLabel(latestSuccess.name.includes("Intraday") ? "intraday" : "eod") : "--"} detail={formatDateTime(latestSuccess?.updatedAt)} icon={Clock3} />
         <Metric label="最近失敗" value={latestFailed ? "需檢查" : "無"} detail={latestFailed ? formatDateTime(latestFailed.updatedAt) : "最近紀錄未見失敗"} tone={latestFailed ? "danger" : "positive"} icon={TriangleAlert} />
-        <Metric label="雲端證據" value={cloudVerified ? "VERIFIED" : cloudEvidence.status === "failed" ? "FAILED" : "PENDING"} detail={cloudEvidence.eventAt ? formatDateTime(cloudEvidence.eventAt) : "等待首次同步"} tone={cloudVerified ? "positive" : cloudEvidence.status === "failed" ? "danger" : "warning"} icon={Database} />
+        <Metric label="切換資格" value={cutoverReady ? "READY" : cloudEvidence.auditStatus === "blocked" ? "BLOCKED" : "PENDING"} detail={cloudEvidence.auditAt ? `${cloudEvidence.passedChecks}/${cloudEvidence.totalChecks} 項通過` : "等待首次驗收"} tone={cutoverReady ? "positive" : cloudEvidence.auditStatus === "blocked" ? "danger" : "warning"} icon={Database} />
       </section>
 
       <section className="operations-grid">
@@ -1132,6 +1134,19 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
           <div className="health-list">{healthChecks.map((check) => <div className="health-row" key={check.label}><span className={check.ok ? "ok" : "warn"}>{check.ok ? <CircleCheck size={16} /> : <TriangleAlert size={16} />}</span><div><strong>{check.label}</strong><small>{check.detail}</small></div><span>{check.ok ? "正常" : "注意"}</span></div>)}</div>
           <div className="permission-note"><Database size={17} /><p>{cloudEvidence.message} 目前模式：{cloudEvidence.migrationMode === "dual_write" ? "雲端與 Git 雙寫驗證" : "雲端主儲存"}。</p></div>
         </div>
+      </section>
+
+      <section className="panel workflow-panel">
+        <PanelHeader eyebrow="Data plane" title="Cloud Primary 切換驗收" description="上線前需通過雲端時效、每日備份、跨工作流寫入、雙重雜湊、SQLite 還原與資料筆數一致性" trailing={<span className="record-count">{cloudEvidence.passedChecks}/{cloudEvidence.totalChecks || "--"} 通過</span>} />
+        <div className="cloud-audit-summary">
+          <dl>
+            <div><dt>目前模式</dt><dd>{cloudEvidence.migrationMode === "cloud_primary" ? "Cloud Primary" : "Dual Write"}</dd></div>
+            <div><dt>每日快照</dt><dd>{cloudEvidence.dailySnapshots}</dd></div>
+            <div><dt>驗證寫入</dt><dd>{cloudEvidence.verifiedPushes}</dd></div>
+            <div><dt>來源工作流</dt><dd>{cloudEvidence.workflowCount}</dd></div>
+          </dl>
+        </div>
+        <div className="table-scroll"><table className="data-table compact-table cloud-audit-table"><thead><tr><th>驗收項目</th><th>狀態</th><th>目前證據</th><th>要求</th></tr></thead><tbody>{cloudEvidence.cutoverChecks.length ? cloudEvidence.cutoverChecks.map((check) => <tr key={check.key}><td>{check.label}</td><td><span className={`status-pill ${check.passed ? "selected" : "blocked"}`}>{check.passed ? "通過" : "阻擋"}</span></td><td>{check.detail}</td><td>{check.requirement}</td></tr>) : <tr><td colSpan={4}>尚未執行 Cloud Primary 切換稽核；目前仍由 Git 資料庫安全備援。</td></tr>}</tbody></table></div>
       </section>
 
       <section className="panel workflow-panel">

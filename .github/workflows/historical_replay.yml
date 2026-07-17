@@ -46,6 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
+      CLOUD_EVIDENCE_MODE: ${{ vars.CLOUD_EVIDENCE_MODE || 'dual_write' }}
       CLOUD_EVIDENCE_REQUIRED: ${{ vars.CLOUD_EVIDENCE_REQUIRED || 'false' }}
       EVIDENCE_WORKFLOW: historical_replay
     concurrency:
@@ -230,7 +231,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      CLOUD_EVIDENCE_MODE: ${{ vars.CLOUD_EVIDENCE_MODE || 'dual_write' }}
       CLOUD_EVIDENCE_REQUIRED: ${{ vars.CLOUD_EVIDENCE_REQUIRED || 'false' }}
+      CLOUD_EVIDENCE_RETENTION_DAYS: ${{ vars.CLOUD_EVIDENCE_RETENTION_DAYS || '45' }}
       CLOUD_EVIDENCE_ARCHIVE: "true"
       EVIDENCE_WORKFLOW: historical_replay_persist
     concurrency:

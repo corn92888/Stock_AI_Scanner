@@ -152,17 +152,41 @@ CREATE TABLE IF NOT EXISTS public.scanner_evidence_sync_events (
     details jsonb NOT NULL DEFAULT '{}'::jsonb
 );
 
+CREATE TABLE IF NOT EXISTS public.scanner_evidence_cutover_audits (
+    audited_at timestamptz PRIMARY KEY,
+    audit_version text NOT NULL,
+    migration_mode text NOT NULL CHECK (
+        migration_mode IN ('dual_write', 'cloud_primary')
+    ),
+    status text NOT NULL CHECK (status IN ('ready', 'blocked')),
+    ready boolean NOT NULL DEFAULT false,
+    latest_scan_run_id bigint,
+    latest_trade_date date,
+    daily_snapshot_count integer NOT NULL DEFAULT 0,
+    verified_push_count integer NOT NULL DEFAULT 0,
+    workflow_count integer NOT NULL DEFAULT 0,
+    passed_checks integer NOT NULL DEFAULT 0,
+    total_checks integer NOT NULL DEFAULT 0,
+    checks jsonb NOT NULL DEFAULT '[]'::jsonb,
+    report jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
 CREATE INDEX IF NOT EXISTS idx_scanner_evidence_snapshots_time
     ON public.scanner_evidence_snapshots (snapshot_at DESC);
 CREATE INDEX IF NOT EXISTS idx_scanner_evidence_events_time
     ON public.scanner_evidence_sync_events (event_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scanner_evidence_audits_time
+    ON public.scanner_evidence_cutover_audits (audited_at DESC);
 
 ALTER TABLE public.scanner_evidence_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.scanner_evidence_sync_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.scanner_evidence_cutover_audits ENABLE ROW LEVEL SECURITY;
 
 REVOKE ALL ON public.scanner_evidence_snapshots FROM anon, authenticated;
 REVOKE ALL ON public.scanner_evidence_sync_events FROM anon, authenticated;
+REVOKE ALL ON public.scanner_evidence_cutover_audits FROM anon, authenticated;
 GRANT ALL ON public.scanner_evidence_snapshots TO service_role;
 GRANT ALL ON public.scanner_evidence_sync_events TO service_role;
+GRANT ALL ON public.scanner_evidence_cutover_audits TO service_role;
 GRANT USAGE, SELECT ON SEQUENCE public.scanner_evidence_sync_events_id_seq
     TO service_role;

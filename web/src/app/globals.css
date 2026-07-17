@@ -480,6 +480,13 @@ button.action-link[aria-busy="true"]:disabled { cursor: wait; }
 .health-row strong { font-size: 10px; }
 .health-row small { margin-top: 3px; color: var(--faint); font-size: 9px; }
 .health-row > span:last-child { color: var(--muted); font-size: 9px; }
+.cloud-audit-summary dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border-bottom: 1px solid var(--border); }
+.cloud-audit-summary dl > div { min-width: 0; padding: 14px 17px; border-right: 1px solid var(--border); }
+.cloud-audit-summary dl > div:last-child { border-right: 0; }
+.cloud-audit-summary dt { color: var(--faint); font-size: 9px; }
+.cloud-audit-summary dd { margin: 6px 0 0; font-family: var(--font-geist-mono), monospace; font-size: 11px; }
+.cloud-audit-table { min-width: 760px; }
+.cloud-audit-table td:nth-child(3) { max-width: 520px; overflow: hidden; text-overflow: ellipsis; }
 .workflow-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 5px 16px 12px; }
 .workflow-grid .workflow-row:nth-child(odd) { border-right: 1px solid var(--border); padding-right: 14px; }
 .workflow-grid .workflow-row:nth-child(even) { padding-left: 14px; }
@@ -507,6 +514,12 @@ button.action-link[aria-busy="true"]:disabled { cursor: wait; }
   .paper-policy-grid > div:nth-child(-n+3) { border-bottom: 1px solid var(--border); }
   .decision-toolbar .search-control { width: 100%; margin-left: 0; }
   .market-analysis-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 720px) {
+  .cloud-audit-summary dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cloud-audit-summary dl > div:nth-child(2) { border-right: 0; }
+  .cloud-audit-summary dl > div:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
 }
 
 @media (max-width: 840px) {

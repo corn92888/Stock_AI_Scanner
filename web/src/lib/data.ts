@@ -95,6 +95,16 @@ const EMPTY_CLOUD_EVIDENCE: CloudEvidence = {
   latestScanRunId: null,
   latestTradeDate: "",
   sourceWorkflow: "",
+  auditVersion: "",
+  auditStatus: "not_run",
+  auditAt: "",
+  cutoverReady: false,
+  passedChecks: 0,
+  totalChecks: 0,
+  dailySnapshots: 0,
+  verifiedPushes: 0,
+  workflowCount: 0,
+  cutoverChecks: [],
   message: "雲端證據層尚未完成第一次驗證。",
 };
 

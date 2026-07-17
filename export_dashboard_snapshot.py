@@ -56,43 +56,103 @@ def _cloud_evidence_snapshot(conn):
         "latestScanRunId": None,
         "latestTradeDate": "",
         "sourceWorkflow": "",
+        "auditVersion": "",
+        "auditStatus": "not_run",
+        "auditAt": "",
+        "cutoverReady": False,
+        "passedChecks": 0,
+        "totalChecks": 0,
+        "dailySnapshots": 0,
+        "verifiedPushes": 0,
+        "workflowCount": 0,
+        "cutoverChecks": [],
         "message": "雲端證據層尚未完成第一次驗證。",
     }
     if not _table_exists(conn, "cloud_evidence_events"):
         return default
+    event_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(cloud_evidence_events)")
+    }
+    migration_mode_column = (
+        "migration_mode" if "migration_mode" in event_columns else "'dual_write'"
+    )
     row = conn.execute(
-        """
+        f"""
         SELECT event_at, operation, status, schema_version, snapshot_key,
                object_path, database_sha256, database_bytes, compressed_bytes,
-               latest_scan_run_id, latest_trade_date, source_workflow
+               latest_scan_run_id, latest_trade_date, source_workflow,
+               {migration_mode_column} AS migration_mode
         FROM cloud_evidence_events
         ORDER BY event_at DESC, id DESC
         LIMIT 1
         """
     ).fetchone()
-    if not row:
+    audit = None
+    if _table_exists(conn, "cloud_evidence_audits"):
+        audit = conn.execute(
+            """
+            SELECT audited_at, audit_version, migration_mode, status, ready,
+                   daily_snapshot_count, verified_push_count, workflow_count,
+                   passed_checks, total_checks, checks_json
+            FROM cloud_evidence_audits
+            ORDER BY audited_at DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    if not row and not audit:
         return default
+    migration_mode = (
+        (row["migration_mode"] if row else None)
+        or (audit["migration_mode"] if audit else None)
+        or "dual_write"
+    )
     messages = {
         "verified": "雲端快照已完成上傳、下載與雜湊校驗。",
-        "failed": "最近一次雲端證據同步失敗，Git 資料庫備援仍保留。",
-        "unconfigured": "Supabase 證據層尚未完成設定，仍由 Git 資料庫備援。",
+        "failed": (
+            "最近一次雲端證據同步失敗，Cloud Primary 工作會停止。"
+            if migration_mode == "cloud_primary"
+            else "最近一次雲端證據同步失敗，Git 資料庫備援仍保留。"
+        ),
+        "unconfigured": (
+            "Supabase 證據層尚未完成設定，Cloud Primary 不可啟用。"
+            if migration_mode == "cloud_primary"
+            else "Supabase 證據層尚未完成設定，仍由 Git 資料庫備援。"
+        ),
     }
-    status = row["status"]
+    status = row["status"] if row else "unconfigured"
+    checks = []
+    if audit and audit["checks_json"]:
+        try:
+            checks = json.loads(audit["checks_json"])
+        except (TypeError, json.JSONDecodeError):
+            checks = []
     return {
         **default,
-        "schemaVersion": row["schema_version"],
+        "schemaVersion": row["schema_version"] if row else default["schemaVersion"],
+        "migrationMode": migration_mode,
+        "gitDatabaseFallback": migration_mode != "cloud_primary",
         "configured": status != "unconfigured",
         "status": status,
-        "operation": row["operation"],
-        "eventAt": row["event_at"],
-        "snapshotKey": row["snapshot_key"] or "live",
-        "objectPath": row["object_path"] or "",
-        "databaseSha256": row["database_sha256"] or "",
-        "databaseBytes": int(row["database_bytes"] or 0),
-        "compressedBytes": int(row["compressed_bytes"] or 0),
-        "latestScanRunId": row["latest_scan_run_id"],
-        "latestTradeDate": row["latest_trade_date"] or "",
-        "sourceWorkflow": row["source_workflow"] or "",
+        "operation": row["operation"] if row else "",
+        "eventAt": row["event_at"] if row else "",
+        "snapshotKey": (row["snapshot_key"] if row else None) or "live",
+        "objectPath": (row["object_path"] if row else None) or "",
+        "databaseSha256": (row["database_sha256"] if row else None) or "",
+        "databaseBytes": int((row["database_bytes"] if row else None) or 0),
+        "compressedBytes": int((row["compressed_bytes"] if row else None) or 0),
+        "latestScanRunId": row["latest_scan_run_id"] if row else None,
+        "latestTradeDate": (row["latest_trade_date"] if row else None) or "",
+        "sourceWorkflow": (row["source_workflow"] if row else None) or "",
+        "auditVersion": audit["audit_version"] if audit else "",
+        "auditStatus": audit["status"] if audit else "not_run",
+        "auditAt": audit["audited_at"] if audit else "",
+        "cutoverReady": bool(audit["ready"]) if audit else False,
+        "passedChecks": int(audit["passed_checks"] or 0) if audit else 0,
+        "totalChecks": int(audit["total_checks"] or 0) if audit else 0,
+        "dailySnapshots": int(audit["daily_snapshot_count"] or 0) if audit else 0,
+        "verifiedPushes": int(audit["verified_push_count"] or 0) if audit else 0,
+        "workflowCount": int(audit["workflow_count"] or 0) if audit else 0,
+        "cutoverChecks": checks,
         "message": messages.get(status, "雲端證據層正在建立。"),
     }
 

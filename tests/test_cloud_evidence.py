@@ -1,4 +1,5 @@
 import gzip
+import json
 import os
 import sqlite3
 import tempfile
@@ -14,6 +15,7 @@ class FakeSupabaseEvidenceClient:
     objects = {}
     snapshots = {}
     events = []
+    audits = []
 
     def __init__(self, config):
         self.config = config
@@ -23,6 +25,7 @@ class FakeSupabaseEvidenceClient:
         cls.objects = {}
         cls.snapshots = {}
         cls.events = []
+        cls.audits = []
 
     def upload(self, object_path, content):
         self.__class__.objects[object_path] = content
@@ -31,9 +34,13 @@ class FakeSupabaseEvidenceClient:
         return self.__class__.objects[object_path]
 
     def upsert(self, table, payload, conflict_column):
-        assert table == "scanner_evidence_snapshots"
-        assert conflict_column == "snapshot_key"
-        self.__class__.snapshots[payload["snapshot_key"]] = dict(payload)
+        if table == "scanner_evidence_snapshots":
+            assert conflict_column == "snapshot_key"
+            self.__class__.snapshots[payload["snapshot_key"]] = dict(payload)
+            return
+        assert table == "scanner_evidence_cutover_audits"
+        assert conflict_column == "audited_at"
+        self.__class__.audits.append(dict(payload))
 
     def insert(self, table, payload):
         assert table == "scanner_evidence_sync_events"
@@ -41,6 +48,19 @@ class FakeSupabaseEvidenceClient:
 
     def get_live_snapshot(self):
         return self.__class__.snapshots.get(cloud_evidence.LIVE_SNAPSHOT_KEY)
+
+    def list_snapshots(self, limit=200):
+        return list(self.__class__.snapshots.values())[:limit]
+
+    def list_sync_events(self, limit=200):
+        return list(reversed(self.__class__.events))[:limit]
+
+    def delete_objects(self, object_paths):
+        for object_path in object_paths:
+            self.__class__.objects.pop(object_path, None)
+
+    def delete_snapshot(self, snapshot_key):
+        self.__class__.snapshots.pop(snapshot_key, None)
 
 
 class TamperingSupabaseEvidenceClient(FakeSupabaseEvidenceClient):
@@ -205,6 +225,162 @@ class CloudEvidenceTests(unittest.TestCase):
             ).fetchone()
             conn.close()
             self.assertEqual(event, ("unconfigured", "not_configured"))
+
+    def test_cutover_audit_verifies_restore_counts_and_remote_ledger(self):
+        with tempfile.TemporaryDirectory() as directory:
+            older_database = Path(directory) / "older.db"
+            current_database = Path(directory) / "current.db"
+            create_database(older_database, 8, "2026-07-16")
+            create_database(current_database, 9, "2026-07-17")
+
+            with patch(
+                "cloud_evidence.SupabaseEvidenceClient",
+                FakeSupabaseEvidenceClient,
+            ):
+                cloud_evidence.push(older_database, archive_daily=True)
+                cloud_evidence.push(current_database, archive_daily=True)
+                report = cloud_evidence.audit_cutover(
+                    current_database,
+                    minimum_daily_snapshots=2,
+                    minimum_verified_pushes=2,
+                    minimum_workflows=1,
+                )
+
+            self.assertTrue(report["ready"])
+            self.assertEqual(report["passedChecks"], report["totalChecks"])
+            self.assertEqual(report["dailySnapshots"], 2)
+            self.assertEqual(len(FakeSupabaseEvidenceClient.audits), 1)
+            conn = sqlite3.connect(current_database)
+            audit = conn.execute(
+                """
+                SELECT status, ready, passed_checks, total_checks
+                FROM cloud_evidence_audits ORDER BY id DESC LIMIT 1
+                """
+            ).fetchone()
+            conn.close()
+            self.assertEqual(audit, ("ready", 1, 10, 10))
+
+    def test_cutover_audit_blocks_when_daily_history_is_incomplete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scanner.db"
+            create_database(database, 9, "2026-07-17")
+
+            with patch(
+                "cloud_evidence.SupabaseEvidenceClient",
+                FakeSupabaseEvidenceClient,
+            ):
+                cloud_evidence.push(database, archive_daily=True)
+                report = cloud_evidence.audit_cutover(
+                    database,
+                    minimum_daily_snapshots=2,
+                    minimum_verified_pushes=1,
+                    minimum_workflows=1,
+                )
+
+            self.assertFalse(report["ready"])
+            daily_check = next(
+                check for check in report["checks"] if check["key"] == "daily_snapshots"
+            )
+            self.assertFalse(daily_check["passed"])
+
+    def test_cutover_audit_records_an_invalid_manifest_timestamp(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scanner.db"
+            create_database(database, 9, "2026-07-17")
+
+            with patch(
+                "cloud_evidence.SupabaseEvidenceClient",
+                FakeSupabaseEvidenceClient,
+            ):
+                cloud_evidence.push(database, archive_daily=True)
+                FakeSupabaseEvidenceClient.snapshots[
+                    cloud_evidence.LIVE_SNAPSHOT_KEY
+                ]["snapshot_at"] = "not-a-timestamp"
+                result = cloud_evidence.main(
+                    ["audit", "--database", str(database)]
+                )
+
+            self.assertEqual(result, 0)
+            conn = sqlite3.connect(database)
+            audit = conn.execute(
+                """
+                SELECT status, ready, report_json
+                FROM cloud_evidence_audits ORDER BY id DESC LIMIT 1
+                """
+            ).fetchone()
+            conn.close()
+            self.assertEqual(audit[0:2], ("blocked", 0))
+            self.assertEqual(
+                json.loads(audit[2])["errorCode"],
+                "invalid_snapshot_timestamp",
+            )
+
+    def test_retention_prunes_only_expired_daily_snapshots(self):
+        today = cloud_evidence.dt.datetime.now(cloud_evidence.dt.timezone.utc).date()
+        current_key = f"daily:{today.isoformat()}"
+        old_key = "daily:2000-01-01"
+        FakeSupabaseEvidenceClient.snapshots = {
+            cloud_evidence.LIVE_SNAPSHOT_KEY: {
+                "snapshot_key": cloud_evidence.LIVE_SNAPSHOT_KEY,
+                "object_path": cloud_evidence.LIVE_OBJECT_PATH,
+            },
+            current_key: {
+                "snapshot_key": current_key,
+                "object_path": f"daily/{today.isoformat()}/stock_scanner.db.gz",
+            },
+            old_key: {
+                "snapshot_key": old_key,
+                "object_path": "daily/2000-01-01/stock_scanner.db.gz",
+            },
+        }
+        FakeSupabaseEvidenceClient.objects = {
+            row["object_path"]: b"snapshot"
+            for row in FakeSupabaseEvidenceClient.snapshots.values()
+        }
+
+        with patch(
+            "cloud_evidence.SupabaseEvidenceClient",
+            FakeSupabaseEvidenceClient,
+        ):
+            preview = cloud_evidence.prune_daily_snapshots(
+                retention_days=45, apply=False
+            )
+            applied = cloud_evidence.prune_daily_snapshots(
+                retention_days=45, apply=True
+            )
+
+        self.assertEqual(preview["snapshotKeys"], [old_key])
+        self.assertEqual(applied["deletedCount"], 1)
+        self.assertIn(current_key, FakeSupabaseEvidenceClient.snapshots)
+        self.assertIn(cloud_evidence.LIVE_SNAPSHOT_KEY, FakeSupabaseEvidenceClient.snapshots)
+        self.assertNotIn(old_key, FakeSupabaseEvidenceClient.snapshots)
+
+    def test_cloud_primary_makes_missing_configuration_fatal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scanner.db"
+            create_database(database, 2, "2026-07-17")
+            with patch.dict(
+                os.environ,
+                {
+                    "SUPABASE_URL": "",
+                    "SUPABASE_SERVICE_ROLE_KEY": "",
+                    "CLOUD_EVIDENCE_MODE": "cloud_primary",
+                },
+            ):
+                result = cloud_evidence.main(["push", "--database", str(database)])
+
+            self.assertEqual(result, 1)
+            conn = sqlite3.connect(database)
+            event = conn.execute(
+                """
+                SELECT status, migration_mode, error_code
+                FROM cloud_evidence_events ORDER BY id DESC LIMIT 1
+                """
+            ).fetchone()
+            conn.close()
+            self.assertEqual(
+                event, ("unconfigured", "cloud_primary", "not_configured")
+            )
 
 
 if __name__ == "__main__":

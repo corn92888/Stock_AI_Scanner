@@ -1,4 +1,5 @@
 import datetime
+import json
 import os
 import sqlite3
 import subprocess
@@ -13,6 +14,7 @@ PAPER_POLICY_VERSION = "risk_budget_portfolio_v2"
 PORTFOLIO_TOURNAMENT_VERSION = "prospective_capital_tournament_v1"
 PORTFOLIO_TOURNAMENT_START_DATE = "2026-07-20"
 CLOUD_EVIDENCE_SCHEMA_VERSION = "supabase_sqlite_snapshot_v1"
+CLOUD_CUTOVER_AUDIT_VERSION = "cloud_primary_cutover_audit_v1"
 HISTORICAL_REPLAY_VERSION = "point_in_time_eod_replay_v2"
 HISTORICAL_REPLAY_EXECUTION_VERSION = "next_open_after_costs_t3_v1"
 HISTORICAL_ATTRIBUTION_VERSION = "replay_attribution_v1"
@@ -260,8 +262,36 @@ def _create_cloud_evidence_tables(conn):
             latest_scan_run_id INTEGER,
             latest_trade_date TEXT,
             source_workflow TEXT,
+            migration_mode TEXT NOT NULL DEFAULT 'dual_write',
             error_code TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}'
+        )
+        """
+    )
+    _ensure_columns(
+        conn,
+        "cloud_evidence_events",
+        {"migration_mode": "TEXT NOT NULL DEFAULT 'dual_write'"},
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cloud_evidence_audits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            audited_at TEXT NOT NULL,
+            audit_version TEXT NOT NULL,
+            migration_mode TEXT NOT NULL,
+            status TEXT NOT NULL,
+            ready INTEGER NOT NULL DEFAULT 0,
+            snapshot_at TEXT,
+            latest_scan_run_id INTEGER,
+            latest_trade_date TEXT,
+            daily_snapshot_count INTEGER NOT NULL DEFAULT 0,
+            verified_push_count INTEGER NOT NULL DEFAULT 0,
+            workflow_count INTEGER NOT NULL DEFAULT 0,
+            passed_checks INTEGER NOT NULL DEFAULT 0,
+            total_checks INTEGER NOT NULL DEFAULT 0,
+            checks_json TEXT NOT NULL DEFAULT '[]',
+            report_json TEXT NOT NULL DEFAULT '{}'
         )
         """
     )
@@ -269,6 +299,12 @@ def _create_cloud_evidence_tables(conn):
         """
         CREATE INDEX IF NOT EXISTS idx_cloud_evidence_events_time
         ON cloud_evidence_events(event_at DESC, id DESC)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_cloud_evidence_audits_time
+        ON cloud_evidence_audits(audited_at DESC, id DESC)
         """
     )
 
@@ -289,6 +325,7 @@ def record_cloud_evidence_event(conn, **values):
         "latest_scan_run_id",
         "latest_trade_date",
         "source_workflow",
+        "migration_mode",
         "error_code",
         "metadata_json",
     )
@@ -296,6 +333,39 @@ def record_cloud_evidence_event(conn, **values):
         f"INSERT INTO cloud_evidence_events ({', '.join(columns)}) "
         f"VALUES ({', '.join('?' for _ in columns)})",
         tuple(values.get(column) for column in columns),
+    )
+
+
+def record_cloud_evidence_audit(conn, report):
+    _create_cloud_evidence_tables(conn)
+    checks = report.get("checks") or []
+    live = report.get("live") or {}
+    conn.execute(
+        """
+        INSERT INTO cloud_evidence_audits (
+            audited_at, audit_version, migration_mode, status, ready,
+            snapshot_at, latest_scan_run_id, latest_trade_date,
+            daily_snapshot_count, verified_push_count, workflow_count,
+            passed_checks, total_checks, checks_json, report_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            report["auditedAt"],
+            report["auditVersion"],
+            report["migrationMode"],
+            report["status"],
+            int(bool(report["ready"])),
+            live.get("snapshotAt"),
+            live.get("latestScanRunId"),
+            live.get("latestTradeDate"),
+            int(report.get("dailySnapshots") or 0),
+            int(report.get("verifiedPushes") or 0),
+            int(report.get("workflowCount") or 0),
+            sum(1 for check in checks if check.get("passed")),
+            len(checks),
+            json.dumps(checks, ensure_ascii=False, separators=(",", ":")),
+            json.dumps(report, ensure_ascii=False, separators=(",", ":")),
+        ),
     )
 
 

@@ -4,6 +4,7 @@ Reports/
 .env
 .streamlit/secrets.toml
 data/portfolio_holdings.db
+data/stock_scanner.db
 data/*.db-shm
 data/*.db-wal
 data/global_market_latest.json

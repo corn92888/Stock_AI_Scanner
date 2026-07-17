@@ -202,7 +202,7 @@ export type CloudEvidence = {
   gitDatabaseFallback: boolean;
   configured: boolean;
   status: "unconfigured" | "verified" | "failed";
-  operation: "" | "push" | "restore";
+  operation: "" | "push" | "restore" | "prune";
   eventAt: string;
   snapshotKey: string;
   objectPath: string;
@@ -212,6 +212,22 @@ export type CloudEvidence = {
   latestScanRunId: number | null;
   latestTradeDate: string;
   sourceWorkflow: string;
+  auditVersion: string;
+  auditStatus: "not_run" | "ready" | "blocked";
+  auditAt: string;
+  cutoverReady: boolean;
+  passedChecks: number;
+  totalChecks: number;
+  dailySnapshots: number;
+  verifiedPushes: number;
+  workflowCount: number;
+  cutoverChecks: Array<{
+    key: string;
+    label: string;
+    passed: boolean;
+    detail: string;
+    requirement: string;
+  }>;
   message: string;
 };
 

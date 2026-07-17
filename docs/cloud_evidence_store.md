@@ -1,4 +1,4 @@
-# Cloud Evidence Store v1
+# Cloud Evidence Store and Cutover Control
 
 ## Purpose
 
@@ -6,25 +6,29 @@ The operational SQLite database is currently larger than GitHub's recommended
 50 MB file size. Committing the complete database after every scheduled job also
 creates avoidable merge conflicts and makes recovery depend on Git history.
 
-Cloud Evidence Store v1 adds a private Supabase data plane without changing the
+Cloud Evidence Store adds a private Supabase data plane without changing the
 scanner's transaction model:
 
 - SQLite remains the local runtime image used by Python jobs.
 - Supabase Storage keeps a verified rolling image and one image per trade date.
 - PostgreSQL stores the object manifest, source workflow, run ID, hashes, table
   counts, and append-only synchronization events.
-- Git continues to hold the database during the dual-write validation period.
+- Git continues to hold the database only during the dual-write validation period.
+- A machine-readable restore drill controls whether Cloud Primary may be enabled.
+- Daily snapshots older than the configured retention window can be pruned.
 - The public dashboard exposes status and timestamps, but never credentials or
   raw synchronization errors.
 
 ## Initial Setup
 
 1. Open the Supabase SQL Editor and run the current `supabase_schema.sql`.
-2. Confirm that the private `scanner-evidence` bucket and both
+2. Confirm that the private `scanner-evidence` bucket and all three
    `scanner_evidence_*` tables exist.
 3. Keep the existing GitHub Actions secrets:
    `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
-4. Create the Actions repository variable `CLOUD_EVIDENCE_REQUIRED=false`.
+4. Create these Actions repository variables:
+   `CLOUD_EVIDENCE_MODE=dual_write`, `CLOUD_EVIDENCE_REQUIRED=false`, and
+   `CLOUD_EVIDENCE_RETENTION_DAYS=45`.
 5. Manually run `Daily Stock AI Scanner` once.
 6. Open the dashboard Operations view and confirm `Cloud Evidence: VERIFIED`.
 
@@ -54,27 +58,54 @@ Daily and historical persistence also overwrite
 ```bash
 python3 cloud_evidence.py push --database data/stock_scanner.db --archive-daily
 python3 cloud_evidence.py restore --database data/stock_scanner.db --if-newer
+python3 cloud_evidence.py audit --database data/stock_scanner.db --output audit.json
+python3 cloud_evidence.py prune --retention-days 45
 ```
 
-Add `--required` only after the cutover gate below is complete. Without it,
+The prune command is a preview unless `--apply` is supplied. Add `--required`
+only after the cutover gate below is complete. Without it,
 missing credentials or an unavailable first snapshot are recorded as health
 warnings while Git remains the authoritative fallback.
 
+## Migration Modes
+
+- `dual_write`: restore from cloud only when newer, publish a verified cloud
+  image, and keep committing SQLite to Git as the fallback.
+- `cloud_primary`: require a verified restore before every job, require a
+  verified push after it, stop staging SQLite in Git, and prune old daily
+  objects after archival workflows.
+
+An invalid mode stops the workflow. `CLOUD_EVIDENCE_REQUIRED` remains a legacy
+dual-write safety switch; `cloud_primary` is always required even when that
+variable is false.
+
 ## Cloud-Primary Cutover Gate
 
-Do not remove `data/stock_scanner.db` from Git until all conditions are true:
+Run `Cloud Evidence Cutover Audit` manually. It downloads the live object into
+a temporary database, verifies both SHA-256 hashes, runs
+`PRAGMA integrity_check`, compares the latest scan run and durable table counts,
+and writes the result to local SQLite plus the private PostgreSQL audit ledger.
+
+The gate reports `READY` only when all conditions are true:
 
 - At least two complete trading days show verified live and daily snapshots.
 - Every scheduled workflow reports the same latest scan run as the dashboard.
 - A restore into a temporary path passes `PRAGMA integrity_check` and row-count
   comparison.
 - A daily archive exists for each validation date.
-- The Operations view has no failed or stale cloud evidence warning.
+- The live snapshot is no more than 36 hours old.
+- The PostgreSQL audit ledger accepts the result.
 
-The next migration changes `CLOUD_EVIDENCE_REQUIRED` to `true`, removes the
-database from Git tracking, and keeps public JSON plus governed replay datasets
-in their existing locations. This switch is intentionally separate from v1 so
-the production scheduler is never used as an untested one-way migration.
+After a successful audit, first change `CLOUD_EVIDENCE_MODE` to
+`cloud_primary` and confirm one scheduled restore/push cycle. Only then remove
+the database from tracking with
+`git rm --cached data/stock_scanner.db`. Public dashboard JSON and governed
+replay datasets remain in Git. Reverting the variable to `dual_write` restores
+the Git fallback behavior; recover the last tracked SQLite file before doing so.
+
+Do not bypass a blocked gate. A missing Supabase project, stale URL, schema
+error, failed restore, or count mismatch is a production blocker rather than a
+warning once Cloud Primary is enabled.
 
 ## Recovery
 

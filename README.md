@@ -228,13 +228,15 @@
   - `.github/workflows/daily_scan.yml`: 平日 `14:17` 結算每日盤後高防禦名單。
   只要將程式碼推送至 GitHub，並在專案的（Settings > Secrets and variables > Actions）中新增 `TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID` 與 `ANTHROPIC_API_KEY`，就能達成全自動監控與新聞 AI；`ANTHROPIC_MODEL` 可選擇放在 Actions Variables，未設定時使用程式預設值。
 
-  Vercel Cron 會在台灣交易日 09:00 至 13:30 每 30 分鐘呼叫受保護的站內 API，並在 14:17 觸發盤後工作。API 只負責 dispatch；GitHub Actions 作為 Python worker 執行掃描，完成後把 `data/stock_scanner.db` commit 回 `main`，讓歷史選股訊號能跨排程持續累積，日後可直接用 `backtest.py` 驗證策略表現。GitHub workflow 本身不再使用不穩定的 `schedule` 事件。
+  Vercel Cron 會在台灣交易日 09:00 至 13:30 每 30 分鐘呼叫受保護的站內 API，並在 14:17 觸發盤後工作。API 只負責 dispatch；GitHub Actions 作為 Python worker 執行掃描。`dual_write` 驗證期會同時上傳經雜湊與還原驗證的 Supabase 快照，並把 `data/stock_scanner.db` commit 回 `main`；只有 Cloud Primary 稽核全部通過並切換模式後，才停止提交 SQLite。GitHub workflow 本身不再使用不穩定的 `schedule` 事件。
 
   盤中與盤後工作共用 concurrency，不會同時改寫 SQLite。若前一輪超過 30 分鐘，下一個 Vercel 時段仍會 dispatch 並等待 worker；資料庫 gate 會阻止同一時段重複落盤。非交易時段會安全略過；當日報價或全市場覆蓋率低於 65%、或盤中日報與市場快照日期/時間不一致時，流程會拒絕產生分析。失敗仍會上傳已取得的 artifacts，並透過 Telegram 發送維運警報。
 
   每日盤後流程也會增量更新最多 200 筆成熟回測結果。行情來源暫時失敗時不會阻斷當日掃描資料保存，未完成的 `partial` 結果會在後續交易日繼續補齊。
 
   每次盤中或盤後掃描完成後，流程也會執行 `export_dashboard_snapshot.py`，將不含持股、Email 或私密憑證的公開快照同步更新到 `data/dashboard_snapshot.json` 與 Next.js 儀表板。
+
+  雲端證據層的設定、還原演練、保留政策與安全切換流程見 [`docs/cloud_evidence_store.md`](docs/cloud_evidence_store.md)。操作中心會分別顯示最近同步狀態與 Cloud Primary 切換資格；只有顯示 `READY` 才能移除 Git 資料庫備援。
 
 * **開啟量化控制中心 (Next.js)：**
   ```bash
