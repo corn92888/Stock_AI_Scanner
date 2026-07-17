@@ -101,7 +101,7 @@ jobs:
       run: |
         python research_evaluation.py
 
-    - name: Settle rule and AI paper portfolios
+    - name: Settle paper accounts and prospective capital tournament
       if: steps.gate.outputs.run == 'true'
       run: |
         python paper_trading.py

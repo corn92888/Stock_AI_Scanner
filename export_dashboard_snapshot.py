@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from database import CANDIDATE_EXECUTION_VERSION, INSTITUTIONAL_FEATURE_VERSION
+from database import (
+    CANDIDATE_EXECUTION_VERSION,
+    INSTITUTIONAL_FEATURE_VERSION,
+    PORTFOLIO_TOURNAMENT_START_DATE,
+    PORTFOLIO_TOURNAMENT_VERSION,
+)
 
 
 TAIPEI_TZ = dt.timezone(dt.timedelta(hours=8), name="Asia/Taipei")
@@ -74,6 +79,123 @@ def _decode_object(value):
         return result if isinstance(result, dict) else {}
     except (TypeError, ValueError, json.JSONDecodeError):
         return {}
+
+
+def _portfolio_tournament_snapshot(conn, paper_accounts):
+    evidence_days = 0
+    if _table_exists(conn, "predictions") and _table_exists(conn, "scan_runs"):
+        evidence_days = int(
+            conn.execute(
+                """
+                SELECT COUNT(DISTINCT sr.trade_date)
+                FROM predictions p
+                JOIN scan_runs sr ON sr.id=p.run_id
+                WHERE p.is_prospective=1
+                  AND sr.mode='eod'
+                  AND sr.trade_date>=?
+                """,
+                (PORTFOLIO_TOURNAMENT_START_DATE,),
+            ).fetchone()[0]
+        )
+    accounts = []
+    for account in paper_accounts:
+        policy = (account.get("config") or {}).get("capital_policy") or {}
+        if policy.get("tournament_version") != PORTFOLIO_TOURNAMENT_VERSION:
+            continue
+        accounts.append({**account, "policy": policy})
+
+    benchmark = next(
+        (row for row in accounts if row["policy"].get("role") == "benchmark"),
+        None,
+    )
+    benchmark_return = (benchmark or {}).get("totalReturnPct")
+    benchmark_risk_adjusted = None
+    if benchmark and benchmark.get("maxDrawdownPct"):
+        benchmark_risk_adjusted = benchmark_return / abs(benchmark["maxDrawdownPct"])
+
+    rows = []
+    for account in accounts:
+        role = account["policy"].get("role") or "challenger"
+        total_return = float(account.get("totalReturnPct") or 0.0)
+        max_drawdown = float(account.get("maxDrawdownPct") or 0.0)
+        risk_adjusted = (
+            total_return / abs(max_drawdown) if max_drawdown < 0 else None
+        )
+        return_lift = (
+            total_return - benchmark_return
+            if benchmark_return is not None and role == "challenger"
+            else None
+        )
+        risk_adjusted_lift = (
+            risk_adjusted - benchmark_risk_adjusted
+            if risk_adjusted is not None
+            and benchmark_risk_adjusted is not None
+            and role == "challenger"
+            else None
+        )
+        reasons = []
+        if role == "challenger":
+            if evidence_days < 120:
+                reasons.append("insufficient_prospective_dates")
+            if int(account.get("closedTrades") or 0) < 100:
+                reasons.append("insufficient_closed_trades")
+            if total_return <= 0:
+                reasons.append("nonpositive_after_cost_return")
+            if (account.get("avgExcessReturnPct") or 0) <= 0:
+                reasons.append("nonpositive_benchmark_excess")
+            if return_lift is None or return_lift <= 0:
+                reasons.append("does_not_outperform_top3")
+            if risk_adjusted_lift is None or risk_adjusted_lift <= 0:
+                reasons.append("does_not_improve_drawdown_efficiency")
+            if max_drawdown < -12:
+                reasons.append("drawdown_below_floor")
+        rows.append(
+            {
+                "accountKey": account["accountKey"],
+                "name": account["name"],
+                "role": role,
+                "policy": account["policy"],
+                "closedTrades": int(account.get("closedTrades") or 0),
+                "signalDates": int(account.get("signalDates") or 0),
+                "totalReturnPct": total_return,
+                "avgExcessReturnPct": account.get("avgExcessReturnPct"),
+                "maxDrawdownPct": max_drawdown,
+                "returnLiftVsTop3Pct": return_lift,
+                "riskAdjustedScore": risk_adjusted,
+                "riskAdjustedLiftVsTop3": risk_adjusted_lift,
+                "qualifiedForReview": role == "challenger" and not reasons,
+                "rejectionReasons": reasons,
+            }
+        )
+
+    has_observed_result = evidence_days > 0 and any(
+        row["closedTrades"] > 0 or abs(row["totalReturnPct"]) > 1e-9
+        for row in rows
+    )
+    provisional_leader = (
+        max(rows, key=lambda row: row["totalReturnPct"], default=None)
+        if has_observed_result
+        else None
+    )
+    review_ready = next(
+        (row for row in rows if row["qualifiedForReview"]),
+        None,
+    )
+    return {
+        "version": PORTFOLIO_TOURNAMENT_VERSION,
+        "evidenceStartDate": PORTFOLIO_TOURNAMENT_START_DATE,
+        "evidenceDays": evidence_days,
+        "minimumEvidenceDays": 120,
+        "minimumClosedTrades": 100,
+        "benchmarkAccountKey": (benchmark or {}).get("accountKey"),
+        "provisionalLeaderAccountKey": (
+            provisional_leader or {}
+        ).get("accountKey"),
+        "reviewCandidateAccountKey": (review_ready or {}).get("accountKey"),
+        "status": "manual_review_required" if review_ready else "collecting_evidence",
+        "automaticPromotion": False,
+        "accounts": rows,
+    }
 
 
 def _automation_slot(notes):
@@ -1217,6 +1339,12 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
                              THEN pt.realized_pnl ELSE 0 END) AS grossProfit,
                     SUM(CASE WHEN pt.status='closed' AND pt.realized_pnl < 0
                              THEN ABS(pt.realized_pnl) ELSE 0 END) AS grossLoss
+                    ,COUNT(DISTINCT CASE WHEN pt.status='closed'
+                                         THEN pt.signal_date END) AS signalDates
+                    ,AVG(CASE WHEN pt.status='closed'
+                              THEN pt.excess_return_pct END) AS avgExcessReturnPct
+                    ,AVG(CASE WHEN pt.status IN ('open', 'closed')
+                              THEN pt.allocation_weight END) AS avgAllocationWeight
                 FROM paper_accounts pa
                 LEFT JOIN paper_trades pt ON pt.account_id=pa.id
                 GROUP BY pa.id
@@ -1257,6 +1385,20 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
                 else ""
             )
             for account in paper_accounts:
+                portfolio_policy = (account.get("config") or {}).get(
+                    "capital_policy"
+                ) or {}
+                if (
+                    portfolio_policy.get("tournament_version")
+                    == PORTFOLIO_TOURNAMENT_VERSION
+                ):
+                    account["comparisonStartAt"] = portfolio_policy.get(
+                        "evidence_start_date"
+                    )
+                    account["comparisonReturnPct"] = account.get(
+                        "totalReturnPct"
+                    )
+                    continue
                 account_points = [
                     point
                     for point in paper_equity
@@ -1286,6 +1428,10 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
                        pt.signal_date AS signalDate, pt.signal_at AS signalAt,
                        pt.code, pt.name, pt.industry, pt.rank_order AS rankOrder,
                        pt.model_version AS modelVersion,
+                       pt.final_score AS finalScore,
+                       pt.allocation_weight AS allocationWeight,
+                       pt.benchmark_return_pct AS benchmarkReturnPct,
+                       pt.excess_return_pct AS excessReturnPct,
                        pt.entry_at AS entryAt, pt.entry_price AS entryPrice,
                        pt.quantity, pt.invested_amount AS investedAmount,
                        pt.chase_limit AS chaseLimit, pt.stop_price AS stopPrice,
@@ -1322,6 +1468,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
         model_challengers = _model_challenger_snapshot(conn)
         research_health = _research_health_snapshot(conn)
         replay_attribution = _replay_attribution_snapshot(conn)
+        portfolio_tournament = _portfolio_tournament_snapshot(conn, paper_accounts)
 
         return {
             "schemaVersion": SCHEMA_VERSION,
@@ -1344,6 +1491,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "paperAccounts": paper_accounts,
             "paperEquity": paper_equity,
             "paperTrades": paper_trades,
+            "capitalTournament": portfolio_tournament,
             "globalMarket": global_market,
             "institutionalFlow": institutional_flow,
         }

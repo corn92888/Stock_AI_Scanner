@@ -987,8 +987,19 @@ const paperReasonLabels: Record<string, string> = {
   duplicate_open_position: "已有同一標的持倉",
   max_positions_reached: "已達五檔持倉上限",
   insufficient_cash: "可用資金不足",
+  industry_exposure_limit: "已達產業曝險上限",
   defense_close: "防守價出場",
   time_exit_t3: "T+3 到期出場",
+};
+
+const capitalTournamentReasonLabels: Record<string, string> = {
+  insufficient_prospective_dates: "未滿 120 個新決策日",
+  insufficient_closed_trades: "未滿 100 筆結案",
+  nonpositive_after_cost_return: "成本後總報酬未轉正",
+  nonpositive_benchmark_excess: "平均大盤超額未轉正",
+  does_not_outperform_top3: "尚未勝過 Top 3 基準",
+  does_not_improve_drawdown_efficiency: "回撤效率未勝過 Top 3",
+  drawdown_below_floor: "最大回撤超過 12%",
 };
 
 function paperStatusTone(status: PaperTrade["status"]) {
@@ -1000,69 +1011,82 @@ function paperStatusTone(status: PaperTrade["status"]) {
 
 function PaperTradingView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const rule = snapshot.paperAccounts.find((account) => account.strategyKind === "rule");
-  const ai = snapshot.paperAccounts.find((account) => account.strategyKind === "ai");
-  const aiEdge = ai && rule && ai.closedTrades >= 100
-    && ai.comparisonReturnPct != null && rule.comparisonReturnPct != null
-    ? ai.comparisonReturnPct - rule.comparisonReturnPct
-    : null;
-  const promotionReady = Boolean(
-    ai && rule && ai.closedTrades >= 100 && aiEdge != null && aiEdge > 0
-    && ai.maxDrawdownPct >= -10,
-  );
+  const legacyAi = snapshot.paperAccounts.find((account) => account.strategyKind === "ai");
+  const tournament = snapshot.capitalTournament;
+  const tournamentAccounts = tournament.accounts.map((row) => snapshot.paperAccounts.find((account) => account.accountKey === row.accountKey)).filter((account) => account != null);
+  const benchmark = snapshot.paperAccounts.find((account) => account.accountKey === tournament.benchmarkAccountKey);
+  const provisionalLeader = tournament.accounts.find((account) => account.accountKey === tournament.provisionalLeaderAccountKey);
+  const reviewCandidate = tournament.accounts.find((account) => account.accountKey === tournament.reviewCandidateAccountKey);
+  const closedTrades = tournament.accounts.reduce((sum, account) => sum + account.closedTrades, 0);
+  const promotionReady = tournament.status === "manual_review_required";
+  const tournamentAccountKeys = new Set(tournament.accounts.map((account) => account.accountKey));
   const curve = Array.from(
     snapshot.paperEquity.reduce((map, point) => {
+      if (!tournamentAccountKeys.has(point.accountKey) || point.asOf < tournament.evidenceStartDate) return map;
       const current = map.get(point.asOf) ?? { asOf: point.asOf };
-      if (point.accountKey === "rule_baseline_v1") current.rule = point.equity;
-      if (point.accountKey === "ai_shadow_v1") current.ai = point.equity;
+      if (point.accountKey === "ai_top3_equal_v1") current.top3 = point.equity;
+      if (point.accountKey === "ai_top5_diversified_v1") current.top5 = point.equity;
+      if (point.accountKey === "ai_top10_weighted_v1") current.top10 = point.equity;
       map.set(point.asOf, current);
       return map;
-    }, new Map<string, { asOf: string; rule?: number; ai?: number }>()).values(),
+    }, new Map<string, { asOf: string; top3?: number; top5?: number; top10?: number }>()).values(),
   ).sort((a, b) => a.asOf.localeCompare(b.asOf));
-  const active = snapshot.paperTrades.filter((trade) => trade.status === "open" || trade.status === "pending");
-  const recent = snapshot.paperTrades.filter((trade) => trade.status === "closed" || trade.status === "skipped").slice(0, 30);
-  const config = rule?.config ?? ai?.config ?? {};
+  const active = snapshot.paperTrades.filter((trade) => tournamentAccountKeys.has(trade.accountKey) && (trade.status === "open" || trade.status === "pending"));
+  const recent = snapshot.paperTrades.filter((trade) => tournamentAccountKeys.has(trade.accountKey) && (trade.status === "closed" || trade.status === "skipped")).slice(0, 30);
+  const accountNames = new Map(snapshot.paperAccounts.map((account) => [account.accountKey, account.name]));
+  const config = benchmark?.config ?? legacyAi?.config ?? rule?.config ?? {};
 
   return (
     <div className="view-stack">
       <section className="model-hero-band">
-        <div><span className="eyebrow">Paper capital governance</span><h2>{promotionReady ? "模擬資金達到實盤候選審查門檻" : "模擬競賽運作中，目前不可照單實盤"}</h2><p>規則基準採歷史點時訊號重播；AI 帳戶只接受當時真正產生的前瞻入選</p></div>
-        <div className={`governance-state ${promotionReady ? "ready" : "shadow"}`}><WalletCards size={20} /><span>{promotionReady ? "REVIEW READY" : "PAPER ONLY"}</span></div>
+        <div><span className="eyebrow">Prospective capital tournament</span><h2>{promotionReady ? `${reviewCandidate?.name ?? "挑戰者"}進入人工升級審查` : "三種 AI 組合正在累積全新前瞻證據"}</h2><p>同一批每日盤後預測，同日起跑比較 Top 3 等權、Top 5 分散與 Top 10 分數加權；歷史結果不補考</p></div>
+        <div className={`governance-state ${promotionReady ? "ready" : "shadow"}`}><WalletCards size={20} /><span>{promotionReady ? "MANUAL REVIEW" : "PAPER ONLY"}</span></div>
       </section>
 
       <section className="metrics-grid metrics-grid-five">
-        <Metric label="規則帳戶權益" value={money(rule?.equity)} detail={`報酬 ${pct(rule?.totalReturnPct)}`} tone={(rule?.totalReturnPct ?? 0) > 0 ? "positive" : "danger"} icon={Activity} />
-        <Metric label="AI 帳戶權益" value={money(ai?.equity)} detail={`報酬 ${pct(ai?.totalReturnPct)}`} tone={(ai?.totalReturnPct ?? 0) > 0 ? "positive" : "warning"} icon={Bot} />
-        <Metric label="AI 前瞻結案" value={number.format(ai?.closedTrades ?? 0)} detail={`升級門檻 100 筆`} tone={(ai?.closedTrades ?? 0) >= 100 ? "positive" : "warning"} icon={CheckCircle2} />
-        <Metric label="AI 勝率" value={rate(ai?.winRate)} detail={`持有 ${ai?.openPositions ?? 0} · 等待 ${ai?.pendingOrders ?? 0}`} tone={(ai?.winRate ?? 0) >= 50 ? "positive" : "info"} icon={Target} />
-        <Metric label="AI 相對規則" value={pct(aiEdge)} detail={aiEdge == null ? "滿 100 筆後比較同期間" : `同期間自 ${ai?.comparisonStartAt ?? "--"}`} tone={aiEdge == null ? "warning" : aiEdge > 0 ? "positive" : "danger"} icon={TrendingUp} />
+        <Metric label="前瞻決策日" value={number.format(tournament.evidenceDays)} detail={`門檻 ${tournament.minimumEvidenceDays} 日 · 自 ${tournament.evidenceStartDate}`} tone={tournament.evidenceDays >= tournament.minimumEvidenceDays ? "positive" : "warning"} icon={Clock3} />
+        <Metric label="競賽結案交易" value={number.format(closedTrades)} detail="三帳戶合計，升級逐戶判斷" tone={closedTrades > 0 ? "info" : "warning"} icon={CheckCircle2} />
+        <Metric label="暫時領先組合" value={provisionalLeader?.name ?? "等待首批交易"} detail={`報酬 ${pct(provisionalLeader?.totalReturnPct)}`} tone={(provisionalLeader?.totalReturnPct ?? 0) > 0 ? "positive" : "warning"} icon={Target} />
+        <Metric label="Top 3 基準報酬" value={pct(benchmark?.totalReturnPct)} detail={`回撤 ${pct(benchmark?.maxDrawdownPct)}`} tone={(benchmark?.totalReturnPct ?? 0) > 0 ? "positive" : "info"} icon={Activity} />
+        <Metric label="升級狀態" value={promotionReady ? "人工審查" : "累積證據"} detail="永不自動切換正式策略" tone={promotionReady ? "positive" : "warning"} icon={ShieldCheck} />
       </section>
 
       <section className="analysis-grid equal-grid">
         <div className="panel chart-panel paper-chart-panel">
-          <PanelHeader eyebrow="Equity curve" title="模擬資產曲線" description="每日以收盤可變現價值計算，已包含手續費、稅與滑價" />
-          <div className="chart-frame"><ResponsiveContainer width="100%" height="100%"><LineChart data={curve} margin={{ top: 16, right: 18, left: 8, bottom: 4 }}><CartesianGrid stroke="#2b2e31" vertical={false} /><XAxis dataKey="asOf" stroke="#777d82" tickLine={false} axisLine={false} minTickGap={30} /><YAxis stroke="#777d82" tickLine={false} axisLine={false} tickFormatter={(value) => `${Math.round(value / 1000)}k`} /><Tooltip contentStyle={tooltipStyle} formatter={(value) => money(Number(value))} /><Line type="monotone" dataKey="rule" name="規則基準" stroke="#5fb3d9" strokeWidth={2} dot={false} connectNulls /><Line type="monotone" dataKey="ai" name="AI 影子" stroke="#55c29a" strokeWidth={2} dot={false} connectNulls /></LineChart></ResponsiveContainer></div>
+          <PanelHeader eyebrow="Equity curve" title="前瞻組合資產曲線" description="三帳戶同本金、同預測、同交易成本；只改變選取廣度與配置方法" />
+          <div className="chart-frame">{curve.length ? <ResponsiveContainer width="100%" height="100%"><LineChart data={curve} margin={{ top: 16, right: 18, left: 8, bottom: 4 }}><CartesianGrid stroke="#2b2e31" vertical={false} /><XAxis dataKey="asOf" stroke="#777d82" tickLine={false} axisLine={false} minTickGap={30} /><YAxis stroke="#777d82" tickLine={false} axisLine={false} tickFormatter={(value) => `${Math.round(value / 1000)}k`} /><Tooltip contentStyle={tooltipStyle} formatter={(value) => money(Number(value))} /><Line type="monotone" dataKey="top3" name="Top 3 等權" stroke="#5fb3d9" strokeWidth={2} dot={false} connectNulls /><Line type="monotone" dataKey="top5" name="Top 5 分散" stroke="#55c29a" strokeWidth={2} dot={false} connectNulls /><Line type="monotone" dataKey="top10" name="Top 10 加權" stroke="#e2ae5f" strokeWidth={2} dot={false} connectNulls /></LineChart></ResponsiveContainer> : <div className="empty-state">競賽將於 {tournament.evidenceStartDate} 的盤後預測完成後開始畫線。</div>}</div>
         </div>
         <div className="panel paper-account-panel">
-          <PanelHeader eyebrow="Account comparison" title="帳戶實證比較" description="兩個帳戶使用相同本金與部位限制，證據性質分開標示" />
-          <div className="paper-account-list">{[rule, ai].map((account) => account ? <div className="paper-account-row" key={account.accountKey}><div><span className={`run-dot ${account.strategyKind === "ai" ? "success" : "intraday"}`} /><div><strong>{account.name}</strong><small>{account.evidenceMode === "prospective_only" ? "真正前瞻紀錄" : "歷史點時訊號重播"}</small></div></div><dl><div><dt>總報酬</dt><dd className={account.totalReturnPct >= 0 ? "positive-text" : "negative-text"}>{pct(account.totalReturnPct)}</dd></div><div><dt>最大回撤</dt><dd>{pct(account.maxDrawdownPct)}</dd></div><div><dt>結案 / 勝率</dt><dd>{account.closedTrades} / {rate(account.winRate)}</dd></div><div><dt>跳過</dt><dd>{account.skippedOrders}</dd></div></dl></div> : null)}</div>
+          <PanelHeader eyebrow="Account comparison" title="三帳戶即時比較" description="暫時領先只代表目前帳面結果，不等於通過升級門檻" />
+          <div className="paper-account-list">{tournamentAccounts.length ? tournamentAccounts.map((account) => { const policy = account.config.capital_policy; return <div className="paper-account-row" key={account.accountKey}><div><span className={`run-dot ${account.accountKey === tournament.provisionalLeaderAccountKey ? "success" : "intraday"}`} /><div><strong>{account.name}</strong><small>每日 Top {policy?.max_daily_selections ?? "--"} · {policy?.weighting === "score_proportional" ? "分數加權" : "等權"} · 產業 {policy?.max_per_industry ?? "--"} 檔</small></div></div><dl><div><dt>總報酬</dt><dd className={account.totalReturnPct >= 0 ? "positive-text" : "negative-text"}>{pct(account.totalReturnPct)}</dd></div><div><dt>平均超額</dt><dd className={(account.avgExcessReturnPct ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(account.avgExcessReturnPct)}</dd></div><div><dt>回撤</dt><dd>{pct(account.maxDrawdownPct)}</dd></div><div><dt>結案 / 勝率</dt><dd>{account.closedTrades} / {rate(account.winRate)}</dd></div></dl></div>; }) : <div className="empty-state">首次盤後流程執行後會建立三個競賽帳戶。</div>}</div>
         </div>
       </section>
 
-      <div className="validation-banner"><TriangleAlert size={18} /><div><strong>模擬績效不是實際獲利保證</strong><p>目前 AI 前瞻結案僅 {ai?.closedTrades ?? 0} 筆；至少 100 筆、跨越 120 個交易日、扣除成本後勝過規則基準，才進入人工實盤審查。</p></div></div>
+      <section className="panel">
+        <PanelHeader eyebrow="Promotion gates" title="組合升級判定" description="挑戰者須同時滿足樣本、成本後報酬、大盤超額、Top 3 相對增值、回撤效率與風險底線" trailing={<span className="record-count">{tournament.version}</span>} />
+        <div className="table-scroll"><table className="data-table compact-table strategy-table"><thead><tr><th>組合</th><th>角色</th><th>決策日 / 結案</th><th>總報酬</th><th>平均超額</th><th>相對 Top 3</th><th>最大回撤</th><th>判定</th></tr></thead><tbody>{tournament.accounts.length ? tournament.accounts.map((account) => <tr key={account.accountKey}><td><strong>{account.name}</strong><br /><small>Top {account.policy.max_daily_selections} · {account.policy.weighting === "score_proportional" ? "分數加權" : "等權"}</small></td><td>{account.role === "benchmark" ? "凍結基準" : "挑戰者"}</td><td>{tournament.evidenceDays} / {account.closedTrades}</td><td className={account.totalReturnPct >= 0 ? "positive-text" : "negative-text"}>{pct(account.totalReturnPct)}</td><td className={(account.avgExcessReturnPct ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(account.avgExcessReturnPct)}</td><td className={(account.returnLiftVsTop3Pct ?? 0) > 0 ? "positive-text" : "negative-text"}>{account.role === "benchmark" ? "基準" : pct(account.returnLiftVsTop3Pct)}</td><td>{pct(account.maxDrawdownPct)}</td><td><span className={`status-pill ${account.qualifiedForReview ? "selected" : account.role === "benchmark" ? "neutral" : "blocked"}`}>{account.qualifiedForReview ? "等待人工審查" : account.role === "benchmark" ? "凍結比較" : "累積證據"}</span><br /><small>{account.role === "benchmark" ? "不參與升級" : account.rejectionReasons.map((reason) => capitalTournamentReasonLabels[reason] ?? reason).join("、")}</small></td></tr>) : <tr><td colSpan={8}>尚未建立競賽帳戶，下一次每日盤後自動流程會完成初始化。</td></tr>}</tbody></table></div>
+      </section>
+
+      <div className="validation-banner"><TriangleAlert size={18} /><div><strong>這是資金配置實驗，不是買進建議</strong><p>資料只從 {tournament.evidenceStartDate} 起向前累積；至少 120 個新決策日、每個帳戶 100 筆結案且通過所有風險閘門後，也只會送交人工審查，不會自動實盤。</p></div></div>
 
       <section className="panel">
         <PanelHeader eyebrow="Pending and open" title="目前模擬委託與持倉" description="等待成交不會預先占用資金；超過禁止追價線會留下未成交紀錄" trailing={<span className="record-count">{active.length} 筆</span>} />
-        <div className="table-scroll"><table className="data-table compact-table paper-table"><thead><tr><th>帳戶</th><th>訊號日</th><th>標的</th><th>狀態</th><th>進場</th><th>股數</th><th>禁止追價</th><th>防守價</th><th>目前價值</th><th>原因</th></tr></thead><tbody>{active.length ? active.map((trade) => <tr key={`${trade.accountKey}-${trade.sourceType}-${trade.sourceId}`}><td>{trade.accountKey === "ai_shadow_v1" ? "AI" : "規則"}</td><td>{trade.signalDate}</td><td><div className="symbol-cell"><strong>{trade.code}</strong><span>{trade.name}</span></div></td><td><span className={`status-pill ${paperStatusTone(trade.status)}`}>{paperStatusLabels[trade.status]}</span></td><td>{trade.entryAt ? `${trade.entryAt} · ${formatNumeric(trade.entryPrice ?? 0, 0, 2)}` : "--"}</td><td>{trade.quantity ?? "--"}</td><td>{trade.chaseLimit == null ? "--" : formatNumeric(trade.chaseLimit, 0, 2)}</td><td>{trade.stopPrice == null ? "--" : formatNumeric(trade.stopPrice, 0, 2)}</td><td>{money(trade.marketValue)}</td><td>{paperReasonLabels[trade.skipReason ?? ""] ?? "正常持有"}</td></tr>) : <tr><td colSpan={10}>目前沒有等待成交或持有中的模擬部位。</td></tr>}</tbody></table></div>
+        <div className="table-scroll"><table className="data-table compact-table paper-table"><thead><tr><th>帳戶</th><th>訊號日</th><th>標的</th><th>狀態</th><th>進場</th><th>配置</th><th>股數</th><th>禁止追價</th><th>防守價</th><th>目前價值</th><th>原因</th></tr></thead><tbody>{active.length ? active.map((trade) => <tr key={`${trade.accountKey}-${trade.sourceType}-${trade.sourceId}`}><td>{accountNames.get(trade.accountKey) ?? trade.accountKey}</td><td>{trade.signalDate}</td><td><div className="symbol-cell"><strong>{trade.code}</strong><span>{trade.name}</span></div></td><td><span className={`status-pill ${paperStatusTone(trade.status)}`}>{paperStatusLabels[trade.status]}</span></td><td>{trade.entryAt ? `${trade.entryAt} · ${formatNumeric(trade.entryPrice ?? 0, 0, 2)}` : "--"}</td><td>{trade.allocationWeight == null ? "--" : `${decimal.format(trade.allocationWeight * 100)}%`}</td><td>{trade.quantity ?? "--"}</td><td>{trade.chaseLimit == null ? "--" : formatNumeric(trade.chaseLimit, 0, 2)}</td><td>{trade.stopPrice == null ? "--" : formatNumeric(trade.stopPrice, 0, 2)}</td><td>{money(trade.marketValue)}</td><td>{paperReasonLabels[trade.skipReason ?? ""] ?? "正常持有"}</td></tr>) : <tr><td colSpan={11}>目前沒有等待成交或持有中的模擬部位。</td></tr>}</tbody></table></div>
       </section>
 
       <section className="panel">
         <PanelHeader eyebrow="Execution ledger" title="最近模擬交易紀錄" description="未成交也保留原因，避免只統計成功進場造成倖存者偏誤" trailing={<span className="record-count">{recent.length} 筆</span>} />
-        <div className="table-scroll"><table className="data-table compact-table paper-table"><thead><tr><th>帳戶</th><th>訊號日</th><th>標的</th><th>狀態</th><th>進場 / 出場</th><th>股數</th><th>報酬</th><th>損益</th><th>最大漲幅</th><th>最大回撤</th><th>結果</th></tr></thead><tbody>{recent.length ? recent.map((trade) => <tr key={`${trade.accountKey}-${trade.sourceType}-${trade.sourceId}`}><td>{trade.accountKey === "ai_shadow_v1" ? "AI" : "規則"}</td><td>{trade.signalDate}</td><td><div className="symbol-cell"><strong>{trade.code}</strong><span>{trade.name}</span></div></td><td><span className={`status-pill ${paperStatusTone(trade.status)}`}>{paperStatusLabels[trade.status]}</span></td><td>{trade.entryAt ?? "--"} / {trade.exitAt ?? "--"}</td><td>{trade.quantity ?? "--"}</td><td className={(trade.netReturnPct ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(trade.netReturnPct)}</td><td className={(trade.realizedPnl ?? 0) >= 0 ? "positive-text" : "negative-text"}>{money(trade.realizedPnl)}</td><td>{pct(trade.maxReturnPct)}</td><td>{pct(trade.maxDrawdownPct)}</td><td>{paperReasonLabels[trade.skipReason ?? ""] ?? paperReasonLabels[trade.exitReason ?? ""] ?? "--"}</td></tr>) : <tr><td colSpan={11}>尚無已結案或未成交紀錄。</td></tr>}</tbody></table></div>
+        <div className="table-scroll"><table className="data-table compact-table paper-table"><thead><tr><th>帳戶</th><th>訊號日</th><th>標的</th><th>AI 分數</th><th>狀態</th><th>進場 / 出場</th><th>股數</th><th>報酬 / 超額</th><th>損益</th><th>最大漲幅</th><th>最大回撤</th><th>結果</th></tr></thead><tbody>{recent.length ? recent.map((trade) => <tr key={`${trade.accountKey}-${trade.sourceType}-${trade.sourceId}`}><td>{accountNames.get(trade.accountKey) ?? trade.accountKey}</td><td>{trade.signalDate}</td><td><div className="symbol-cell"><strong>{trade.code}</strong><span>{trade.name}</span></div></td><td>{trade.finalScore == null ? "--" : decimal.format(trade.finalScore)}</td><td><span className={`status-pill ${paperStatusTone(trade.status)}`}>{paperStatusLabels[trade.status]}</span></td><td>{trade.entryAt ?? "--"} / {trade.exitAt ?? "--"}</td><td>{trade.quantity ?? "--"}</td><td className={(trade.netReturnPct ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(trade.netReturnPct)} / {pct(trade.excessReturnPct)}</td><td className={(trade.realizedPnl ?? 0) >= 0 ? "positive-text" : "negative-text"}>{money(trade.realizedPnl)}</td><td>{pct(trade.maxReturnPct)}</td><td>{pct(trade.maxDrawdownPct)}</td><td>{paperReasonLabels[trade.skipReason ?? ""] ?? paperReasonLabels[trade.exitReason ?? ""] ?? "--"}</td></tr>) : <tr><td colSpan={12}>尚無已結案或未成交紀錄。</td></tr>}</tbody></table></div>
       </section>
 
       <section className="panel paper-policy-panel">
-        <PanelHeader eyebrow="Capital policy" title="固定模擬規則" description="規則版本化後鎖定，避免看到結果再修改成交假設" />
-        <dl className="paper-policy-grid"><div><dt>起始資金</dt><dd>{money(config.starting_cash ?? 1_000_000)}</dd></div><div><dt>單檔上限</dt><dd>{decimal.format((config.position_size_pct ?? .2) * 100)}%</dd></div><div><dt>最多持股</dt><dd>{config.max_positions ?? 5} 檔</dd></div><div><dt>現金保留</dt><dd>{decimal.format((config.cash_buffer_pct ?? .05) * 100)}%</dd></div><div><dt>最低交易值</dt><dd>{money(config.min_trade_value ?? 10_000)}</dd></div><div><dt>成交方式</dt><dd>隔日開盤，禁止追價</dd></div></dl>
+        <PanelHeader eyebrow="Capital policy" title="凍結競賽規則" description="版本發布後不依結果回改；任何新配置法必須另開帳戶與全新證據期" />
+        <dl className="paper-policy-grid"><div><dt>共同起始資金</dt><dd>{money(config.starting_cash ?? 1_000_000)}</dd></div><div><dt>證據起算日</dt><dd>{tournament.evidenceStartDate}</dd></div><div><dt>共同現金保留</dt><dd>{decimal.format((config.cash_buffer_pct ?? .05) * 100)}%</dd></div><div><dt>共同風險預算</dt><dd>{decimal.format((config.risk_budget_pct ?? .01) * 100)}% / 檔</dd></div><div><dt>成交與退出</dt><dd>隔日開盤 · 禁止追價 · T+3</dd></div><div><dt>正式接管</dt><dd>禁止自動升級</dd></div></dl>
+      </section>
+
+      <section className="panel">
+        <PanelHeader eyebrow="Legacy reference" title="舊制參考帳戶" description="保留既有歷史點時規則與舊 AI 前瞻帳戶，不與 2026-07-20 起跑的新競賽混算" />
+        <div className="table-scroll"><table className="data-table compact-table"><thead><tr><th>帳戶</th><th>證據性質</th><th>權益</th><th>總報酬</th><th>結案</th><th>勝率</th></tr></thead><tbody>{[rule, legacyAi].filter((account) => account != null).map((account) => <tr key={account.accountKey}><td>{account.name}</td><td>{account.evidenceMode === "prospective_only" ? "舊 AI 真正前瞻" : "歷史點時重播"}</td><td>{money(account.equity)}</td><td className={account.totalReturnPct >= 0 ? "positive-text" : "negative-text"}>{pct(account.totalReturnPct)}</td><td>{account.closedTrades}</td><td>{rate(account.winRate)}</td></tr>)}</tbody></table></div>
       </section>
     </div>
   );

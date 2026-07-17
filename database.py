@@ -10,6 +10,8 @@ STRATEGY_VERSION = "strict_v1"
 LEGACY_CANDIDATE_EXECUTION_VERSION = "next_day_open_defense_close_t3_v1"
 CANDIDATE_EXECUTION_VERSION = "mode_aligned_after_costs_t3_v2"
 PAPER_POLICY_VERSION = "risk_budget_portfolio_v2"
+PORTFOLIO_TOURNAMENT_VERSION = "prospective_capital_tournament_v1"
+PORTFOLIO_TOURNAMENT_START_DATE = "2026-07-20"
 HISTORICAL_REPLAY_VERSION = "point_in_time_eod_replay_v2"
 HISTORICAL_REPLAY_EXECUTION_VERSION = "next_open_after_costs_t3_v1"
 HISTORICAL_ATTRIBUTION_VERSION = "replay_attribution_v1"
@@ -507,6 +509,10 @@ def _create_quant_tables(conn):
             industry TEXT,
             rank_order INTEGER,
             model_version TEXT,
+            final_score REAL,
+            allocation_weight REAL,
+            benchmark_return_pct REAL,
+            excess_return_pct REAL,
             entry_at TEXT,
             entry_price REAL,
             entry_fee REAL,
@@ -1186,6 +1192,16 @@ def _migrate_quant_tables(conn):
         conn,
         "predictions",
         {"is_prospective": "INTEGER NOT NULL DEFAULT 1"},
+    )
+    _ensure_columns(
+        conn,
+        "paper_trades",
+        {
+            "final_score": "REAL",
+            "allocation_weight": "REAL",
+            "benchmark_return_pct": "REAL",
+            "excess_return_pct": "REAL",
+        },
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_paper_trades_account_status "

@@ -3,7 +3,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { CandidateLearnabilityAudit, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, ReplayAttribution, ResearchHealth, ResearchQuality, WorkflowRun } from "./types";
+import type { CandidateLearnabilityAudit, CapitalTournament, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, ReplayAttribution, ResearchHealth, ResearchQuality, WorkflowRun } from "./types";
 
 const DEFAULT_DATA_URL =
   "https://raw.githubusercontent.com/corn92888/Stock_AI_Scanner/main/data/dashboard_snapshot.json";
@@ -104,6 +104,20 @@ const EMPTY_LEARNABILITY_AUDIT: CandidateLearnabilityAudit = {
   rows: [],
 };
 
+const EMPTY_CAPITAL_TOURNAMENT: CapitalTournament = {
+  version: "prospective_capital_tournament_v1",
+  evidenceStartDate: "2026-07-20",
+  evidenceDays: 0,
+  minimumEvidenceDays: 120,
+  minimumClosedTrades: 100,
+  benchmarkAccountKey: null,
+  provisionalLeaderAccountKey: null,
+  reviewCandidateAccountKey: null,
+  status: "collecting_evidence",
+  automaticPromotion: false,
+  accounts: [],
+};
+
 const EMPTY_GLOBAL_MARKET: GlobalMarketSnapshot = {
   modelVersion: "global_regime_shadow_v1",
   snapshotAt: "",
@@ -195,6 +209,11 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
     })),
     paperEquity: snapshot.paperEquity ?? [],
     paperTrades: snapshot.paperTrades ?? [],
+    capitalTournament: {
+      ...EMPTY_CAPITAL_TOURNAMENT,
+      ...(snapshot.capitalTournament ?? {}),
+      accounts: snapshot.capitalTournament?.accounts ?? [],
+    },
     globalMarket: {
       ...EMPTY_GLOBAL_MARKET,
       ...(snapshot.globalMarket ?? {}),

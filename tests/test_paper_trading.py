@@ -9,6 +9,7 @@ from database import get_connection, init_db
 from paper_trading import (
     ACCOUNT_SPECS,
     PaperTradingConfig,
+    apply_portfolio_policy,
     save_simulation,
     simulate_account,
 )
@@ -58,6 +59,25 @@ def signal(source_id, code, chase_limit=105.0):
         "matured_horizon": 5,
         "outcome_status": "complete",
     }
+
+
+def tournament_signal(source_id, code, score, industry="Industry"):
+    row = signal(source_id, code)
+    row.update(
+        source_type="prediction",
+        prediction_id=source_id,
+        signal_date="2026-07-20",
+        signal_at="2026-07-20T14:10:00+08:00",
+        rank_order=source_id,
+        industry=industry,
+        final_score=score,
+        probability_t3=0.60,
+        expected_excess_return_3d=1.0,
+        expected_max_drawdown_3d=-2.0,
+        action="shadow_neutral",
+        allocation_weight=None,
+    )
+    return row
 
 
 class PaperTradingTests(unittest.TestCase):
@@ -167,6 +187,65 @@ class PaperTradingTests(unittest.TestCase):
             self.assertEqual(account["closed_trades"], 1)
             self.assertEqual(trade_count, 1)
             self.assertGreater(snapshot_count, 1)
+
+    def test_top5_policy_starts_prospectively_and_diversifies_industries(self):
+        spec = next(
+            item for item in ACCOUNT_SPECS if item.account_key == "ai_top5_diversified_v1"
+        )
+        old = tournament_signal(1, "1101", 99.0, "Cement")
+        old["signal_date"] = "2026-07-17"
+        rows = [
+            old,
+            tournament_signal(2, "2330", 90.0, "Semiconductor"),
+            tournament_signal(3, "2454", 89.0, "Semiconductor"),
+            tournament_signal(4, "2317", 88.0, "Electronics"),
+            tournament_signal(5, "1301", 87.0, "Plastics"),
+        ]
+        selected = apply_portfolio_policy(rows, spec)
+        self.assertEqual([row["code"] for row in selected], ["2330", "2317", "1301"])
+        self.assertTrue(all(row["signal_date"] >= "2026-07-20" for row in selected))
+        self.assertTrue(all(row["allocation_weight"] == 0.1 for row in selected))
+
+    def test_top10_policy_uses_a_bounded_score_weighted_budget(self):
+        spec = next(
+            item for item in ACCOUNT_SPECS if item.account_key == "ai_top10_weighted_v1"
+        )
+        rows = [
+            tournament_signal(index, str(6000 + index), 50.0 + index, f"Industry {index}")
+            for index in range(1, 11)
+        ]
+        selected = apply_portfolio_policy(rows, spec)
+        weights = [row["allocation_weight"] for row in selected]
+        self.assertEqual(len(selected), 10)
+        self.assertAlmostEqual(sum(weights), 0.5)
+        self.assertGreater(weights[0], weights[-1])
+        self.assertTrue(all(weight <= 0.075 for weight in weights))
+
+    def test_industry_exposure_cap_blocks_a_second_concentrated_position(self):
+        first = tournament_signal(20, "2330", 90.0, "Semiconductor")
+        second = tournament_signal(21, "2454", 89.0, "Semiconductor")
+        first["allocation_weight"] = 0.2
+        second["allocation_weight"] = 0.2
+        config = PaperTradingConfig(
+            starting_cash=100_000.0,
+            buy_fee_rate=0.0,
+            sell_fee_rate=0.0,
+            sell_tax_rate=0.0,
+            slippage_rate=0.0,
+            min_trade_value=1_000.0,
+            max_industry_exposure_pct=0.2,
+        )
+        result = simulate_account(
+            ACCOUNT_SPECS[2],
+            [first, second],
+            config=config,
+            price_cache=self.cache,
+            as_of="2026-01-09",
+        )
+        trades = result["trades"]
+        self.assertEqual(trades[0]["status"], "closed")
+        self.assertEqual(trades[1]["status"], "skipped")
+        self.assertEqual(trades[1]["skip_reason"], "industry_exposure_limit")
 
 
 if __name__ == "__main__":

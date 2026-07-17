@@ -1,7 +1,7 @@
 import argparse
 import json
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 import pandas as pd
 
@@ -10,10 +10,13 @@ from database import (
     CANDIDATE_EXECUTION_VERSION,
     DB_PATH,
     PAPER_POLICY_VERSION,
+    PORTFOLIO_TOURNAMENT_START_DATE,
+    PORTFOLIO_TOURNAMENT_VERSION,
     get_connection,
     get_taipei_now,
     init_db,
 )
+from model_governance import ShadowSelectionPolicy
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,7 @@ class PaperTradingConfig(BacktestConfig):
     cash_buffer_pct: float = 0.05
     min_trade_value: float = 10_000.0
     enforce_chase_limit: bool = True
+    max_industry_exposure_pct: float | None = None
 
 
 @dataclass(frozen=True)
@@ -35,6 +39,16 @@ class PaperAccountSpec:
     strategy_kind: str
     evidence_mode: str
     source_type: str
+    role: str = "legacy"
+    evidence_start_date: str | None = None
+    selection_scope: str = "selected"
+    max_daily_selections: int | None = None
+    max_per_industry: int | None = None
+    weighting: str = "equal"
+    daily_budget_pct: float | None = None
+    max_positions: int | None = None
+    position_size_pct: float | None = None
+    max_industry_exposure_pct: float | None = None
 
 
 ACCOUNT_SPECS = (
@@ -52,6 +66,57 @@ ACCOUNT_SPECS = (
         evidence_mode="prospective_only",
         source_type="prediction",
     ),
+    PaperAccountSpec(
+        account_key="ai_top3_equal_v1",
+        name="AI Top 3 等權基準",
+        strategy_kind="ai_capital",
+        evidence_mode="prospective_tournament",
+        source_type="prediction",
+        role="benchmark",
+        evidence_start_date=PORTFOLIO_TOURNAMENT_START_DATE,
+        selection_scope="eligible_eod",
+        max_daily_selections=3,
+        max_per_industry=1,
+        weighting="equal",
+        daily_budget_pct=0.60,
+        max_positions=5,
+        position_size_pct=0.20,
+        max_industry_exposure_pct=0.40,
+    ),
+    PaperAccountSpec(
+        account_key="ai_top5_diversified_v1",
+        name="AI Top 5 分散組合",
+        strategy_kind="ai_capital",
+        evidence_mode="prospective_tournament",
+        source_type="prediction",
+        role="challenger",
+        evidence_start_date=PORTFOLIO_TOURNAMENT_START_DATE,
+        selection_scope="eligible_eod",
+        max_daily_selections=5,
+        max_per_industry=1,
+        weighting="equal",
+        daily_budget_pct=0.50,
+        max_positions=10,
+        position_size_pct=0.10,
+        max_industry_exposure_pct=0.20,
+    ),
+    PaperAccountSpec(
+        account_key="ai_top10_weighted_v1",
+        name="AI Top 10 分數加權",
+        strategy_kind="ai_capital",
+        evidence_mode="prospective_tournament",
+        source_type="prediction",
+        role="challenger",
+        evidence_start_date=PORTFOLIO_TOURNAMENT_START_DATE,
+        selection_scope="eligible_eod",
+        max_daily_selections=10,
+        max_per_industry=2,
+        weighting="score_proportional",
+        daily_budget_pct=0.50,
+        max_positions=20,
+        position_size_pct=0.075,
+        max_industry_exposure_pct=0.15,
+    ),
 )
 
 
@@ -67,6 +132,10 @@ TRADE_COLUMNS = (
     "industry",
     "rank_order",
     "model_version",
+    "final_score",
+    "allocation_weight",
+    "benchmark_return_pct",
+    "excess_return_pct",
     "entry_at",
     "entry_price",
     "entry_fee",
@@ -156,6 +225,10 @@ def load_ai_signals(db_path=DB_PATH):
                     ce.industry,
                     p.rank_order,
                     p.model_version,
+                    p.final_score,
+                    NULL AS allocation_weight,
+                    co.benchmark_return_3d AS benchmark_return_pct,
+                    co.excess_return_3d AS excess_return_pct,
                     COALESCE(p.chase_limit, ce.chase_limit) AS raw_chase_limit,
                     COALESCE(p.stop_price, ce.observation_price) AS raw_stop_price,
                     co.entry_at,
@@ -194,6 +267,181 @@ def load_ai_signals(db_path=DB_PATH):
                 (CANDIDATE_EXECUTION_VERSION,),
             ).fetchall()
         ]
+
+
+def load_ai_tournament_universe(
+    db_path=DB_PATH,
+    start_date=PORTFOLIO_TOURNAMENT_START_DATE,
+):
+    with get_connection(db_path) as conn:
+        init_db(conn)
+        return [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT
+                    'prediction' AS source_type,
+                    p.id AS source_id,
+                    ce.id AS candidate_id,
+                    p.id AS prediction_id,
+                    sr.trade_date AS signal_date,
+                    p.predicted_at AS signal_at,
+                    p.code,
+                    ce.name,
+                    ce.industry,
+                    p.rank_order,
+                    p.model_version,
+                    p.final_score,
+                    NULL AS allocation_weight,
+                    co.benchmark_return_3d AS benchmark_return_pct,
+                    co.excess_return_3d AS excess_return_pct,
+                    p.probability_t3,
+                    p.expected_excess_return_3d,
+                    p.expected_max_drawdown_3d,
+                    p.action,
+                    COALESCE(p.chase_limit, ce.chase_limit) AS raw_chase_limit,
+                    COALESCE(p.stop_price, ce.observation_price) AS raw_stop_price,
+                    co.entry_at,
+                    co.entry_price,
+                    co.entry_adjustment_factor,
+                    co.entry_status,
+                    co.skip_reason AS outcome_skip_reason,
+                    co.exit_at,
+                    co.exit_price,
+                    co.exit_reason,
+                    co.max_return_3d AS max_return_pct,
+                    co.max_drawdown_3d AS max_drawdown_pct,
+                    co.matured_horizon,
+                    co.outcome_status
+                FROM predictions p
+                JOIN scan_runs sr ON sr.id=p.run_id
+                LEFT JOIN candidate_events ce ON ce.id=(
+                    SELECT ce2.id
+                    FROM candidate_events ce2
+                    WHERE ce2.run_id=p.run_id AND ce2.code=p.code
+                    ORDER BY ce2.id DESC
+                    LIMIT 1
+                )
+                LEFT JOIN candidate_outcomes co
+                  ON co.candidate_id=ce.id AND co.execution_version=?
+                WHERE p.is_prospective=1
+                  AND sr.mode='eod'
+                  AND sr.trade_date>=?
+                  AND p.id=(
+                      SELECT p2.id FROM predictions p2
+                      WHERE p2.run_id=p.run_id AND p2.code=p.code
+                        AND p2.is_prospective=1
+                      ORDER BY p2.predicted_at, p2.id
+                      LIMIT 1
+                  )
+                  AND p.run_id=(
+                      SELECT p3.run_id
+                      FROM predictions p3
+                      JOIN scan_runs sr3 ON sr3.id=p3.run_id
+                      WHERE p3.is_prospective=1
+                        AND sr3.mode='eod'
+                        AND sr3.trade_date=sr.trade_date
+                      ORDER BY sr3.run_at, p3.id
+                      LIMIT 1
+                  )
+                ORDER BY sr.trade_date, p.rank_order, p.id
+                """,
+                (CANDIDATE_EXECUTION_VERSION, str(start_date)),
+            ).fetchall()
+        ]
+
+
+def apply_portfolio_policy(signals, spec):
+    policy = ShadowSelectionPolicy()
+    eligible = []
+    for signal in signals:
+        row = dict(signal)
+        if (
+            spec.evidence_start_date
+            and str(row.get("signal_date") or "") < spec.evidence_start_date
+        ):
+            continue
+        if row.get("action") == "blocked_by_risk_policy":
+            continue
+        if (_safe_number(row.get("probability_t3"), -1.0) or 0.0) < policy.min_probability:
+            continue
+        expected_excess = _safe_number(
+            row.get("expected_excess_return_3d"), -math.inf
+        )
+        if (expected_excess or 0.0) < policy.min_expected_excess:
+            continue
+        expected_drawdown = _safe_number(
+            row.get("expected_max_drawdown_3d"), -math.inf
+        )
+        if (expected_drawdown or 0.0) < policy.min_expected_drawdown:
+            continue
+        eligible.append(row)
+
+    selected = []
+    by_date = {}
+    for signal in eligible:
+        by_date.setdefault(str(signal["signal_date"]), []).append(signal)
+    for signal_date in sorted(by_date):
+        ranked = sorted(
+            by_date[signal_date],
+            key=lambda row: (
+                -(_safe_number(row.get("final_score"), -math.inf) or 0.0),
+                int(row.get("rank_order") or 9999),
+                int(row["source_id"]),
+            ),
+        )
+        industry_counts = {}
+        daily = []
+        for row in ranked:
+            industry = str(row.get("industry") or "")
+            if (
+                industry
+                and spec.max_per_industry is not None
+                and industry_counts.get(industry, 0) >= spec.max_per_industry
+            ):
+                continue
+            daily.append(dict(row))
+            if industry:
+                industry_counts[industry] = industry_counts.get(industry, 0) + 1
+            if spec.max_daily_selections and len(daily) >= spec.max_daily_selections:
+                break
+
+        if not daily:
+            continue
+        budget = float(spec.daily_budget_pct or 0.0)
+        if spec.weighting == "score_proportional":
+            score_total = sum(
+                max(_safe_number(row.get("final_score"), 0.0) or 0.0, 0.01)
+                for row in daily
+            )
+            for row in daily:
+                score = max(_safe_number(row.get("final_score"), 0.0) or 0.0, 0.01)
+                row["allocation_weight"] = min(
+                    float(spec.position_size_pct or 1.0),
+                    budget * score / score_total,
+                )
+        else:
+            weight = min(
+                float(spec.position_size_pct or 1.0),
+                budget / max(int(spec.max_daily_selections or len(daily)), 1),
+            )
+            for row in daily:
+                row["allocation_weight"] = weight
+        selected.extend(daily)
+    return selected
+
+
+def _config_for_spec(config, spec):
+    updates = {
+        key: value
+        for key, value in {
+            "max_positions": spec.max_positions,
+            "position_size_pct": spec.position_size_pct,
+            "max_industry_exposure_pct": spec.max_industry_exposure_pct,
+        }.items()
+        if value is not None
+    }
+    return replace(config, **updates) if updates else config
 
 
 def _safe_number(value, default=None):
@@ -263,6 +511,10 @@ def _base_trade(signal):
         "industry": signal.get("industry") or "",
         "rank_order": signal.get("rank_order"),
         "model_version": signal.get("model_version"),
+        "final_score": _safe_number(signal.get("final_score")),
+        "allocation_weight": _safe_number(signal.get("allocation_weight")),
+        "benchmark_return_pct": _safe_number(signal.get("benchmark_return_pct")),
+        "excess_return_pct": _safe_number(signal.get("excess_return_pct")),
         "entry_at": signal.get("entry_at"),
         "entry_price": _safe_number(signal.get("entry_price")),
         "entry_status": signal.get("entry_status") or "filled",
@@ -395,14 +647,35 @@ def simulate_account(spec, signals, config=None, price_cache=None, as_of=None):
                 1 + config.buy_fee_rate + config.slippage_rate
             )
             cash_reserve = sizing_equity * config.cash_buffer_pct
-            risk_spend_limit = sizing_equity * config.position_size_pct
+            target_weight = min(
+                config.position_size_pct,
+                trade.get("allocation_weight") or config.position_size_pct,
+            )
+            risk_spend_limit = sizing_equity * target_weight
             if trade["stop_price"] is not None and trade["entry_price"] > 0:
-                risk_fraction = (trade["entry_price"] - trade["stop_price"]) / trade["entry_price"]
+                risk_fraction = (
+                    trade["entry_price"] - trade["stop_price"]
+                ) / trade["entry_price"]
                 if risk_fraction > 0:
                     risk_spend_limit = min(
                         risk_spend_limit,
                         sizing_equity * config.risk_budget_pct / risk_fraction,
                     )
+            industry_constrained = False
+            if config.max_industry_exposure_pct is not None and trade["industry"]:
+                industry_invested = sum(
+                    float(position.get("invested_amount") or 0)
+                    for position in open_positions.values()
+                    if position.get("industry") == trade["industry"]
+                )
+                industry_room = max(
+                    0.0,
+                    sizing_equity * config.max_industry_exposure_pct
+                    - industry_invested,
+                )
+                if industry_room < risk_spend_limit:
+                    industry_constrained = True
+                    risk_spend_limit = industry_room
             spend_limit = min(
                 risk_spend_limit,
                 max(0.0, cash - cash_reserve),
@@ -411,7 +684,12 @@ def simulate_account(spec, signals, config=None, price_cache=None, as_of=None):
             invested_amount = quantity * unit_cost
             if quantity < 1 or invested_amount < config.min_trade_value:
                 trade["status"] = "skipped"
-                trade["skip_reason"] = "insufficient_cash"
+                trade["skip_reason"] = (
+                    "industry_exposure_limit"
+                    if industry_constrained
+                    and risk_spend_limit < config.min_trade_value
+                    else "insufficient_cash"
+                )
                 continue
 
             gross_entry = trade["entry_price"] * quantity
@@ -528,7 +806,21 @@ def simulate_account(spec, signals, config=None, price_cache=None, as_of=None):
         ),
         "last_equity_at": final_snapshot["as_of"],
         "status": "shadow",
-        "config_json": json.dumps(asdict(config), ensure_ascii=True, sort_keys=True),
+        "config_json": json.dumps(
+            {
+                **asdict(config),
+                "capital_policy": {
+                    **asdict(spec),
+                    "tournament_version": (
+                        PORTFOLIO_TOURNAMENT_VERSION
+                        if spec.evidence_mode == "prospective_tournament"
+                        else None
+                    ),
+                },
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+        ),
     }
     return {"account": account, "trades": trades, "snapshots": snapshots}
 
@@ -629,9 +921,15 @@ def run_paper_trading(
         for spec in ACCOUNT_SPECS
         if not account_keys or spec.account_key in set(account_keys)
     ]
+    tournament_universe = load_ai_tournament_universe(db_path=db_path)
     signals_by_key = {
         "rule_baseline_v1": load_rule_signals(db_path=db_path),
         "ai_shadow_v1": load_ai_signals(db_path=db_path),
+        **{
+            spec.account_key: apply_portfolio_policy(tournament_universe, spec)
+            for spec in selected_specs
+            if spec.evidence_mode == "prospective_tournament"
+        },
     }
     all_entries = [
         _normalized_date(signal.get("entry_at"))
@@ -648,10 +946,11 @@ def run_paper_trading(
 
     summaries = []
     for spec in selected_specs:
+        account_config = _config_for_spec(config, spec)
         result = simulate_account(
             spec,
             signals_by_key[spec.account_key],
-            config=config,
+            config=account_config,
             price_cache=price_cache,
             as_of=as_of_date,
         )

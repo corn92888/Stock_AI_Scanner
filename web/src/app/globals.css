@@ -450,6 +450,7 @@ button.action-link[aria-busy="true"]:disabled { cursor: wait; }
 
 /* Paper capital */
 .paper-chart-panel .chart-frame { height: 330px; }
+.paper-chart-panel .chart-frame > .empty-state { height: 100%; display: grid; place-items: center; }
 .paper-account-list { padding: 4px 18px 12px; }
 .paper-account-row { display: grid; grid-template-columns: minmax(120px, .7fr) minmax(0, 1.8fr); gap: 14px; align-items: center; padding: 15px 0; border-bottom: 1px solid var(--border); }
 .paper-account-row:last-child { border-bottom: 0; }

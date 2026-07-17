@@ -374,7 +374,7 @@ export type ModelChallenger = {
 export type PaperAccount = {
   accountKey: string;
   name: string;
-  strategyKind: "rule" | "ai";
+  strategyKind: "rule" | "ai" | "ai_capital";
   evidenceMode: string;
   policyVersion: string;
   executionVersion: string;
@@ -399,14 +399,58 @@ export type PaperAccount = {
   grossProfit: number;
   grossLoss: number;
   profitFactor: number | null;
+  signalDates: number;
+  avgExcessReturnPct: number | null;
+  avgAllocationWeight: number | null;
   config: {
     starting_cash?: number;
     max_positions?: number;
     position_size_pct?: number;
+    risk_budget_pct?: number;
     cash_buffer_pct?: number;
     min_trade_value?: number;
     costs_bps?: number;
+    max_industry_exposure_pct?: number | null;
+    capital_policy?: {
+      account_key: string;
+      role: "benchmark" | "challenger" | "legacy";
+      evidence_start_date: string | null;
+      max_daily_selections: number | null;
+      max_per_industry: number | null;
+      weighting: "equal" | "score_proportional";
+      daily_budget_pct: number | null;
+      tournament_version: string | null;
+    };
   };
+};
+
+export type CapitalTournament = {
+  version: string;
+  evidenceStartDate: string;
+  evidenceDays: number;
+  minimumEvidenceDays: number;
+  minimumClosedTrades: number;
+  benchmarkAccountKey: string | null;
+  provisionalLeaderAccountKey: string | null;
+  reviewCandidateAccountKey: string | null;
+  status: "collecting_evidence" | "manual_review_required";
+  automaticPromotion: false;
+  accounts: Array<{
+    accountKey: string;
+    name: string;
+    role: "benchmark" | "challenger";
+    policy: NonNullable<PaperAccount["config"]["capital_policy"]>;
+    closedTrades: number;
+    signalDates: number;
+    totalReturnPct: number;
+    avgExcessReturnPct: number | null;
+    maxDrawdownPct: number;
+    returnLiftVsTop3Pct: number | null;
+    riskAdjustedScore: number | null;
+    riskAdjustedLiftVsTop3: number | null;
+    qualifiedForReview: boolean;
+    rejectionReasons: string[];
+  }>;
 };
 
 export type PaperEquityPoint = {
@@ -432,6 +476,10 @@ export type PaperTrade = {
   industry: string;
   rankOrder: number | null;
   modelVersion: string | null;
+  finalScore: number | null;
+  allocationWeight: number | null;
+  benchmarkReturnPct: number | null;
+  excessReturnPct: number | null;
   entryAt: string | null;
   entryPrice: number | null;
   quantity: number | null;
@@ -588,6 +636,7 @@ export type DashboardSnapshot = {
   paperAccounts: PaperAccount[];
   paperEquity: PaperEquityPoint[];
   paperTrades: PaperTrade[];
+  capitalTournament: CapitalTournament;
   globalMarket: GlobalMarketSnapshot;
   institutionalFlow: InstitutionalFlowSnapshot;
 };

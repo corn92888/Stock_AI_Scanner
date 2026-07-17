@@ -255,6 +255,71 @@ class DashboardSnapshotTests(unittest.TestCase):
                 ["challenger_does_not_beat_champion"],
             )
 
+    def test_snapshot_exports_prospective_capital_tournament_gates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scanner.db"
+            with get_connection(database) as conn:
+                init_db(conn)
+                run_id = conn.execute(
+                    """
+                    INSERT INTO scan_runs (
+                        run_at, trade_date, mode, source, strategy_version
+                    ) VALUES ('2026-07-20T14:00:00+08:00', '2026-07-20',
+                              'eod', 'test', 'v1')
+                    """
+                ).lastrowid
+                conn.execute(
+                    """
+                    INSERT INTO predictions (
+                        run_id, code, predicted_at, model_version,
+                        is_prospective, created_at
+                    ) VALUES (?, '2330', '2026-07-20T14:10:00+08:00',
+                              'model-v1', 1, '2026-07-20T14:10:00+08:00')
+                    """,
+                    (run_id,),
+                )
+                for key, name, role in (
+                    ("ai_top3_equal_v1", "Top 3", "benchmark"),
+                    ("ai_top5_diversified_v1", "Top 5", "challenger"),
+                ):
+                    config = json.dumps(
+                        {
+                            "capital_policy": {
+                                "tournament_version": "prospective_capital_tournament_v1",
+                                "evidence_start_date": "2026-07-20",
+                                "role": role,
+                            }
+                        }
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO paper_accounts (
+                            account_key, name, strategy_kind, evidence_mode,
+                            policy_version, execution_version, starting_cash,
+                            cash, equity, total_return_pct, max_drawdown_pct,
+                            closed_trades, winning_trades, open_positions,
+                            pending_orders, skipped_orders, status, config_json,
+                            created_at, updated_at
+                        ) VALUES (?, ?, 'ai_capital', 'prospective_tournament',
+                                  'paper-v2', 'execution-v2', 1000000, 1000000,
+                                  1000000, 0, 0, 0, 0, 0, 0, 0, 'shadow', ?,
+                                  '2026-07-20T14:10:00+08:00',
+                                  '2026-07-20T14:10:00+08:00')
+                        """,
+                        (key, name, config),
+                    )
+                conn.commit()
+
+            tournament = build_dashboard_snapshot(database)["capitalTournament"]
+            self.assertEqual(tournament["evidenceDays"], 1)
+            self.assertEqual(tournament["benchmarkAccountKey"], "ai_top3_equal_v1")
+            self.assertEqual(tournament["status"], "collecting_evidence")
+            self.assertFalse(tournament["automaticPromotion"])
+            self.assertEqual(len(tournament["accounts"]), 2)
+            challenger = tournament["accounts"][1]
+            self.assertFalse(challenger["qualifiedForReview"])
+            self.assertIn("insufficient_prospective_dates", challenger["rejectionReasons"])
+
     def test_feature_coverage_counts_candidates_not_feature_versions(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "scanner.db"
