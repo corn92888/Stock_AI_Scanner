@@ -45,6 +45,9 @@ jobs:
   replay:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    env:
+      CLOUD_EVIDENCE_REQUIRED: ${{ vars.CLOUD_EVIDENCE_REQUIRED || 'false' }}
+      EVIDENCE_WORKFLOW: historical_replay
     concurrency:
       group: stock-scanner-historical-replay
       cancel-in-progress: false
@@ -55,6 +58,18 @@ jobs:
 
     - name: Synchronize latest research database
       run: git pull --ff-only origin main
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    - name: Restore newer verified cloud evidence
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      run: bash restore_scanner_data.sh
 
     - name: Restore durable replay state
       env:
@@ -74,12 +89,6 @@ jobs:
         else
           cp data/stock_scanner.db "$RUNNER_TEMP/historical_replay.db"
         fi
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-        cache: 'pip'
 
     - name: Install dependencies
       run: |
@@ -220,6 +229,10 @@ jobs:
     if: ${{ needs.replay.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CLOUD_EVIDENCE_REQUIRED: ${{ vars.CLOUD_EVIDENCE_REQUIRED || 'false' }}
+      CLOUD_EVIDENCE_ARCHIVE: "true"
+      EVIDENCE_WORKFLOW: historical_replay_persist
     concurrency:
       group: stock-scanner-automation
       cancel-in-progress: false
@@ -233,6 +246,12 @@ jobs:
       with:
         python-version: '3.10'
         cache: 'pip'
+
+    - name: Restore newer verified cloud evidence
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      run: bash restore_scanner_data.sh
 
     - name: Install persistence dependencies
       run: |
@@ -293,5 +312,8 @@ jobs:
         python research_monitor.py
 
     - name: Persist replay evidence and dashboard
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       run: |
         bash persist_scanner_data.sh "chore(data): record historical replay evidence"

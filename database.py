@@ -12,6 +12,7 @@ CANDIDATE_EXECUTION_VERSION = "mode_aligned_after_costs_t3_v2"
 PAPER_POLICY_VERSION = "risk_budget_portfolio_v2"
 PORTFOLIO_TOURNAMENT_VERSION = "prospective_capital_tournament_v1"
 PORTFOLIO_TOURNAMENT_START_DATE = "2026-07-20"
+CLOUD_EVIDENCE_SCHEMA_VERSION = "supabase_sqlite_snapshot_v1"
 HISTORICAL_REPLAY_VERSION = "point_in_time_eod_replay_v2"
 HISTORICAL_REPLAY_EXECUTION_VERSION = "next_open_after_costs_t3_v1"
 HISTORICAL_ATTRIBUTION_VERSION = "replay_attribution_v1"
@@ -162,6 +163,7 @@ def init_db(conn):
     _create_historical_replay_tables(conn)
     _create_global_market_tables(conn)
     _create_institutional_flow_tables(conn)
+    _create_cloud_evidence_tables(conn)
     _migrate_quant_tables(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_trade_date ON stock_signals(trade_date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_strategy ON stock_signals(strategy)")
@@ -238,6 +240,63 @@ def init_db(conn):
         "ON institutional_feature_snapshots(run_id, coverage_status)"
     )
     conn.commit()
+
+
+def _create_cloud_evidence_tables(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cloud_evidence_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_at TEXT NOT NULL,
+            backend TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            status TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            snapshot_key TEXT,
+            object_path TEXT,
+            database_sha256 TEXT,
+            database_bytes INTEGER,
+            compressed_bytes INTEGER,
+            latest_scan_run_id INTEGER,
+            latest_trade_date TEXT,
+            source_workflow TEXT,
+            error_code TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_cloud_evidence_events_time
+        ON cloud_evidence_events(event_at DESC, id DESC)
+        """
+    )
+
+
+def record_cloud_evidence_event(conn, **values):
+    _create_cloud_evidence_tables(conn)
+    columns = (
+        "event_at",
+        "backend",
+        "operation",
+        "status",
+        "schema_version",
+        "snapshot_key",
+        "object_path",
+        "database_sha256",
+        "database_bytes",
+        "compressed_bytes",
+        "latest_scan_run_id",
+        "latest_trade_date",
+        "source_workflow",
+        "error_code",
+        "metadata_json",
+    )
+    conn.execute(
+        f"INSERT INTO cloud_evidence_events ({', '.join(columns)}) "
+        f"VALUES ({', '.join('?' for _ in columns)})",
+        tuple(values.get(column) for column in columns),
+    )
 
 
 def _ensure_columns(conn, table_name, columns):

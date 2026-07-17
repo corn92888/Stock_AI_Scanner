@@ -105,13 +105,22 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertFalse(
                 payload["institutionalFlow"]["quality"]["formalRankingEnabled"]
             )
+            self.assertEqual(payload["cloudEvidence"]["status"], "unconfigured")
+            self.assertEqual(payload["cloudEvidence"]["migrationMode"], "dual_write")
             self.assertEqual(payload["researchQuality"]["matureRejectedOutcomes"], 0)
             self.assertIsNone(payload["researchQuality"]["selectionNetLift3d"])
             self.assertEqual(payload["candidates"][0]["strategies"], ["trend"])
             self.assertTrue(payload["candidates"][0]["isSelected"])
             self.assertEqual(payload["performance"][0]["netReturn3d"], 2.0)
             self.assertTrue(payload["performance"][0]["isFormalSelection"])
-            for private_key in ("email", "portfolio", "supabase", "private_code", "chat_id"):
+            for private_key in (
+                "email",
+                "portfolio",
+                "private_code",
+                "chat_id",
+                "service_role_key",
+                "authorization",
+            ):
                 self.assertNotIn(private_key, serialized)
 
     def test_snapshot_exports_paper_account_ledger(self):

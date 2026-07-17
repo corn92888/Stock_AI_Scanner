@@ -3,7 +3,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { CandidateLearnabilityAudit, CapitalTournament, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, ReplayAttribution, ResearchHealth, ResearchQuality, WorkflowRun } from "./types";
+import type { CandidateLearnabilityAudit, CapitalTournament, CloudEvidence, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, ReplayAttribution, ResearchHealth, ResearchQuality, WorkflowRun } from "./types";
 
 const DEFAULT_DATA_URL =
   "https://raw.githubusercontent.com/corn92888/Stock_AI_Scanner/main/data/dashboard_snapshot.json";
@@ -76,6 +76,26 @@ const EMPTY_RESEARCH_HEALTH: ResearchHealth = {
   replaySelectionExcessLift3d: null,
   replaySelectedSuccessRateT3: null,
   replayRejectedSuccessRateT3: null,
+};
+
+const EMPTY_CLOUD_EVIDENCE: CloudEvidence = {
+  backend: "supabase_storage",
+  schemaVersion: "supabase_sqlite_snapshot_v1",
+  migrationMode: "dual_write",
+  gitDatabaseFallback: true,
+  configured: false,
+  status: "unconfigured",
+  operation: "",
+  eventAt: "",
+  snapshotKey: "live",
+  objectPath: "",
+  databaseSha256: "",
+  databaseBytes: 0,
+  compressedBytes: 0,
+  latestScanRunId: null,
+  latestTradeDate: "",
+  sourceWorkflow: "",
+  message: "雲端證據層尚未完成第一次驗證。",
 };
 
 const EMPTY_REPLAY_ATTRIBUTION: ReplayAttribution = {
@@ -187,6 +207,10 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
       ...(snapshot.researchHealth ?? {}),
       warnings: snapshot.researchHealth?.warnings ?? EMPTY_RESEARCH_HEALTH.warnings,
       replayDataWarnings: snapshot.researchHealth?.replayDataWarnings ?? [],
+    },
+    cloudEvidence: {
+      ...EMPTY_CLOUD_EVIDENCE,
+      ...(snapshot.cloudEvidence ?? {}),
     },
     replayAttribution: {
       ...EMPTY_REPLAY_ATTRIBUTION,

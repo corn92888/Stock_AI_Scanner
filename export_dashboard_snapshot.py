@@ -38,6 +38,65 @@ STATUS_LABELS = {
 }
 
 
+def _cloud_evidence_snapshot(conn):
+    default = {
+        "backend": "supabase_storage",
+        "schemaVersion": "supabase_sqlite_snapshot_v1",
+        "migrationMode": "dual_write",
+        "gitDatabaseFallback": True,
+        "configured": False,
+        "status": "unconfigured",
+        "operation": "",
+        "eventAt": "",
+        "snapshotKey": "live",
+        "objectPath": "",
+        "databaseSha256": "",
+        "databaseBytes": 0,
+        "compressedBytes": 0,
+        "latestScanRunId": None,
+        "latestTradeDate": "",
+        "sourceWorkflow": "",
+        "message": "雲端證據層尚未完成第一次驗證。",
+    }
+    if not _table_exists(conn, "cloud_evidence_events"):
+        return default
+    row = conn.execute(
+        """
+        SELECT event_at, operation, status, schema_version, snapshot_key,
+               object_path, database_sha256, database_bytes, compressed_bytes,
+               latest_scan_run_id, latest_trade_date, source_workflow
+        FROM cloud_evidence_events
+        ORDER BY event_at DESC, id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if not row:
+        return default
+    messages = {
+        "verified": "雲端快照已完成上傳、下載與雜湊校驗。",
+        "failed": "最近一次雲端證據同步失敗，Git 資料庫備援仍保留。",
+        "unconfigured": "Supabase 證據層尚未完成設定，仍由 Git 資料庫備援。",
+    }
+    status = row["status"]
+    return {
+        **default,
+        "schemaVersion": row["schema_version"],
+        "configured": status != "unconfigured",
+        "status": status,
+        "operation": row["operation"],
+        "eventAt": row["event_at"],
+        "snapshotKey": row["snapshot_key"] or "live",
+        "objectPath": row["object_path"] or "",
+        "databaseSha256": row["database_sha256"] or "",
+        "databaseBytes": int(row["database_bytes"] or 0),
+        "compressedBytes": int(row["compressed_bytes"] or 0),
+        "latestScanRunId": row["latest_scan_run_id"],
+        "latestTradeDate": row["latest_trade_date"] or "",
+        "sourceWorkflow": row["source_workflow"] or "",
+        "message": messages.get(status, "雲端證據層正在建立。"),
+    }
+
+
 def _table_exists(conn, table_name):
     return bool(
         conn.execute(
@@ -1469,6 +1528,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
         research_health = _research_health_snapshot(conn)
         replay_attribution = _replay_attribution_snapshot(conn)
         portfolio_tournament = _portfolio_tournament_snapshot(conn, paper_accounts)
+        cloud_evidence = _cloud_evidence_snapshot(conn)
 
         return {
             "schemaVersion": SCHEMA_VERSION,
@@ -1494,6 +1554,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "capitalTournament": portfolio_tournament,
             "globalMarket": global_market,
             "institutionalFlow": institutional_flow,
+            "cloudEvidence": cloud_evidence,
         }
     finally:
         conn.close()

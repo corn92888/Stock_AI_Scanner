@@ -52,6 +52,15 @@ if compgen -G "$snapshot_dir/replay_execution_labels.csv.gz*" > /dev/null; then
   cp "$snapshot_dir"/replay_execution_labels.csv.gz* data/
 fi
 
+cloud_args=(push --database data/stock_scanner.db)
+if [ "${CLOUD_EVIDENCE_ARCHIVE:-false}" = "true" ]; then
+  cloud_args+=(--archive-daily)
+fi
+if [ "${CLOUD_EVIDENCE_REQUIRED:-false}" = "true" ]; then
+  cloud_args+=(--required)
+fi
+python cloud_evidence.py "${cloud_args[@]}"
+
 python export_dashboard_snapshot.py
 
 git add data/stock_scanner.db data/dashboard_snapshot.json web/public/dashboard_snapshot.json

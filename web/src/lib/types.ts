@@ -195,6 +195,26 @@ export type ResearchHealth = {
   replayRejectedSuccessRateT3: number | null;
 };
 
+export type CloudEvidence = {
+  backend: "supabase_storage";
+  schemaVersion: string;
+  migrationMode: "dual_write" | "cloud_primary";
+  gitDatabaseFallback: boolean;
+  configured: boolean;
+  status: "unconfigured" | "verified" | "failed";
+  operation: "" | "push" | "restore";
+  eventAt: string;
+  snapshotKey: string;
+  objectPath: string;
+  databaseSha256: string;
+  databaseBytes: number;
+  compressedBytes: number;
+  latestScanRunId: number | null;
+  latestTradeDate: string;
+  sourceWorkflow: string;
+  message: string;
+};
+
 export type ReplayAttributionRow = {
   dimension: string;
   dimensionLabel: string;
@@ -639,6 +659,7 @@ export type DashboardSnapshot = {
   capitalTournament: CapitalTournament;
   globalMarket: GlobalMarketSnapshot;
   institutionalFlow: InstitutionalFlowSnapshot;
+  cloudEvidence: CloudEvidence;
 };
 
 export type WorkflowRun = {

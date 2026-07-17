@@ -14,20 +14,33 @@ class WorkflowPersistenceTests(unittest.TestCase):
             "historical_replay.yml",
             "institutional_flow.yml",
             "institutional_research.yml",
+            "learnability_audit.yml",
         ):
             workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
             self.assertIn("git pull --ff-only origin main", workflow)
+            self.assertIn("bash restore_scanner_data.sh", workflow)
             self.assertIn("bash persist_scanner_data.sh", workflow)
+            self.assertIn("SUPABASE_SERVICE_ROLE_KEY", workflow)
             self.assertNotIn("git pull --rebase origin main\n            git push", workflow)
 
     def test_snapshot_is_exported_after_main_is_synchronized(self):
         script = (ROOT / "persist_scanner_data.sh").read_text()
         pull_index = script.index("git pull --rebase origin main")
+        cloud_index = script.index('python cloud_evidence.py "${cloud_args[@]}"')
         export_index = script.index("python export_dashboard_snapshot.py")
         commit_index = script.index('git commit -m "$commit_message"')
 
         self.assertLess(pull_index, export_index)
+        self.assertLess(pull_index, cloud_index)
+        self.assertLess(cloud_index, export_index)
         self.assertLess(export_index, commit_index)
+
+    def test_daily_workflow_creates_one_verified_archive_per_trade_date(self):
+        workflow = (ROOT / ".github" / "workflows" / "daily_scan.yml").read_text()
+        script = (ROOT / "persist_scanner_data.sh").read_text()
+        self.assertIn('CLOUD_EVIDENCE_ARCHIVE: "true"', workflow)
+        self.assertIn("cloud_args+=(--archive-daily)", script)
+        self.assertIn("cloud_args+=(--required)", script)
 
     def test_intraday_workflow_installs_only_runtime_dependencies(self):
         workflow = (ROOT / ".github" / "workflows" / "intraday_scan.yml").read_text()

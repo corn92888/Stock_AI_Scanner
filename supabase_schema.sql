@@ -101,3 +101,68 @@ CREATE INDEX IF NOT EXISTS idx_market_observations_instrument_time
 ALTER TABLE public.market_instruments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.market_observations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.market_regime_snapshots ENABLE ROW LEVEL SECURITY;
+
+-- Private, server-only evidence storage for the scanner's durable SQLite image.
+-- The live object is overwritten after every successful pipeline; one daily
+-- object is retained per trading date. PostgreSQL keeps the verified manifest
+-- and append-only synchronization audit log.
+INSERT INTO storage.buckets (id, name, public, file_size_limit)
+VALUES ('scanner-evidence', 'scanner-evidence', false, 104857600)
+ON CONFLICT (id) DO UPDATE SET
+    public = EXCLUDED.public,
+    file_size_limit = EXCLUDED.file_size_limit;
+
+CREATE TABLE IF NOT EXISTS public.scanner_evidence_snapshots (
+    snapshot_key text PRIMARY KEY,
+    object_path text NOT NULL,
+    snapshot_at timestamptz NOT NULL,
+    source_workflow text NOT NULL,
+    source_run_id text,
+    source_commit text,
+    schema_version text NOT NULL,
+    database_sha256 text NOT NULL,
+    compressed_sha256 text NOT NULL,
+    database_bytes bigint NOT NULL,
+    compressed_bytes bigint NOT NULL,
+    latest_scan_run_id bigint,
+    latest_trade_date date,
+    latest_run_at timestamptz,
+    sqlite_integrity text NOT NULL,
+    table_counts jsonb NOT NULL DEFAULT '{}'::jsonb,
+    dashboard_sha256 text,
+    status text NOT NULL CHECK (status IN ('pending', 'verified', 'failed')),
+    verified_at timestamptz,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS public.scanner_evidence_sync_events (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    event_at timestamptz NOT NULL DEFAULT now(),
+    snapshot_key text NOT NULL,
+    operation text NOT NULL CHECK (operation IN ('push', 'restore')),
+    status text NOT NULL CHECK (status IN ('verified', 'failed', 'skipped')),
+    source_workflow text,
+    source_run_id text,
+    source_commit text,
+    database_sha256 text,
+    database_bytes bigint,
+    compressed_bytes bigint,
+    latest_scan_run_id bigint,
+    latest_trade_date date,
+    details jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_scanner_evidence_snapshots_time
+    ON public.scanner_evidence_snapshots (snapshot_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scanner_evidence_events_time
+    ON public.scanner_evidence_sync_events (event_at DESC);
+
+ALTER TABLE public.scanner_evidence_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.scanner_evidence_sync_events ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON public.scanner_evidence_snapshots FROM anon, authenticated;
+REVOKE ALL ON public.scanner_evidence_sync_events FROM anon, authenticated;
+GRANT ALL ON public.scanner_evidence_snapshots TO service_role;
+GRANT ALL ON public.scanner_evidence_sync_events TO service_role;
+GRANT USAGE, SELECT ON SEQUENCE public.scanner_evidence_sync_events_id_seq
+    TO service_role;

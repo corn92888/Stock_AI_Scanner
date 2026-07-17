@@ -17,6 +17,9 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      CLOUD_EVIDENCE_REQUIRED: ${{ vars.CLOUD_EVIDENCE_REQUIRED || 'false' }}
+      EVIDENCE_WORKFLOW: learnability_audit
     concurrency:
       group: stock-scanner-automation
       cancel-in-progress: false
@@ -33,6 +36,12 @@ jobs:
       with:
         python-version: '3.10'
         cache: 'pip'
+
+    - name: Restore newer verified cloud evidence
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      run: bash restore_scanner_data.sh
 
     - name: Install research dependencies
       run: |
@@ -55,4 +64,7 @@ jobs:
         if-no-files-found: error
 
     - name: Persist learnability evidence and dashboard
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       run: 'bash persist_scanner_data.sh "chore(data): record candidate learnability evidence"'

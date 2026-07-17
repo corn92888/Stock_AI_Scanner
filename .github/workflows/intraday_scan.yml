@@ -29,6 +29,8 @@ jobs:
     env:
       PYTHONUNBUFFERED: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      CLOUD_EVIDENCE_REQUIRED: ${{ vars.CLOUD_EVIDENCE_REQUIRED || 'false' }}
+      EVIDENCE_WORKFLOW: intraday_scan
 
     steps:
     - name: Checkout repository
@@ -44,6 +46,12 @@ jobs:
         python-version: '3.10'
         cache: 'pip'
         cache-dependency-path: requirements-intraday.txt
+
+    - name: Restore newer verified cloud evidence
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      run: bash restore_scanner_data.sh
 
     - name: Decide whether this automation slot should run
       id: gate
@@ -98,6 +106,9 @@ jobs:
 
     - name: Persist signal database
       if: always() && steps.gate.outputs.run == 'true'
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       run: |
         bash persist_scanner_data.sh "chore(data): record intraday scanner signals"
 

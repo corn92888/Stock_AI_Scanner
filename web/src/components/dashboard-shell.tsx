@@ -1099,6 +1099,8 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
   const completed = workflowRuns.filter((run) => run.status === "completed");
   const workflowSuccessRate = completed.length ? completed.filter((run) => run.conclusion === "success" || run.conclusion === "skipped").length / completed.length * 100 : 0;
   const lastBacktest = snapshot.backtestRuns[0];
+  const cloudEvidence = snapshot.cloudEvidence;
+  const cloudVerified = cloudEvidence.status === "verified";
   const healthChecks = [
     { label: "公開資料快照", ok: snapshotFresh, detail: formatDateTime(snapshot.generatedAt) },
     { label: "GitHub Actions API", ok: workflowRuns.length > 0, detail: `${workflowRuns.length} 筆執行紀錄` },
@@ -1106,6 +1108,7 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
     { label: "回測批次可追溯", ok: Boolean(lastBacktest), detail: lastBacktest ? formatDateTime(lastBacktest.startedAt) : "尚無紀錄" },
     { label: "前瞻標註未逾期", ok: snapshot.researchHealth.staleOutcomes === 0, detail: `${snapshot.researchHealth.staleOutcomes} 筆逾期` },
     { label: "歷史重播證據", ok: snapshot.researchHealth.completedReplayRuns > 0, detail: snapshot.researchHealth.latestReplayAt ? formatDateTime(snapshot.researchHealth.latestReplayAt) : "尚未執行" },
+    { label: "Supabase 證據快照", ok: cloudVerified, detail: cloudEvidence.eventAt ? `${formatDateTime(cloudEvidence.eventAt)} · run ${cloudEvidence.latestScanRunId ?? "--"}` : "尚未驗證" },
   ];
   return (
     <div className="view-stack">
@@ -1114,7 +1117,7 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
         <Metric label="執行成功率" value={`${decimal.format(workflowSuccessRate)}%`} detail={`最近 ${completed.length} 筆已完成`} tone={workflowSuccessRate >= 80 ? "positive" : "warning"} icon={CheckCircle2} />
         <Metric label="最近成功" value={latestSuccess ? modeLabel(latestSuccess.name.includes("Intraday") ? "intraday" : "eod") : "--"} detail={formatDateTime(latestSuccess?.updatedAt)} icon={Clock3} />
         <Metric label="最近失敗" value={latestFailed ? "需檢查" : "無"} detail={latestFailed ? formatDateTime(latestFailed.updatedAt) : "最近紀錄未見失敗"} tone={latestFailed ? "danger" : "positive"} icon={TriangleAlert} />
-        <Metric label="資料快照" value={snapshot.overview.latestTradeDate || "--"} detail={formatDateTime(snapshot.generatedAt)} tone={snapshotFresh ? "info" : "warning"} icon={Database} />
+        <Metric label="雲端證據" value={cloudVerified ? "VERIFIED" : cloudEvidence.status === "failed" ? "FAILED" : "PENDING"} detail={cloudEvidence.eventAt ? formatDateTime(cloudEvidence.eventAt) : "等待首次同步"} tone={cloudVerified ? "positive" : cloudEvidence.status === "failed" ? "danger" : "warning"} icon={Database} />
       </section>
 
       <section className="operations-grid">
@@ -1127,6 +1130,7 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
         <div className="panel health-panel">
           <PanelHeader eyebrow="System checks" title="服務健康檢查" description="部署、資料、特徵、回測與前瞻成熟度" />
           <div className="health-list">{healthChecks.map((check) => <div className="health-row" key={check.label}><span className={check.ok ? "ok" : "warn"}>{check.ok ? <CircleCheck size={16} /> : <TriangleAlert size={16} />}</span><div><strong>{check.label}</strong><small>{check.detail}</small></div><span>{check.ok ? "正常" : "注意"}</span></div>)}</div>
+          <div className="permission-note"><Database size={17} /><p>{cloudEvidence.message} 目前模式：{cloudEvidence.migrationMode === "dual_write" ? "雲端與 Git 雙寫驗證" : "雲端主儲存"}。</p></div>
         </div>
       </section>
 
