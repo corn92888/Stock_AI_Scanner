@@ -190,6 +190,71 @@ class CandidateOutcomeDatabaseTests(unittest.TestCase):
             )
             self.assertEqual(load_pending_candidates(db_path=db_path), [])
 
+    def test_overdue_prospective_cohort_preempts_older_backlog(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "scanner.db"
+            with get_connection(db_path) as conn:
+                init_db(conn)
+
+                def insert_run(trade_date):
+                    return conn.execute(
+                        """
+                        INSERT INTO scan_runs (
+                            run_at, trade_date, mode, source, strategy_version
+                        ) VALUES (?, ?, 'intraday', 'test', 'v1')
+                        """,
+                        (f"{trade_date}T10:00:00+08:00", trade_date),
+                    ).lastrowid
+
+                def insert_candidate(run_id, trade_date, code):
+                    return conn.execute(
+                        """
+                        INSERT INTO candidate_events (
+                            run_id, code, name, as_of, strategies_json,
+                            strategy_count, raw_rank, signal_price,
+                            observation_price, tradable, block_reasons_json,
+                            risk_flags_json, is_first_eligible_event, is_selected,
+                            selection_status, policy_version, policy_config_json,
+                            snapshot_json, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, '[]', 1, 1, 100, 95, 1, '[]',
+                                  '[]', 1, 1, 'selected', 'test_v1', '{}', '{}', ?, ?)
+                        """,
+                        (
+                            run_id,
+                            code,
+                            f"Stock {code}",
+                            f"{trade_date}T10:00:00+08:00",
+                            f"{trade_date}T10:00:00+08:00",
+                            f"{trade_date}T10:00:00+08:00",
+                        ),
+                    ).lastrowid
+
+                old_run = insert_run("2026-05-01")
+                old_candidate = insert_candidate(old_run, "2026-05-01", "1101")
+                cohort_run = insert_run("2026-07-01")
+                cohort_candidate = insert_candidate(
+                    cohort_run, "2026-07-01", "2330"
+                )
+                for trade_date in ("2026-07-02", "2026-07-03", "2026-07-06"):
+                    insert_run(trade_date)
+                conn.execute(
+                    """
+                    INSERT INTO predictions (
+                        run_id, code, predicted_at, model_version,
+                        is_prospective, created_at
+                    ) VALUES (?, '2330', '2026-07-01T10:01:00+08:00',
+                              'test_model', 1, '2026-07-01T10:01:00+08:00')
+                    """,
+                    (cohort_run,),
+                )
+
+            pending = load_pending_candidates(db_path=db_path, limit=1)
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0]["id"], cohort_candidate)
+            self.assertEqual(pending[0]["maturity_priority"], 1)
+            self.assertEqual(pending[0]["prospective_later_sessions"], 3)
+            self.assertNotEqual(pending[0]["id"], old_candidate)
+
 
 if __name__ == "__main__":
     unittest.main()

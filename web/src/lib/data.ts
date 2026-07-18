@@ -76,6 +76,27 @@ const EMPTY_RESEARCH_HEALTH: ResearchHealth = {
   replaySelectionExcessLift3d: null,
   replaySelectedSuccessRateT3: null,
   replayRejectedSuccessRateT3: null,
+  formalMatureCandidates: 0,
+  formalMatureSelected: 0,
+  formalMatureRejected: 0,
+  formalSelectedTradeDates: 0,
+  formalSelectedMeanNetReturn3d: null,
+  formalSelectedMeanExcessReturn3d: null,
+  formalRejectedMeanNetReturn3d: null,
+  formalRejectedMeanExcessReturn3d: null,
+  formalSelectionNetLift3d: null,
+  formalSelectionExcessLift3d: null,
+  integrityGate: {
+    version: "research_integrity_gate_v1",
+    status: "blocked",
+    recommendationMode: "research_only",
+    evidenceReady: false,
+    manualApproval: false,
+    formalRecommendationsAllowed: false,
+    passedChecks: 0,
+    totalChecks: 0,
+    checks: [],
+  },
 };
 
 const EMPTY_CLOUD_EVIDENCE: CloudEvidence = {
@@ -217,6 +238,11 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
       ...(snapshot.researchHealth ?? {}),
       warnings: snapshot.researchHealth?.warnings ?? EMPTY_RESEARCH_HEALTH.warnings,
       replayDataWarnings: snapshot.researchHealth?.replayDataWarnings ?? [],
+      integrityGate: {
+        ...EMPTY_RESEARCH_HEALTH.integrityGate,
+        ...(snapshot.researchHealth?.integrityGate ?? {}),
+        checks: snapshot.researchHealth?.integrityGate?.checks ?? [],
+      },
     },
     cloudEvidence: {
       ...EMPTY_CLOUD_EVIDENCE,

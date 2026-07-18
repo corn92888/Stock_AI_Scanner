@@ -146,6 +146,26 @@ export type CandidateLearnabilityAudit = {
   rows: LearnabilityAuditRow[];
 };
 
+export type ResearchIntegrityCheck = {
+  key: string;
+  label: string;
+  passed: boolean;
+  detail: string;
+  requirement: string;
+};
+
+export type ResearchIntegrityGate = {
+  version: string;
+  status: "blocked" | "review_required" | "approved";
+  recommendationMode: "research_only" | "formal";
+  evidenceReady: boolean;
+  manualApproval: boolean;
+  formalRecommendationsAllowed: boolean;
+  passedChecks: number;
+  totalChecks: number;
+  checks: ResearchIntegrityCheck[];
+};
+
 export type ResearchHealth = {
   status: "healthy" | "building" | "warning" | "critical";
   checkedAt: string;
@@ -193,6 +213,17 @@ export type ResearchHealth = {
   replaySelectionExcessLift3d: number | null;
   replaySelectedSuccessRateT3: number | null;
   replayRejectedSuccessRateT3: number | null;
+  formalMatureCandidates: number;
+  formalMatureSelected: number;
+  formalMatureRejected: number;
+  formalSelectedTradeDates: number;
+  formalSelectedMeanNetReturn3d: number | null;
+  formalSelectedMeanExcessReturn3d: number | null;
+  formalRejectedMeanNetReturn3d: number | null;
+  formalRejectedMeanExcessReturn3d: number | null;
+  formalSelectionNetLift3d: number | null;
+  formalSelectionExcessLift3d: number | null;
+  integrityGate: ResearchIntegrityGate;
 };
 
 export type CloudEvidence = {

@@ -13,7 +13,8 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 
 try:
     from logic import calculate_indicators, check_trend_strict, check_reversal_strict, check_wave_strict
-    from database import record_scan_results
+    from database import DB_PATH, record_scan_results
+    from research_monitor import build_research_health
 except ImportError:
     print("❌ 找不到必要模組，請確認 logic.py 與 database.py 在同一個資料夾內。")
     sys.exit()
@@ -436,10 +437,25 @@ def run_intraday_scanner(send_telegram=True, now=None):
     today_str = now.strftime('%m/%d')
     trade_date = now.date().isoformat()
     strategy_frames = {}
+    try:
+        integrity_gate = build_research_health(DB_PATH).get("integrity_gate", {})
+        research_only = not bool(
+            integrity_gate.get("formal_recommendations_allowed")
+        )
+        gate_notice = (
+            "⚠️ 研究完整性閘門未通過；以下三策略為研究訊號，不是買進建議。\n\n"
+            if research_only
+            else "✅ 研究完整性閘門已核准；仍須自行核對即時價格與風險。\n\n"
+        )
+    except Exception:
+        gate_notice = "⚠️ 無法驗證研究完整性閘門；以下僅能視為研究訊號。\n\n"
     
     with pd.ExcelWriter(filename) as writer:
         LIMIT_N = 10
-        msg_trend = [f"📅 {today_str} 選股日報 (⚡️盤中三策略合一)\n"]
+        msg_trend = [
+            f"📅 {today_str} 選股日報 (⚡️盤中三策略合一)\n",
+            gate_notice,
+        ]
         wrote_sheet = False
         
         if list_trend:

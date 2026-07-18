@@ -472,7 +472,7 @@ function SortHeader({ label, field, activeField, direction, onSort }: { label: s
   return <button type="button" className={activeField === field ? "sort-button active" : "sort-button"} onClick={() => onSort(field)}>{label}<Icon size={12} /></button>;
 }
 
-function CandidateDrawer({ candidate, onClose }: { candidate: Candidate; onClose: () => void }) {
+function CandidateDrawer({ candidate, onClose, researchOnly }: { candidate: Candidate; onClose: () => void; researchOnly: boolean }) {
   const risks = candidateRisk(candidate);
   const yahooUrl = `https://tw.stock.yahoo.com/quote/${candidate.code}`;
   return (
@@ -489,7 +489,7 @@ function CandidateDrawer({ candidate, onClose }: { candidate: Candidate; onClose
         </div>
 
         <div className="drawer-status-row">
-          <span className={`status-pill ${candidate.isSelected ? "selected" : candidate.tradable ? "eligible" : "blocked"}`}>{candidate.statusLabel}</span>
+          <span className={`status-pill ${candidate.isSelected ? "selected" : candidate.tradable ? "eligible" : "blocked"}`}>{candidate.isSelected && researchOnly ? "研究候選" : candidate.statusLabel}</span>
           <span className="policy-code">{candidate.policyVersion}</span>
           {candidate.aiProspective ? <span className="status-pill eligible">AI 前瞻</span> : candidate.aiProbabilityT3 != null ? <span className="status-pill neutral">歷史試跑</span> : null}
         </div>
@@ -497,7 +497,7 @@ function CandidateDrawer({ candidate, onClose }: { candidate: Candidate; onClose
         <section className="drawer-section">
           <h3>決策矩陣</h3>
           <div className="decision-matrix">
-            <div><span>規則分數</span><strong>{decimal.format(candidate.score)}</strong><small>{candidate.isSelected ? "正式入選" : "未正式入選"}</small></div>
+            <div><span>規則分數</span><strong>{decimal.format(candidate.score)}</strong><small>{candidate.isSelected ? researchOnly ? "研究候選" : "正式入選" : "未入選"}</small></div>
             <div><span>AI T+3</span><strong>{candidate.aiProbabilityT3 == null ? "--" : `${decimal.format(candidate.aiProbabilityT3 * 100)}%`}</strong><small>{candidate.aiShadowSelected ? "影子入選" : "影子觀察"}</small></div>
             <div><span>預期超額</span><strong className={(candidate.aiExpectedExcess3d ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(candidate.aiExpectedExcess3d)}</strong><small>相對大盤 T+3</small></div>
             <div><span>預期回撤</span><strong className="negative-text">{pct(candidate.aiExpectedDrawdown3d)}</strong><small>AI 估計風險</small></div>
@@ -535,7 +535,7 @@ function CandidateDrawer({ candidate, onClose }: { candidate: Candidate; onClose
   );
 }
 
-function CandidateTable({ rows, sort, direction, onSort, onSelect }: { rows: Candidate[]; sort: CandidateSort; direction: SortDirection; onSort: (field: CandidateSort) => void; onSelect: (candidate: Candidate) => void }) {
+function CandidateTable({ rows, sort, direction, onSort, onSelect, researchOnly }: { rows: Candidate[]; sort: CandidateSort; direction: SortDirection; onSort: (field: CandidateSort) => void; onSelect: (candidate: Candidate) => void; researchOnly: boolean }) {
   if (!rows.length) return <div className="empty-state">目前篩選條件沒有候選標的。</div>;
   return (
     <div className="table-scroll candidate-table-scroll">
@@ -566,7 +566,7 @@ function CandidateTable({ rows, sort, direction, onSort, onSelect }: { rows: Can
             <td>{decimal.format(row.turnoverBillion)} 億</td>
             <td>{row.aiProbabilityT3 == null ? <span className="muted-inline">--</span> : <div className="ai-cell"><strong>{decimal.format(row.aiProbabilityT3 * 100)}%</strong><small>{row.aiProspective ? "前瞻" : "試跑"}</small></div>}</td>
             <td className={(row.aiExpectedExcess3d ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.aiExpectedExcess3d)}</td>
-            <td><div className="consensus-cell"><span className={`status-pill ${row.isSelected ? "selected" : row.tradable ? "eligible" : "blocked"}`}>{row.statusLabel}</span>{agreement && <span className="agreement-mark"><Zap size={11} />共識</span>}</div></td>
+            <td><div className="consensus-cell"><span className={`status-pill ${row.isSelected ? "selected" : row.tradable ? "eligible" : "blocked"}`}>{row.isSelected && researchOnly ? "研究候選" : row.statusLabel}</span>{agreement && <span className="agreement-mark"><Zap size={11} />共識</span>}</div></td>
             <td className="risk-cell" title={risks.join("、") || undefined}>{risks.length ? <span className="risk-count"><TriangleAlert size={12} />{risks.slice(0, 2).join("、")}</span> : <span className="clean-mark"><CheckCircle2 size={12} />清潔</span>}</td>
           </tr>;
         })}</tbody>
@@ -576,6 +576,8 @@ function CandidateTable({ rows, sort, direction, onSort, onSelect }: { rows: Can
 }
 
 function DecisionView({ snapshot }: { snapshot: DashboardSnapshot }) {
+  const integrityGate = snapshot.researchHealth.integrityGate;
+  const researchOnly = !integrityGate.formalRecommendationsAllowed;
   const dates = useMemo(() => [...new Set(snapshot.candidates.map((row) => row.tradeDate))].sort().reverse(), [snapshot.candidates]);
   const latestCandidateDate = dates.includes(snapshot.overview.latestTradeDate) ? snapshot.overview.latestTradeDate : dates[0] || "";
   const [date, setDate] = useState(latestCandidateDate);
@@ -630,35 +632,37 @@ function DecisionView({ snapshot }: { snapshot: DashboardSnapshot }) {
       <section className="metrics-grid metrics-grid-five">
         <Metric label="分析批次" value={number.format(uniqueRuns)} detail={`${date || "--"} 盤中快照`} tone="info" icon={Layers3} />
         <Metric label="可交易候選" value={number.format(tradable.length)} detail={`通過率 ${dayRows.length ? Math.round(tradable.length / dayRows.length * 100) : 0}%`} tone="positive" icon={CheckCircle2} />
-        <Metric label="正式入選" value={number.format(selected.length)} detail={`成交值中位 ${median(selected.map((row) => row.turnoverBillion)) == null ? "--" : decimal.format(median(selected.map((row) => row.turnoverBillion)) ?? 0)} 億`} tone="warning" icon={Target} />
+        <Metric label={researchOnly ? "研究候選" : "正式入選"} value={number.format(selected.length)} detail={`成交值中位 ${median(selected.map((row) => row.turnoverBillion)) == null ? "--" : decimal.format(median(selected.map((row) => row.turnoverBillion)) ?? 0)} 億`} tone="warning" icon={Target} />
         <Metric label="AI 已評估" value={number.format(aiEvaluated.length)} detail={`${agreement} 檔規則與 AI 共識`} tone={aiEvaluated.length ? "info" : "default"} icon={Bot} />
         <Metric label="風險阻擋" value={number.format(dayRows.filter((row) => !row.tradable).length)} detail="未通過硬性交易條件" tone="danger" icon={ShieldCheck} />
       </section>
+
+      <div className="validation-banner"><TriangleAlert size={18} /><div><strong>{integrityGate.status === "blocked" ? "研究完整性閘門阻擋正式推薦" : integrityGate.status === "review_required" ? "量化證據待人工核准" : "研究完整性閘門已核准"}</strong><p>{researchOnly ? `目前僅通過 ${integrityGate.passedChecks}/${integrityGate.totalChecks} 項完整性檢查；下方入選結果只代表研究排序，不是買進指令。` : `已通過 ${integrityGate.passedChecks}/${integrityGate.totalChecks} 項檢查與人工核准；仍須依即時價格及個人風險承受度決策。`}</p></div></div>
 
       <section className="panel decision-panel">
         <PanelHeader eyebrow="Decision workspace" title="候選決策工作台" description="同一交易日的規則訊號、流動性、AI 影子預測與風險證據" trailing={<div className="panel-actions"><span className="record-count">{scope === "latest" && latestRunAt ? `${formatDateTime(latestRunAt)} · ` : ""}{rows.length} / {dayRows.length} 筆</span><IconButton label="重設篩選" onClick={resetFilters}><RotateCcw size={16} /></IconButton><IconButton label="匯出目前候選 CSV" onClick={() => downloadCandidates(rows, date)}><Download size={16} /></IconButton></div>} />
         <div className="toolbar decision-toolbar">
           <label className="select-control"><span>交易日</span><select value={date} onChange={(event) => setDate(event.target.value)}>{dates.map((item) => <option key={item}>{item}</option>)}</select></label>
-          <div className="segmented" aria-label="候選範圍">{([['latest', '最新批次'], ['selected', '每日正式'], ['all', '全日候選'], ['rejected', '未入選']] as Array<[Scope, string]>).map(([id, label]) => <button key={id} className={scope === id ? "active" : ""} onClick={() => setScope(id)}>{label}</button>)}</div>
+          <div className="segmented" aria-label="候選範圍">{([['latest', '最新批次'], ['selected', researchOnly ? '每日研究' : '每日正式'], ['all', '全日候選'], ['rejected', '未入選']] as Array<[Scope, string]>).map(([id, label]) => <button key={id} className={scope === id ? "active" : ""} onClick={() => setScope(id)}>{label}</button>)}</div>
           <label className="select-control"><span>策略</span><select value={strategy} onChange={(event) => setStrategy(event.target.value)}><option value="all">全部策略</option><option value="trend">順勢突破</option><option value="reversal">低檔爆量</option><option value="wave">波段蓄勢</option></select></label>
           <label className="select-control"><span>風險</span><select value={riskFilter} onChange={(event) => setRiskFilter(event.target.value)}><option value="all">全部狀態</option><option value="clean">僅看清潔</option><option value="risk">僅看有風險</option></select></label>
           <label className="search-control"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜尋代號、名稱或產業" /></label>
         </div>
-        <CandidateTable rows={rows.slice(0, 160)} sort={sort} direction={direction} onSort={handleSort} onSelect={setSelectedCandidate} />
+        <CandidateTable rows={rows.slice(0, 160)} sort={sort} direction={direction} onSort={handleSort} onSelect={setSelectedCandidate} researchOnly={researchOnly} />
       </section>
 
       <section className="analysis-grid">
         <div className="panel chart-panel">
           <PanelHeader eyebrow="Selection flow" title="近 36 個交易日訊號漏斗" description="觀察候選供給、可交易率與正式名單是否異常漂移" />
-          <div className="chart-frame"><ResponsiveContainer width="100%" height="100%"><AreaChart data={chartData} margin={{ top: 14, right: 16, left: -20, bottom: 0 }}><defs><linearGradient id="candidateFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#5fb3d9" stopOpacity={0.22} /><stop offset="100%" stopColor="#5fb3d9" stopOpacity={0} /></linearGradient></defs><CartesianGrid stroke="#2b2e31" vertical={false} /><XAxis dataKey="label" stroke="#777d82" tickLine={false} axisLine={false} minTickGap={26} /><YAxis stroke="#777d82" tickLine={false} axisLine={false} /><Tooltip contentStyle={tooltipStyle} /><Area type="monotone" dataKey="candidates" name="候選" stroke="#5fb3d9" fill="url(#candidateFill)" strokeWidth={2} /><Line type="monotone" dataKey="tradable" name="可交易" stroke="#55c29a" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="selected" name="正式入選" stroke="#e2ae5f" strokeWidth={2} dot={false} /></AreaChart></ResponsiveContainer></div>
+          <div className="chart-frame"><ResponsiveContainer width="100%" height="100%"><AreaChart data={chartData} margin={{ top: 14, right: 16, left: -20, bottom: 0 }}><defs><linearGradient id="candidateFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#5fb3d9" stopOpacity={0.22} /><stop offset="100%" stopColor="#5fb3d9" stopOpacity={0} /></linearGradient></defs><CartesianGrid stroke="#2b2e31" vertical={false} /><XAxis dataKey="label" stroke="#777d82" tickLine={false} axisLine={false} minTickGap={26} /><YAxis stroke="#777d82" tickLine={false} axisLine={false} /><Tooltip contentStyle={tooltipStyle} /><Area type="monotone" dataKey="candidates" name="候選" stroke="#5fb3d9" fill="url(#candidateFill)" strokeWidth={2} /><Line type="monotone" dataKey="tradable" name="可交易" stroke="#55c29a" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="selected" name={researchOnly ? "研究候選" : "正式入選"} stroke="#e2ae5f" strokeWidth={2} dot={false} /></AreaChart></ResponsiveContainer></div>
         </div>
         <div className="panel exposure-panel">
           <PanelHeader eyebrow="Exposure monitor" title="產業訊號集中度" description="當日候選出現次數，不代表資金配置" />
           <div className="exposure-list">{topIndustries.map(([industry, count]) => <div className="exposure-row" key={industry}><div><span>{industry}</span><strong>{count}</strong></div><div className="progress"><i style={{ width: `${dayRows.length ? Math.max(4, count / dayRows.length * 100) : 0}%` }} /></div></div>)}</div>
-          <p className="panel-note"><CircleAlert size={15} />正式入選是研究優先序，不是買進指令。下單前仍須核對最新報價、公告與事件風險。</p>
+          <p className="panel-note"><CircleAlert size={15} />{researchOnly ? "完整性閘門尚未通過，研究候選不得視為買進指令。" : "入選結果仍須核對最新報價、公告與事件風險。"}</p>
         </div>
       </section>
-      {selectedCandidate && <CandidateDrawer candidate={selectedCandidate} onClose={() => setSelectedCandidate(null)} />}
+      {selectedCandidate && <CandidateDrawer candidate={selectedCandidate} onClose={() => setSelectedCandidate(null)} researchOnly={researchOnly} />}
     </div>
   );
 }
@@ -803,6 +807,7 @@ function GateRow({ label, value, target, display, passed, lowerIsBetter = false 
 function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const research = snapshot.researchQuality;
   const health = snapshot.researchHealth;
+  const integrityGate = health.integrityGate;
   const institutional = snapshot.institutionalFlow;
   const experiments = snapshot.researchExperiments ?? [];
   const learnability = snapshot.learnabilityAudit;
@@ -863,6 +868,12 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
       <section className="model-hero-band">
         <div><span className="eyebrow">Model governance</span><h2>{allGatesPassed ? "模型符合候選升級門檻" : latestModel ? "影子模型運作中，尚未允許接管排名" : "模型資料仍在建立"}</h2><p>{latestModel ? `${latestModel.version} · 訓練區間 ${latestModel.trainingStart} 至 ${latestModel.trainingEnd}` : "尚無可用模型版本"}</p></div>
         <div className={`governance-state ${allGatesPassed ? "ready" : "shadow"}`}><Bot size={20} /><span>{allGatesPassed ? "PROMOTION REVIEW" : "SHADOW ONLY"}</span></div>
+      </section>
+
+      <section className="panel">
+        <PanelHeader eyebrow="Research integrity gate" title="正式推薦完整性閘門" description="先驗證資料成熟度、成本後績效、落選對照組與歷史重播，再決定是否允許使用正式推薦語意" trailing={<span className={`status-pill ${integrityGate.formalRecommendationsAllowed ? "selected" : "blocked"}`}>{integrityGate.status === "approved" ? "FORMAL APPROVED" : integrityGate.status === "review_required" ? "REVIEW REQUIRED" : "RESEARCH ONLY"}</span>} />
+        <div className="readiness-callout"><ShieldCheck size={19} /><div><strong>{integrityGate.passedChecks}/{integrityGate.totalChecks} 項證據檢查通過</strong><p>{integrityGate.formalRecommendationsAllowed ? "量化證據與人工核准均已完成；系統可顯示正式推薦，但不會自動下單。" : integrityGate.evidenceReady ? "量化證據已通過，仍需人工設定 FORMAL_RECOMMENDATIONS_APPROVED 才能解除研究模式。" : "證據尚未支持可交易優勢；決策頁、報告與 Telegram 一律把入選結果降級為研究候選。"}</p></div></div>
+        <div className="table-scroll"><table className="data-table compact-table"><thead><tr><th>完整性檢查</th><th>目前證據</th><th>門檻</th><th>判定</th></tr></thead><tbody>{integrityGate.checks.map((check) => <tr key={check.key}><td><strong>{check.label}</strong></td><td>{check.detail}</td><td>{check.requirement}</td><td><span className={`status-pill ${check.passed ? "selected" : "blocked"}`}>{check.passed ? "通過" : "阻擋"}</span></td></tr>)}</tbody></table></div>
       </section>
 
       <section className="metrics-grid metrics-grid-five">

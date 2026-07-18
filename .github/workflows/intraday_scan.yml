@@ -31,6 +31,7 @@ jobs:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       CLOUD_EVIDENCE_MODE: ${{ vars.CLOUD_EVIDENCE_MODE || 'dual_write' }}
       CLOUD_EVIDENCE_REQUIRED: ${{ vars.CLOUD_EVIDENCE_REQUIRED || 'false' }}
+      FORMAL_RECOMMENDATIONS_APPROVED: ${{ vars.FORMAL_RECOMMENDATIONS_APPROVED || 'false' }}
       EVIDENCE_WORKFLOW: intraday_scan
 
     steps:

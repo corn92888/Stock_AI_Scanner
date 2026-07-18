@@ -235,6 +235,7 @@ jobs:
       CLOUD_EVIDENCE_REQUIRED: ${{ vars.CLOUD_EVIDENCE_REQUIRED || 'false' }}
       CLOUD_EVIDENCE_RETENTION_DAYS: ${{ vars.CLOUD_EVIDENCE_RETENTION_DAYS || '45' }}
       CLOUD_EVIDENCE_ARCHIVE: "true"
+      FORMAL_RECOMMENDATIONS_APPROVED: ${{ vars.FORMAL_RECOMMENDATIONS_APPROVED || 'false' }}
       EVIDENCE_WORKFLOW: historical_replay_persist
     concurrency:
       group: stock-scanner-automation

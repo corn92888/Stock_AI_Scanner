@@ -867,6 +867,27 @@ def _empty_research_health():
         "replayRejectedSuccessRateT3": None,
         "replayEvidenceStorageMode": "none",
         "replayRawEventsPersisted": 0,
+        "formalMatureCandidates": 0,
+        "formalMatureSelected": 0,
+        "formalMatureRejected": 0,
+        "formalSelectedTradeDates": 0,
+        "formalSelectedMeanNetReturn3d": None,
+        "formalSelectedMeanExcessReturn3d": None,
+        "formalRejectedMeanNetReturn3d": None,
+        "formalRejectedMeanExcessReturn3d": None,
+        "formalSelectionNetLift3d": None,
+        "formalSelectionExcessLift3d": None,
+        "integrityGate": {
+            "version": "research_integrity_gate_v1",
+            "status": "blocked",
+            "recommendationMode": "research_only",
+            "evidenceReady": False,
+            "manualApproval": False,
+            "formalRecommendationsAllowed": False,
+            "passedChecks": 0,
+            "totalChecks": 0,
+            "checks": [],
+        },
     }
 
 
@@ -882,6 +903,7 @@ def _research_health_snapshot(conn):
     if not row:
         return _empty_research_health()
     metrics = _decode_object(row["metrics_json"])
+    gate = metrics.get("integrity_gate") or {}
     return {
         "status": row["status"],
         "checkedAt": row["checked_at"],
@@ -945,6 +967,59 @@ def _research_health_snapshot(conn):
         "replayRawEventsPersisted": int(
             metrics.get("replay_raw_events_persisted", 0) or 0
         ),
+        "formalMatureCandidates": int(
+            metrics.get("formal_mature_candidates", 0) or 0
+        ),
+        "formalMatureSelected": int(
+            metrics.get("formal_mature_selected", 0) or 0
+        ),
+        "formalMatureRejected": int(
+            metrics.get("formal_mature_rejected", 0) or 0
+        ),
+        "formalSelectedTradeDates": int(
+            metrics.get("formal_selected_trade_dates", 0) or 0
+        ),
+        "formalSelectedMeanNetReturn3d": metrics.get(
+            "formal_selected_mean_net_return_3d"
+        ),
+        "formalSelectedMeanExcessReturn3d": metrics.get(
+            "formal_selected_mean_excess_return_3d"
+        ),
+        "formalRejectedMeanNetReturn3d": metrics.get(
+            "formal_rejected_mean_net_return_3d"
+        ),
+        "formalRejectedMeanExcessReturn3d": metrics.get(
+            "formal_rejected_mean_excess_return_3d"
+        ),
+        "formalSelectionNetLift3d": metrics.get("formal_selection_net_lift_3d"),
+        "formalSelectionExcessLift3d": metrics.get(
+            "formal_selection_excess_lift_3d"
+        ),
+        "integrityGate": {
+            "version": gate.get("version", "research_integrity_gate_v1"),
+            "status": gate.get("status", "blocked"),
+            "recommendationMode": gate.get(
+                "recommendation_mode", "research_only"
+            ),
+            "evidenceReady": bool(gate.get("evidence_ready")),
+            "manualApproval": bool(gate.get("manual_approval")),
+            "formalRecommendationsAllowed": bool(
+                gate.get("formal_recommendations_allowed")
+            ),
+            "passedChecks": int(gate.get("passed_checks", 0) or 0),
+            "totalChecks": int(gate.get("total_checks", 0) or 0),
+            "checks": [
+                {
+                    "key": check.get("key", ""),
+                    "label": check.get("label", ""),
+                    "passed": bool(check.get("passed")),
+                    "detail": check.get("detail", ""),
+                    "requirement": check.get("requirement", ""),
+                }
+                for check in gate.get("checks", [])
+                if isinstance(check, dict)
+            ],
+        },
     }
 
 

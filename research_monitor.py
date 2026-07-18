@@ -1,7 +1,20 @@
 import argparse
 import json
+import os
 
-from database import DB_PATH, get_connection, get_taipei_now, init_db
+from database import (
+    CANDIDATE_EXECUTION_VERSION,
+    DB_PATH,
+    get_connection,
+    get_taipei_now,
+    init_db,
+)
+
+
+RESEARCH_INTEGRITY_GATE_VERSION = "research_integrity_gate_v1"
+MIN_MATURITY_COVERAGE_PCT = 95.0
+MIN_FORMAL_MATURE_SELECTED = 100
+MIN_FORMAL_TRADE_DATES = 20
 
 
 def _prospective_metrics(conn):
@@ -240,15 +253,199 @@ def _replay_metrics(conn):
     return result
 
 
+def _formal_performance_metrics(conn):
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS mature_candidates,
+            SUM(CASE WHEN ce.is_selected=1 THEN 1 ELSE 0 END)
+                AS mature_selected,
+            SUM(CASE WHEN ce.is_selected=0 THEN 1 ELSE 0 END)
+                AS mature_rejected,
+            COUNT(DISTINCT CASE WHEN ce.is_selected=1 THEN sr.trade_date END)
+                AS selected_trade_dates,
+            AVG(CASE WHEN ce.is_selected=1 THEN co.net_return_3d END)
+                AS selected_net,
+            AVG(CASE WHEN ce.is_selected=1 THEN co.excess_return_3d END)
+                AS selected_excess,
+            AVG(CASE WHEN ce.is_selected=0 THEN co.net_return_3d END)
+                AS rejected_net,
+            AVG(CASE WHEN ce.is_selected=0 THEN co.excess_return_3d END)
+                AS rejected_excess
+        FROM candidate_outcomes co
+        JOIN candidate_events ce ON ce.id=co.candidate_id
+        JOIN scan_runs sr ON sr.id=ce.run_id
+        WHERE co.execution_version=?
+          AND co.entry_status='filled'
+          AND co.matured_horizon >= 3
+        """,
+        (CANDIDATE_EXECUTION_VERSION,),
+    ).fetchone()
+    selected_net = row["selected_net"]
+    selected_excess = row["selected_excess"]
+    rejected_net = row["rejected_net"]
+    rejected_excess = row["rejected_excess"]
+    return {
+        "formal_mature_candidates": int(row["mature_candidates"] or 0),
+        "formal_mature_selected": int(row["mature_selected"] or 0),
+        "formal_mature_rejected": int(row["mature_rejected"] or 0),
+        "formal_selected_trade_dates": int(row["selected_trade_dates"] or 0),
+        "formal_selected_mean_net_return_3d": selected_net,
+        "formal_selected_mean_excess_return_3d": selected_excess,
+        "formal_rejected_mean_net_return_3d": rejected_net,
+        "formal_rejected_mean_excess_return_3d": rejected_excess,
+        "formal_selection_net_lift_3d": (
+            selected_net - rejected_net
+            if selected_net is not None and rejected_net is not None
+            else None
+        ),
+        "formal_selection_excess_lift_3d": (
+            selected_excess - rejected_excess
+            if selected_excess is not None and rejected_excess is not None
+            else None
+        ),
+    }
+
+
+def _positive(value):
+    return value is not None and float(value) > 0
+
+
+def build_research_integrity_gate(prospective, replay, formal, approved=None):
+    expected = int(prospective.get("expected_mature_t3") or 0)
+    maturity_coverage = (
+        int(prospective.get("mature_t3_cohorts") or 0) / expected * 100
+        if expected
+        else 0.0
+    )
+    checks = [
+        {
+            "key": "outcomes_current",
+            "label": "前瞻 T+3 標註無逾期",
+            "passed": int(prospective.get("stale_outcomes") or 0) == 0,
+            "detail": f"逾期 {int(prospective.get('stale_outcomes') or 0)} 筆",
+            "requirement": "stale outcomes = 0",
+        },
+        {
+            "key": "maturity_coverage",
+            "label": "前瞻成熟覆蓋完整",
+            "passed": expected > 0 and maturity_coverage >= MIN_MATURITY_COVERAGE_PCT,
+            "detail": f"{maturity_coverage:.1f}% ({int(prospective.get('mature_t3_cohorts') or 0)}/{expected})",
+            "requirement": f">= {MIN_MATURITY_COVERAGE_PCT:.0f}%",
+        },
+        {
+            "key": "formal_sample_size",
+            "label": "正式規則成熟樣本足夠",
+            "passed": int(formal.get("formal_mature_selected") or 0)
+            >= MIN_FORMAL_MATURE_SELECTED,
+            "detail": f"{int(formal.get('formal_mature_selected') or 0)} 筆",
+            "requirement": f">= {MIN_FORMAL_MATURE_SELECTED}",
+        },
+        {
+            "key": "formal_trade_dates",
+            "label": "正式規則跨足夠交易日",
+            "passed": int(formal.get("formal_selected_trade_dates") or 0)
+            >= MIN_FORMAL_TRADE_DATES,
+            "detail": f"{int(formal.get('formal_selected_trade_dates') or 0)} 日",
+            "requirement": f">= {MIN_FORMAL_TRADE_DATES}",
+        },
+        {
+            "key": "formal_net_return",
+            "label": "正式規則成本後淨報酬為正",
+            "passed": _positive(formal.get("formal_selected_mean_net_return_3d")),
+            "detail": f"{float(formal.get('formal_selected_mean_net_return_3d') or 0):.3f}%",
+            "requirement": "> 0%",
+        },
+        {
+            "key": "formal_excess_return",
+            "label": "正式規則相對大盤超額為正",
+            "passed": _positive(formal.get("formal_selected_mean_excess_return_3d")),
+            "detail": f"{float(formal.get('formal_selected_mean_excess_return_3d') or 0):.3f}%",
+            "requirement": "> 0%",
+        },
+        {
+            "key": "formal_selection_lift",
+            "label": "正式規則勝過落選對照組",
+            "passed": _positive(formal.get("formal_selection_net_lift_3d"))
+            and _positive(formal.get("formal_selection_excess_lift_3d")),
+            "detail": (
+                f"淨增值 {float(formal.get('formal_selection_net_lift_3d') or 0):.3f}% / "
+                f"超額增值 {float(formal.get('formal_selection_excess_lift_3d') or 0):.3f}%"
+            ),
+            "requirement": "net and excess lift > 0%",
+        },
+        {
+            "key": "replay_complete",
+            "label": "歷史重播完成且股票池已驗證",
+            "passed": replay.get("latest_replay_status") == "completed"
+            and replay.get("replay_universe_quality_status") == "verified",
+            "detail": (
+                f"{replay.get('latest_replay_status') or 'not_run'} / "
+                f"{replay.get('replay_universe_quality_status') or 'unverified'}"
+            ),
+            "requirement": "completed / verified",
+        },
+        {
+            "key": "replay_net_return",
+            "label": "歷史重播入選淨報酬為正",
+            "passed": _positive(replay.get("replay_selected_mean_net_return_3d")),
+            "detail": f"{float(replay.get('replay_selected_mean_net_return_3d') or 0):.3f}%",
+            "requirement": "> 0%",
+        },
+        {
+            "key": "replay_excess_return",
+            "label": "歷史重播入選超額為正",
+            "passed": _positive(replay.get("replay_selected_mean_excess_return_3d")),
+            "detail": f"{float(replay.get('replay_selected_mean_excess_return_3d') or 0):.3f}%",
+            "requirement": "> 0%",
+        },
+        {
+            "key": "replay_selection_lift",
+            "label": "歷史重播入選勝過落選組",
+            "passed": _positive(replay.get("replay_selection_net_lift_3d"))
+            and _positive(replay.get("replay_selection_excess_lift_3d")),
+            "detail": (
+                f"淨增值 {float(replay.get('replay_selection_net_lift_3d') or 0):.3f}% / "
+                f"超額增值 {float(replay.get('replay_selection_excess_lift_3d') or 0):.3f}%"
+            ),
+            "requirement": "net and excess lift > 0%",
+        },
+    ]
+    passed_checks = sum(1 for check in checks if check["passed"])
+    evidence_ready = passed_checks == len(checks)
+    if approved is None:
+        approved = os.getenv("FORMAL_RECOMMENDATIONS_APPROVED", "").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+    formal_allowed = evidence_ready and bool(approved)
+    status = "approved" if formal_allowed else "review_required" if evidence_ready else "blocked"
+    return {
+        "version": RESEARCH_INTEGRITY_GATE_VERSION,
+        "status": status,
+        "recommendation_mode": "formal" if formal_allowed else "research_only",
+        "evidence_ready": evidence_ready,
+        "manual_approval": bool(approved),
+        "formal_recommendations_allowed": formal_allowed,
+        "passed_checks": passed_checks,
+        "total_checks": len(checks),
+        "checks": checks,
+    }
+
+
 def build_research_health(db_path=DB_PATH):
     with get_connection(db_path) as conn:
         init_db(conn)
         prospective = _prospective_metrics(conn)
         execution_scenarios = _execution_scenario_metrics(conn)
         replay = _replay_metrics(conn)
+        formal = _formal_performance_metrics(conn)
         latest_trade_date = conn.execute(
             "SELECT MAX(trade_date) FROM scan_runs"
         ).fetchone()[0]
+
+    integrity_gate = build_research_integrity_gate(prospective, replay, formal)
 
     warnings = []
     if prospective["prospective_cohorts"] == 0:
@@ -287,6 +484,16 @@ def build_research_health(db_path=DB_PATH):
             "最近一次歷史重播的股票池成員資格尚未完全驗證"
             f"（{replay['replay_universe_partial_memberships']} 個部分區間）。"
         )
+    if not integrity_gate["evidence_ready"]:
+        warnings.append(
+            "研究完整性閘門未通過；所有入選結果僅能顯示為研究候選，"
+            "不得視為正式買進建議。"
+        )
+    elif not integrity_gate["manual_approval"]:
+        warnings.append(
+            "量化證據已通過研究完整性閘門，但尚未取得人工核准，"
+            "正式推薦仍維持關閉。"
+        )
 
     if prospective["stale_outcomes"]:
         status = "critical"
@@ -309,11 +516,13 @@ def build_research_health(db_path=DB_PATH):
         **prospective,
         **execution_scenarios,
         **replay,
+        **formal,
         "latest_trade_date": latest_trade_date,
         "status": status,
         "maturity_coverage_pct": (
             prospective["mature_t3_cohorts"] / expected * 100 if expected else 0.0
         ),
+        "integrity_gate": integrity_gate,
         "warnings": warnings,
     }
     return metrics

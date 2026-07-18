@@ -52,13 +52,64 @@ def load_pending_candidates(
         )
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     sql = f"""
-        SELECT ce.*, sr.trade_date, sr.mode, sr.run_at
+        WITH canonical_candidates AS (
+            SELECT id AS candidate_id, run_id, code
+            FROM (
+                SELECT ce.id, ce.run_id, ce.code,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY ce.run_id, ce.code
+                           ORDER BY ce.id DESC
+                       ) AS candidate_order
+                FROM candidate_events ce
+            )
+            WHERE candidate_order=1
+        ),
+        prospective_cohorts AS (
+            SELECT prediction_id, run_id, code, trade_date, matured_horizon,
+                   later_sessions
+            FROM (
+                SELECT
+                    p.id AS prediction_id,
+                    p.run_id,
+                    p.code,
+                    sr.trade_date,
+                    COALESCE(po.matured_horizon, 0) AS matured_horizon,
+                    (
+                        SELECT COUNT(DISTINCT later.trade_date)
+                        FROM scan_runs later
+                        WHERE later.trade_date > sr.trade_date
+                    ) AS later_sessions,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY p.run_id, p.code
+                        ORDER BY p.predicted_at, p.id
+                    ) AS cohort_order
+                FROM predictions p
+                JOIN scan_runs sr ON sr.id=p.run_id
+                LEFT JOIN prediction_outcomes po ON po.prediction_id=p.id
+                WHERE p.is_prospective=1
+            )
+            WHERE cohort_order=1
+        ),
+        overdue_prospective AS (
+            SELECT cc.candidate_id, pc.later_sessions, pc.matured_horizon
+            FROM canonical_candidates cc
+            JOIN prospective_cohorts pc
+              ON pc.run_id=cc.run_id AND pc.code=cc.code
+            WHERE pc.later_sessions >= 3 AND pc.matured_horizon < 3
+        )
+        SELECT ce.*, sr.trade_date, sr.mode, sr.run_at,
+               CASE WHEN op.candidate_id IS NOT NULL THEN 1 ELSE 0 END
+                   AS maturity_priority,
+               COALESCE(op.later_sessions, 0) AS prospective_later_sessions,
+               COALESCE(op.matured_horizon, 0) AS prospective_matured_horizon
         FROM candidate_events ce
         JOIN scan_runs sr ON sr.id=ce.run_id
         LEFT JOIN candidate_outcomes co
           ON co.candidate_id=ce.id AND co.execution_version=?
+        LEFT JOIN overdue_prospective op ON op.candidate_id=ce.id
         {where_sql}
-        ORDER BY ce.is_selected DESC, ce.is_first_eligible_event DESC,
+        ORDER BY maturity_priority DESC, prospective_later_sessions DESC,
+                 ce.is_selected DESC, ce.is_first_eligible_event DESC,
                  sr.trade_date ASC, sr.run_at ASC, ce.raw_rank ASC, ce.id ASC
     """
     if limit:
@@ -256,6 +307,7 @@ def run_candidate_backtest(
     benchmark_df = cache.get_ticker(config.benchmark_code)
     audit = asdict(config)
     audit["selection_scope"] = "candidate_all"
+    audit["queue_policy"] = "overdue_prospective_first_v1"
     audit_run_id = start_backtest_run(
         json.dumps(audit, ensure_ascii=True, sort_keys=True),
         len(candidates),

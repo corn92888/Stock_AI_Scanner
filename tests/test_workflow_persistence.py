@@ -103,6 +103,7 @@ class WorkflowPersistenceTests(unittest.TestCase):
     def test_daily_workflow_backtests_all_candidates_before_training(self):
         workflow = (ROOT / ".github" / "workflows" / "daily_scan.yml").read_text()
         candidate_index = workflow.index("python candidate_backtest.py --limit 400")
+        prediction_sync_index = workflow.index("python prediction_outcomes.py")
         scenario_index = workflow.index(
             "python candidate_execution_research.py --limit 1000"
         )
@@ -111,6 +112,9 @@ class WorkflowPersistenceTests(unittest.TestCase):
         paper_index = workflow.index("python paper_trading.py")
         monitor_index = workflow.index("python research_monitor.py")
         export_index = workflow.index("python export_dashboard_snapshot.py")
+        self.assertIn("FORMAL_RECOMMENDATIONS_APPROVED", workflow)
+        self.assertLess(candidate_index, prediction_sync_index)
+        self.assertLess(prediction_sync_index, training_index)
         self.assertLess(candidate_index, training_index)
         self.assertLess(candidate_index, scenario_index)
         self.assertLess(scenario_index, training_index)
@@ -119,6 +123,15 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertLess(training_index, paper_index)
         self.assertLess(paper_index, monitor_index)
         self.assertLess(monitor_index, export_index)
+
+    def test_research_health_workflows_propagate_manual_gate_approval(self):
+        for workflow_name in (
+            "daily_scan.yml",
+            "intraday_scan.yml",
+            "historical_replay.yml",
+        ):
+            workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
+            self.assertIn("FORMAL_RECOMMENDATIONS_APPROVED", workflow)
 
     def test_historical_replay_resumes_and_generates_attribution(self):
         workflow = (ROOT / ".github" / "workflows" / "historical_replay.yml").read_text()

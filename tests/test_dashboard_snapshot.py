@@ -6,6 +6,7 @@ from pathlib import Path
 
 from database import get_connection, init_db
 from export_dashboard_snapshot import build_dashboard_snapshot, write_dashboard_snapshot
+from research_monitor import run_research_health_monitor
 
 
 def _create_fixture(path):
@@ -90,6 +91,14 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertEqual(payload["researchHealth"]["status"], "building")
             self.assertEqual(payload["researchHealth"]["staleOutcomes"], 0)
             self.assertEqual(
+                payload["researchHealth"]["integrityGate"]["status"], "blocked"
+            )
+            self.assertFalse(
+                payload["researchHealth"]["integrityGate"][
+                    "formalRecommendationsAllowed"
+                ]
+            )
+            self.assertEqual(
                 payload["researchHealth"]["replayUniverseQualityStatus"],
                 "unverified",
             )
@@ -122,6 +131,20 @@ class DashboardSnapshotTests(unittest.TestCase):
                 "authorization",
             ):
                 self.assertNotIn(private_key, serialized)
+
+    def test_snapshot_exports_saved_research_integrity_gate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scanner.db"
+            with get_connection(database) as conn:
+                init_db(conn)
+            run_research_health_monitor(database)
+
+            snapshot = build_dashboard_snapshot(database)
+            gate = snapshot["researchHealth"]["integrityGate"]
+            self.assertEqual(gate["status"], "blocked")
+            self.assertEqual(gate["recommendationMode"], "research_only")
+            self.assertEqual(gate["totalChecks"], 11)
+            self.assertEqual(snapshot["researchHealth"]["formalMatureSelected"], 0)
 
     def test_snapshot_exports_paper_account_ledger(self):
         with tempfile.TemporaryDirectory() as directory:

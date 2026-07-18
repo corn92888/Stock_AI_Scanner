@@ -10,6 +10,7 @@ import requests
 from dotenv import load_dotenv
 
 from database import DB_PATH, find_scan_run, get_daily_candidate_state, save_candidate_events
+from research_monitor import build_research_health
 from selection_policy import (
     DEFAULT_SELECTION_POLICY,
     apply_selection_policy,
@@ -495,10 +496,10 @@ def _focus_text(focus, n=5):
     return "；".join(rows)
 
 
-def _policy_status_text(row):
+def _policy_status_text(row, research_only=False):
     status = str(row.get("政策狀態", "") or "")
     labels = {
-        "selected": "正式入選",
+        "selected": "研究候選" if research_only else "正式入選",
         "blocked": f"阻擋：{row.get('阻擋原因') or '資料未通過'}",
         "duplicate_daily_eligible": "今日較早批次已合格",
         "daily_limit": "當日名額已滿",
@@ -508,7 +509,7 @@ def _policy_status_text(row):
     return labels.get(status, status)
 
 
-def _candidate_text(ranked, n=5, show_policy=False):
+def _candidate_text(ranked, n=5, show_policy=False, research_only=False):
     if ranked.empty:
         return "無候選名單"
     rows = []
@@ -524,7 +525,7 @@ def _candidate_text(ranked, n=5, show_policy=False):
             f"隔日觀察{_fmt(row.get('隔日觀察價'))}｜不追>{_fmt(row.get('追價上限'))}"
         )
         if show_policy and "政策狀態" in row:
-            text += f"｜{_policy_status_text(row)}"
+            text += f"｜{_policy_status_text(row, research_only=research_only)}"
         risk_flags = str(row.get("風險標記", "") or "")
         if risk_flags:
             text += f"｜風險：{risk_flags}"
@@ -546,9 +547,13 @@ def _market_stance(summary):
     return "盤面中性偏分歧，僅挑量價健康且隔日觀察價合理的標的。"
 
 
-def build_report_text(ranked, signals, industry, summary, focus):
+def build_report_text(ranked, signals, industry, summary, focus, research_gate=None):
     values = _summary_map(summary)
     update_time = values.get("更新時間") or dt.datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M")
+    research_gate = research_gate or {}
+    research_only = not bool(research_gate.get("formal_recommendations_allowed"))
+    passed_checks = int(research_gate.get("passed_checks") or 0)
+    total_checks = int(research_gate.get("total_checks") or 0)
     if "政策入選" in ranked.columns:
         selected = ranked[ranked["政策入選"] == True]  # noqa: E712
         research = ranked[ranked["政策入選"] != True]  # noqa: E712
@@ -560,6 +565,12 @@ def build_report_text(ranked, signals, industry, summary, focus):
         f"盤中續漲分析快報｜{update_time}",
         SWING_HOLDING_RULE,
         "價格為本報告產生時間的快照，不是即時追價；盤中價格若已變動，請重新跑一次。",
+        (
+            f"研究完整性閘門：RESEARCH ONLY（{passed_checks}/{total_checks} 項通過）；"
+            "以下入選僅為研究排序，不是買進建議。"
+            if research_only
+            else f"研究完整性閘門：APPROVED（{passed_checks}/{total_checks} 項通過）。"
+        ),
         "",
         "市場狀態：",
         (
@@ -579,14 +590,24 @@ def build_report_text(ranked, signals, industry, summary, focus):
         "資金焦點：",
         _focus_text(focus),
         "",
-        "正式模擬入選（每日最多3檔、同產業最多1檔）：",
-        _candidate_text(selected, n=3, show_policy=True),
+        (
+            "研究候選（每日最多3檔、同產業最多1檔）："
+            if research_only
+            else "正式模擬入選（每日最多3檔、同產業最多1檔）："
+        ),
+        _candidate_text(selected, n=3, show_policy=True, research_only=research_only),
         "",
         "其餘研究候選：",
-        _candidate_text(research, n=5, show_policy=True),
+        _candidate_text(research, n=5, show_policy=True, research_only=research_only),
         "",
         "操作原則：",
-        "今天買進後不做當日賣出判斷；隔日收盤再看是否守住觀察價、族群是否仍強、量能是否延續。盤中急殺只記錄風險，不直接給賣出訊號。",
+        (
+            "完整性閘門尚未通過，禁止把研究候選視為買進指令；"
+            "僅記錄隔日是否守住觀察價、族群與量能是否延續，供後續驗證。"
+            if research_only
+            else "今天買進後不做當日賣出判斷；隔日收盤再看是否守住觀察價、"
+            "族群是否仍強、量能是否延續。盤中急殺只記錄風險，不直接給賣出訊號。"
+        ),
     ]
     return "\n".join(lines)
 
@@ -685,7 +706,15 @@ def generate_intraday_analysis_report(
             candidate_event_records(ranked, policy=DEFAULT_SELECTION_POLICY),
             db_path=db_path,
         )
-    report_text = build_report_text(ranked, signals, industry, summary, focus)
+    research_gate = build_research_health(db_path).get("integrity_gate", {})
+    report_text = build_report_text(
+        ranked,
+        signals,
+        industry,
+        summary,
+        focus,
+        research_gate=research_gate,
+    )
     ai_result = None
     if run_ai and scan_run and candidate_events_saved:
         try:
@@ -698,7 +727,7 @@ def generate_intraday_analysis_report(
             ai_result = {"status": "failed", "error": str(exc)}
             report_text += (
                 "\n\nAI 影子研究：\n"
-                f"- 本批次 AI 管線失敗（{exc.__class__.__name__}），正式規則名單不受影響。"
+                f"- 本批次 AI 管線失敗（{exc.__class__.__name__}），規則研究排序不受影響。"
             )
 
     os.makedirs("Reports", exist_ok=True)
