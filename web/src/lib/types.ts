@@ -250,6 +250,7 @@ export type CloudEvidence = {
   latestScanRunId: number | null;
   latestTradeDate: string;
   sourceWorkflow: string;
+  errorCode: string;
   auditVersion: string;
   auditStatus: "not_run" | "ready" | "blocked";
   auditAt: string;
@@ -266,6 +267,8 @@ export type CloudEvidence = {
     detail: string;
     requirement: string;
   }>;
+  nextAction: "repair_connection" | "run_cutover_audit" | "activate_cloud_primary" | "monitor_cloud_primary";
+  recommendedAction: string;
   message: string;
 };
 

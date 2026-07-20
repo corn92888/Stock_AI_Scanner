@@ -56,6 +56,7 @@ def _cloud_evidence_snapshot(conn):
         "latestScanRunId": None,
         "latestTradeDate": "",
         "sourceWorkflow": "",
+        "errorCode": "",
         "auditVersion": "",
         "auditStatus": "not_run",
         "auditAt": "",
@@ -66,6 +67,8 @@ def _cloud_evidence_snapshot(conn):
         "verifiedPushes": 0,
         "workflowCount": 0,
         "cutoverChecks": [],
+        "nextAction": "repair_connection",
+        "recommendedAction": "完成 Supabase 設定後重新執行雲端驗收。",
         "message": "雲端證據層尚未完成第一次驗證。",
     }
     if not _table_exists(conn, "cloud_evidence_events"):
@@ -81,7 +84,7 @@ def _cloud_evidence_snapshot(conn):
         SELECT event_at, operation, status, schema_version, snapshot_key,
                object_path, database_sha256, database_bytes, compressed_bytes,
                latest_scan_run_id, latest_trade_date, source_workflow,
-               {migration_mode_column} AS migration_mode
+               {migration_mode_column} AS migration_mode, error_code
         FROM cloud_evidence_events
         ORDER BY event_at DESC, id DESC
         LIMIT 1
@@ -106,26 +109,52 @@ def _cloud_evidence_snapshot(conn):
         or (audit["migration_mode"] if audit else None)
         or "dual_write"
     )
-    messages = {
-        "verified": "雲端快照已完成上傳、下載與雜湊校驗。",
-        "failed": (
-            "最近一次雲端證據同步失敗，Cloud Primary 工作會停止。"
-            if migration_mode == "cloud_primary"
-            else "最近一次雲端證據同步失敗，Git 資料庫備援仍保留。"
-        ),
-        "unconfigured": (
-            "Supabase 證據層尚未完成設定，Cloud Primary 不可啟用。"
-            if migration_mode == "cloud_primary"
-            else "Supabase 證據層尚未完成設定，仍由 Git 資料庫備援。"
-        ),
-    }
     status = row["status"] if row else "unconfigured"
+    error_code = (row["error_code"] if row else None) or ""
     checks = []
     if audit and audit["checks_json"]:
         try:
             checks = json.loads(audit["checks_json"])
         except (TypeError, json.JSONDecodeError):
             checks = []
+    cutover_ready = bool(audit["ready"]) if audit else False
+    if migration_mode == "cloud_primary":
+        next_action = "monitor_cloud_primary"
+        recommended_action = "持續監控每日快照、還原稽核與資料時效。"
+    elif status in {"failed", "unconfigured"}:
+        next_action = "repair_connection"
+        recommended_action = {
+            "dns_resolution_failed": (
+                "確認 Supabase 專案仍存在且未暫停，並更新 GitHub Secrets 與本機 secrets.toml 的專案 URL。"
+            ),
+            "network_timeout": "檢查 Supabase 服務狀態與網路後重新執行雲端驗收。",
+            "http_401": "更新 Supabase service role key 後重新執行雲端驗收。",
+            "http_403": "確認 service role 權限與 Storage bucket 政策。",
+            "http_404": "重新套用 supabase_schema.sql，並確認 scanner-evidence bucket 已建立。",
+            "not_configured": "設定 SUPABASE_URL 與 SUPABASE_SERVICE_ROLE_KEY。",
+        }.get(error_code, "檢查 Supabase 連線、金鑰與 schema 後重新執行雲端驗收。")
+    elif cutover_ready:
+        next_action = "activate_cloud_primary"
+        recommended_action = "切換至 Cloud Primary，停止把大型 SQLite 資料庫提交到 Git。"
+    else:
+        next_action = "run_cutover_audit"
+        recommended_action = "等待每日雲端快照累積後重新執行 Cloud Primary 驗收。"
+    if status == "verified":
+        message = "雲端快照已完成上傳、下載與雜湊校驗。"
+    elif error_code == "dns_resolution_failed":
+        message = "Supabase 專案網址無法解析；目前仍由 Git 資料庫備援。"
+    elif status == "failed":
+        message = (
+            "最近一次雲端證據同步失敗，Cloud Primary 工作會停止。"
+            if migration_mode == "cloud_primary"
+            else "最近一次雲端證據同步失敗，Git 資料庫備援仍保留。"
+        )
+    else:
+        message = (
+            "Supabase 證據層尚未完成設定，Cloud Primary 不可啟用。"
+            if migration_mode == "cloud_primary"
+            else "Supabase 證據層尚未完成設定，仍由 Git 資料庫備援。"
+        )
     return {
         **default,
         "schemaVersion": row["schema_version"] if row else default["schemaVersion"],
@@ -143,17 +172,20 @@ def _cloud_evidence_snapshot(conn):
         "latestScanRunId": row["latest_scan_run_id"] if row else None,
         "latestTradeDate": (row["latest_trade_date"] if row else None) or "",
         "sourceWorkflow": (row["source_workflow"] if row else None) or "",
+        "errorCode": error_code,
         "auditVersion": audit["audit_version"] if audit else "",
         "auditStatus": audit["status"] if audit else "not_run",
         "auditAt": audit["audited_at"] if audit else "",
-        "cutoverReady": bool(audit["ready"]) if audit else False,
+        "cutoverReady": cutover_ready,
         "passedChecks": int(audit["passed_checks"] or 0) if audit else 0,
         "totalChecks": int(audit["total_checks"] or 0) if audit else 0,
         "dailySnapshots": int(audit["daily_snapshot_count"] or 0) if audit else 0,
         "verifiedPushes": int(audit["verified_push_count"] or 0) if audit else 0,
         "workflowCount": int(audit["workflow_count"] or 0) if audit else 0,
         "cutoverChecks": checks,
-        "message": messages.get(status, "雲端證據層正在建立。"),
+        "nextAction": next_action,
+        "recommendedAction": recommended_action,
+        "message": message,
     }
 
 

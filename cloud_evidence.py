@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import json
 import os
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -99,9 +100,22 @@ class SupabaseEvidenceClient:
                 f"http_{exc.code}",
                 f"Supabase request failed with HTTP {exc.code}.",
             ) from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, socket.gaierror):
+                raise EvidenceError(
+                    "dns_resolution_failed",
+                    "Supabase project hostname could not be resolved.",
+                ) from exc
+            if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+                raise EvidenceError(
+                    "network_timeout", "Supabase request timed out."
+                ) from exc
             raise EvidenceError(
                 "network_error", "Supabase could not be reached."
+            ) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise EvidenceError(
+                "network_timeout", "Supabase request timed out."
             ) from exc
 
     def upload(self, object_path, content):

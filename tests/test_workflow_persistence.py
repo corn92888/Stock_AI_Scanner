@@ -66,6 +66,19 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertIn("cloud-evidence-cutover-audit", workflow)
         self.assertIn("steps.audit.outputs.ready", workflow)
         self.assertIn("chore(data): record cloud cutover audit", workflow)
+        self.assertIn("trigger_source:", workflow)
+
+    def test_vercel_runs_a_required_cloud_audit_each_trading_day(self):
+        vercel = (ROOT / "web" / "vercel.json").read_text()
+        route = (
+            ROOT / "web" / "src" / "app" / "api" / "cron" / "cloud-audit" / "route.ts"
+        ).read_text()
+
+        self.assertIn('"path": "/api/cron/cloud-audit"', vercel)
+        self.assertIn('"schedule": "10 6 * * 1-5"', vercel)
+        self.assertIn("CLOUD_AUDIT_WORKFLOW", route)
+        self.assertIn('require_ready: "true"', route)
+        self.assertIn('trigger_source: "vercel-cron"', route)
 
     def test_intraday_workflow_installs_only_runtime_dependencies(self):
         workflow = (ROOT / ".github" / "workflows" / "intraday_scan.yml").read_text()

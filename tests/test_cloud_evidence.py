@@ -1,11 +1,13 @@
 import gzip
 import json
 import os
+import socket
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import URLError
 
 import cloud_evidence
 from database import get_connection, init_db
@@ -129,6 +131,20 @@ class CloudEvidenceTests(unittest.TestCase):
             ).fetchone()
             conn.close()
             self.assertEqual(event, ("push", "verified", 7, None))
+
+    def test_client_classifies_dns_resolution_failure(self):
+        config = cloud_evidence.SupabaseConfig(
+            url="https://missing.supabase.co",
+            service_role_key="service-role-test-key",
+        )
+        client = cloud_evidence.SupabaseEvidenceClient(config)
+        failure = URLError(socket.gaierror(-2, "Name or service not known"))
+
+        with patch("urllib.request.urlopen", side_effect=failure):
+            with self.assertRaises(cloud_evidence.EvidenceError) as context:
+                client.list_snapshots()
+
+        self.assertEqual(context.exception.code, "dns_resolution_failed")
 
     def test_restore_replaces_only_an_older_local_database(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -16,8 +16,8 @@ scanner's transaction model:
 - Git continues to hold the database only during the dual-write validation period.
 - A machine-readable restore drill controls whether Cloud Primary may be enabled.
 - Daily snapshots older than the configured retention window can be pruned.
-- The public dashboard exposes status and timestamps, but never credentials or
-  raw synchronization errors.
+- The public dashboard exposes status, timestamps, normalized error codes, and
+  the next operator action, but never credentials or raw exception details.
 
 ## Initial Setup
 
@@ -85,6 +85,9 @@ Run `Cloud Evidence Cutover Audit` manually. It downloads the live object into
 a temporary database, verifies both SHA-256 hashes, runs
 `PRAGMA integrity_check`, compares the latest scan run and durable table counts,
 and writes the result to local SQLite plus the private PostgreSQL audit ledger.
+Vercel also dispatches this audit at 14:10 Asia/Taipei on trading weekdays with
+the readiness gate enforced. A blocked result therefore creates a failed audit
+run while scanner jobs continue to use the Git fallback in `dual_write` mode.
 
 The gate reports `READY` only when all conditions are true:
 
@@ -106,6 +109,15 @@ the Git fallback behavior; recover the last tracked SQLite file before doing so.
 Do not bypass a blocked gate. A missing Supabase project, stale URL, schema
 error, failed restore, or count mismatch is a production blocker rather than a
 warning once Cloud Primary is enabled.
+
+The dashboard maps common failure codes to an explicit repair step:
+
+- `dns_resolution_failed`: confirm the project still exists and update the
+  Supabase project URL in GitHub Secrets and local Streamlit secrets.
+- `network_timeout`: check Supabase service health and network reachability.
+- `http_401`: replace the service-role key.
+- `http_403`: verify service-role and Storage bucket permissions.
+- `http_404`: reapply `supabase_schema.sql` and recreate the private bucket.
 
 ## Recovery
 

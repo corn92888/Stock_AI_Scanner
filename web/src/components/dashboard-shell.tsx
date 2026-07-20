@@ -1171,6 +1171,14 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
   const cloudEvidence = snapshot.cloudEvidence;
   const cloudVerified = cloudEvidence.status === "verified";
   const cutoverReady = cloudEvidence.cutoverReady;
+  const cloudActionLabels = {
+    repair_connection: "修復 Supabase",
+    run_cutover_audit: "累積並重跑驗收",
+    activate_cloud_primary: "切換 Cloud Primary",
+    monitor_cloud_primary: "持續監控",
+  };
+  const cloudActionLabel = cloudActionLabels[cloudEvidence.nextAction];
+  const databaseSizeMb = cloudEvidence.databaseBytes / 1024 / 1024;
   const healthChecks = [
     { label: "公開資料快照", ok: snapshotFresh, detail: formatDateTime(snapshot.generatedAt) },
     { label: "GitHub Actions API", ok: workflowRuns.length > 0, detail: `${workflowRuns.length} 筆執行紀錄` },
@@ -1178,7 +1186,7 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
     { label: "回測批次可追溯", ok: Boolean(lastBacktest), detail: lastBacktest ? formatDateTime(lastBacktest.startedAt) : "尚無紀錄" },
     { label: "前瞻標註未逾期", ok: snapshot.researchHealth.staleOutcomes === 0, detail: `${snapshot.researchHealth.staleOutcomes} 筆逾期` },
     { label: "歷史重播證據", ok: snapshot.researchHealth.completedReplayRuns > 0, detail: snapshot.researchHealth.latestReplayAt ? formatDateTime(snapshot.researchHealth.latestReplayAt) : "尚未執行" },
-    { label: "Supabase 證據快照", ok: cloudVerified, detail: cloudEvidence.eventAt ? `${formatDateTime(cloudEvidence.eventAt)} · run ${cloudEvidence.latestScanRunId ?? "--"}` : "尚未驗證" },
+    { label: "Supabase 證據快照", ok: cloudVerified, detail: cloudEvidence.eventAt ? `${formatDateTime(cloudEvidence.eventAt)} · ${cloudEvidence.errorCode || `run ${cloudEvidence.latestScanRunId ?? "--"}`}` : "尚未驗證" },
     { label: "Cloud Primary 切換閘門", ok: cutoverReady, detail: cloudEvidence.auditAt ? `${cloudEvidence.passedChecks}/${cloudEvidence.totalChecks} · ${formatDateTime(cloudEvidence.auditAt)}` : "尚未執行驗收" },
   ];
   return (
@@ -1201,7 +1209,7 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
         <div className="panel health-panel">
           <PanelHeader eyebrow="System checks" title="服務健康檢查" description="部署、資料、特徵、回測與前瞻成熟度" />
           <div className="health-list">{healthChecks.map((check) => <div className="health-row" key={check.label}><span className={check.ok ? "ok" : "warn"}>{check.ok ? <CircleCheck size={16} /> : <TriangleAlert size={16} />}</span><div><strong>{check.label}</strong><small>{check.detail}</small></div><span>{check.ok ? "正常" : "注意"}</span></div>)}</div>
-          <div className="permission-note"><Database size={17} /><p>{cloudEvidence.message} 目前模式：{cloudEvidence.migrationMode === "dual_write" ? "雲端與 Git 雙寫驗證" : "雲端主儲存"}。</p></div>
+          <div className={`permission-note cloud-status-note ${cloudVerified ? "ok" : "warning"}`}><Database size={17} /><p>{cloudEvidence.message} 目前模式：{cloudEvidence.migrationMode === "dual_write" ? "雲端與 Git 雙寫驗證" : "雲端主儲存"}。</p></div>
         </div>
       </section>
 
@@ -1213,8 +1221,11 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
             <div><dt>每日快照</dt><dd>{cloudEvidence.dailySnapshots}</dd></div>
             <div><dt>驗證寫入</dt><dd>{cloudEvidence.verifiedPushes}</dd></div>
             <div><dt>來源工作流</dt><dd>{cloudEvidence.workflowCount}</dd></div>
+            <div><dt>SQLite 大小</dt><dd>{decimal.format(databaseSizeMb)} MB</dd></div>
+            <div><dt>下一動作</dt><dd>{cloudActionLabel}</dd></div>
           </dl>
         </div>
+        <div className={`cloud-action-banner ${cloudVerified ? "ok" : "warning"}`}><span><TriangleAlert size={16} /></span><div><strong>{cloudActionLabel}</strong><p>{cloudEvidence.recommendedAction}</p>{cloudEvidence.errorCode ? <code>{cloudEvidence.errorCode}</code> : null}</div></div>
         <div className="table-scroll"><table className="data-table compact-table cloud-audit-table"><thead><tr><th>驗收項目</th><th>狀態</th><th>目前證據</th><th>要求</th></tr></thead><tbody>{cloudEvidence.cutoverChecks.length ? cloudEvidence.cutoverChecks.map((check) => <tr key={check.key}><td>{check.label}</td><td><span className={`status-pill ${check.passed ? "selected" : "blocked"}`}>{check.passed ? "通過" : "阻擋"}</span></td><td>{check.detail}</td><td>{check.requirement}</td></tr>) : <tr><td colSpan={4}>尚未執行 Cloud Primary 切換稽核；目前仍由 Git 資料庫安全備援。</td></tr>}</tbody></table></div>
       </section>
 

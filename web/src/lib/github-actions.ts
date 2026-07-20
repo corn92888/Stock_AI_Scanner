@@ -7,6 +7,7 @@ export const INTRADAY_WORKFLOW = "intraday_scan.yml";
 export const DAILY_WORKFLOW = "daily_scan.yml";
 export const MARKET_WORKFLOW = "global_market.yml";
 export const INSTITUTIONAL_WORKFLOW = "institutional_flow.yml";
+export const CLOUD_AUDIT_WORKFLOW = "cloud_evidence_audit.yml";
 
 export type GitHubRun = {
   id: number;

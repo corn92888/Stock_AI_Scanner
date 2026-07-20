@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from database import get_connection, init_db
+from database import get_connection, init_db, record_cloud_evidence_event
 from export_dashboard_snapshot import build_dashboard_snapshot, write_dashboard_snapshot
 from research_monitor import run_research_health_monitor
 
@@ -118,6 +118,10 @@ class DashboardSnapshotTests(unittest.TestCase):
             )
             self.assertEqual(payload["cloudEvidence"]["status"], "unconfigured")
             self.assertEqual(payload["cloudEvidence"]["migrationMode"], "dual_write")
+            self.assertEqual(payload["cloudEvidence"]["errorCode"], "")
+            self.assertEqual(
+                payload["cloudEvidence"]["nextAction"], "repair_connection"
+            )
             self.assertEqual(payload["researchQuality"]["matureRejectedOutcomes"], 0)
             self.assertIsNone(payload["researchQuality"]["selectionNetLift3d"])
             self.assertEqual(payload["candidates"][0]["strategies"], ["trend"])
@@ -133,6 +137,39 @@ class DashboardSnapshotTests(unittest.TestCase):
                 "authorization",
             ):
                 self.assertNotIn(private_key, serialized)
+
+    def test_snapshot_explains_cloud_dns_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scanner.db"
+            with get_connection(database) as conn:
+                init_db(conn)
+                record_cloud_evidence_event(
+                    conn,
+                    event_at="2026-07-20T05:05:00+00:00",
+                    backend="supabase_storage",
+                    operation="push",
+                    status="failed",
+                    schema_version="supabase_sqlite_snapshot_v1",
+                    snapshot_key="live",
+                    object_path="live/stock_scanner.db.gz",
+                    database_sha256=None,
+                    database_bytes=65_544_192,
+                    compressed_bytes=None,
+                    latest_scan_run_id=17,
+                    latest_trade_date=None,
+                    source_workflow="intraday_scan",
+                    migration_mode="dual_write",
+                    error_code="dns_resolution_failed",
+                    metadata_json="{}",
+                )
+
+            cloud = build_dashboard_snapshot(database)["cloudEvidence"]
+
+            self.assertEqual(cloud["status"], "failed")
+            self.assertEqual(cloud["errorCode"], "dns_resolution_failed")
+            self.assertEqual(cloud["nextAction"], "repair_connection")
+            self.assertIn("Supabase", cloud["recommendedAction"])
+            self.assertEqual(cloud["databaseBytes"], 65_544_192)
 
     def test_snapshot_exports_saved_research_integrity_gate(self):
         with tempfile.TemporaryDirectory() as directory:

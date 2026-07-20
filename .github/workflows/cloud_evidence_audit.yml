@@ -4,6 +4,11 @@ run-name: Cloud-primary cutover audit
 on:
   workflow_dispatch:
     inputs:
+      trigger_source:
+        description: Trigger source for audit logs
+        required: false
+        default: manual
+        type: string
       require_ready:
         description: Fail the final gate when cloud-primary requirements are not met
         required: false
@@ -24,6 +29,7 @@ jobs:
       CLOUD_EVIDENCE_MODE: ${{ vars.CLOUD_EVIDENCE_MODE || 'dual_write' }}
       CLOUD_EVIDENCE_REQUIRED: ${{ vars.CLOUD_EVIDENCE_REQUIRED || 'false' }}
       EVIDENCE_WORKFLOW: cloud_evidence_audit
+      AUDIT_TRIGGER_SOURCE: ${{ inputs.trigger_source || 'manual' }}
 
     steps:
     - name: Checkout latest repository
@@ -82,6 +88,7 @@ jobs:
         echo "- Status: ${{ steps.audit.outputs.status }}" >> "$GITHUB_STEP_SUMMARY"
         echo "- Ready: ${{ steps.audit.outputs.ready }}" >> "$GITHUB_STEP_SUMMARY"
         echo "- Checks: ${{ steps.audit.outputs.passed_checks }}/${{ steps.audit.outputs.total_checks }}" >> "$GITHUB_STEP_SUMMARY"
+        echo "- Trigger: $AUDIT_TRIGGER_SOURCE" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Enforce requested readiness gate
       if: ${{ inputs.require_ready && steps.audit.outputs.ready != 'true' }}

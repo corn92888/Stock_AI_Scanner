@@ -123,6 +123,7 @@ const EMPTY_CLOUD_EVIDENCE: CloudEvidence = {
   latestScanRunId: null,
   latestTradeDate: "",
   sourceWorkflow: "",
+  errorCode: "",
   auditVersion: "",
   auditStatus: "not_run",
   auditAt: "",
@@ -133,6 +134,8 @@ const EMPTY_CLOUD_EVIDENCE: CloudEvidence = {
   verifiedPushes: 0,
   workflowCount: 0,
   cutoverChecks: [],
+  nextAction: "repair_connection",
+  recommendedAction: "完成 Supabase 設定後重新執行雲端驗收。",
   message: "雲端證據層尚未完成第一次驗證。",
 };
 
