@@ -118,6 +118,55 @@ class CandidateOutcomeCalculationTests(unittest.TestCase):
 
 
 class CandidateOutcomeDatabaseTests(unittest.TestCase):
+    def test_opening_settlement_scope_excludes_intraday_and_same_day_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "scanner.db"
+            with get_connection(db_path) as conn:
+                init_db(conn)
+                candidate_ids = {}
+                for trade_date, mode, code in (
+                    ("2026-07-17", "eod", "2330"),
+                    ("2026-07-17", "intraday", "2317"),
+                    ("2026-07-20", "eod", "2454"),
+                ):
+                    run_id = conn.execute(
+                        """
+                        INSERT INTO scan_runs (
+                            run_at, trade_date, mode, source, strategy_version
+                        ) VALUES (?, ?, ?, 'test', 'v1')
+                        """,
+                        (f"{trade_date}T14:00:00+08:00", trade_date, mode),
+                    ).lastrowid
+                    candidate_ids[code] = conn.execute(
+                        """
+                        INSERT INTO candidate_events (
+                            run_id, code, name, as_of, strategies_json,
+                            strategy_count, raw_rank, tradable,
+                            block_reasons_json, risk_flags_json,
+                            is_first_eligible_event, is_selected,
+                            selection_status, policy_version, policy_config_json,
+                            snapshot_json, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, '[]', 1, 1, 1, '[]', '[]',
+                                  1, 1, 'selected', 'test_v1', '{}', '{}', ?, ?)
+                        """,
+                        (
+                            run_id,
+                            code,
+                            f"Stock {code}",
+                            f"{trade_date}T14:00:00+08:00",
+                            f"{trade_date}T14:00:00+08:00",
+                            f"{trade_date}T14:00:00+08:00",
+                        ),
+                    ).lastrowid
+
+            pending = load_pending_candidates(
+                db_path=db_path,
+                modes=("eod",),
+                trade_date_before="2026-07-20",
+                newest_first=True,
+            )
+            self.assertEqual([row["id"] for row in pending], [candidate_ids["2330"]])
+
     def test_pending_loader_includes_selected_and_rejected_candidates(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "scanner.db"

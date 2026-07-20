@@ -3,7 +3,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { CandidateLearnabilityAudit, CapitalTournament, CloudEvidence, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, ReplayAttribution, ResearchHealth, ResearchQuality, StrategyChallengerSnapshot, WorkflowRun } from "./types";
+import type { CandidateLearnabilityAudit, CapitalTournament, CloudEvidence, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, PaperSettlement, ReplayAttribution, ResearchHealth, ResearchQuality, StrategyChallengerSnapshot, WorkflowRun } from "./types";
 
 const DEFAULT_DATA_URL =
   "https://raw.githubusercontent.com/corn92888/Stock_AI_Scanner/main/data/dashboard_snapshot.json";
@@ -197,6 +197,26 @@ const EMPTY_CAPITAL_TOURNAMENT: CapitalTournament = {
   accounts: [],
 };
 
+const EMPTY_PAPER_SETTLEMENT: PaperSettlement = {
+  version: "opening_paper_settlement_v1",
+  status: "not_run",
+  settlementAt: null,
+  sessionDate: null,
+  source: null,
+  entryPolicy: "prior_eod_signal_next_session_open",
+  lookaheadProtected: true,
+  eligibleCandidates: 0,
+  outcomesSaved: 0,
+  accountsUpdated: 0,
+  newOpenPositions: 0,
+  newSkippedOrders: 0,
+  newClosedPositions: 0,
+  pendingOrders: 0,
+  openPositions: 0,
+  error: null,
+  transitions: [],
+};
+
 const EMPTY_GLOBAL_MARKET: GlobalMarketSnapshot = {
   modelVersion: "global_regime_shadow_v1",
   snapshotAt: "",
@@ -303,6 +323,11 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
     })),
     paperEquity: snapshot.paperEquity ?? [],
     paperTrades: snapshot.paperTrades ?? [],
+    paperSettlement: {
+      ...EMPTY_PAPER_SETTLEMENT,
+      ...(snapshot.paperSettlement ?? {}),
+      transitions: snapshot.paperSettlement?.transitions ?? [],
+    },
     capitalTournament: {
       ...EMPTY_CAPITAL_TOURNAMENT,
       ...(snapshot.capitalTournament ?? {}),

@@ -920,6 +920,65 @@ def _strategy_challenger_snapshot(conn):
     }
 
 
+def _paper_settlement_snapshot(conn):
+    empty = {
+        "version": "opening_paper_settlement_v1",
+        "status": "not_run",
+        "settlementAt": None,
+        "sessionDate": None,
+        "source": None,
+        "entryPolicy": "prior_eod_signal_next_session_open",
+        "lookaheadProtected": True,
+        "eligibleCandidates": 0,
+        "outcomesSaved": 0,
+        "accountsUpdated": 0,
+        "newOpenPositions": 0,
+        "newSkippedOrders": 0,
+        "newClosedPositions": 0,
+        "pendingOrders": 0,
+        "openPositions": 0,
+        "error": None,
+        "transitions": [],
+    }
+    if not _table_exists(conn, "paper_settlement_runs"):
+        return empty
+    row = conn.execute(
+        """
+        SELECT settlement_at, session_date, source, status,
+               eligible_candidates, outcomes_saved, accounts_updated,
+               new_open_positions, new_skipped_orders, new_closed_positions,
+               pending_orders, open_positions, error_text, metrics_json
+        FROM paper_settlement_runs
+        ORDER BY settlement_at DESC, id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if not row:
+        return empty
+    metrics = _decode_object(row["metrics_json"])
+    return {
+        **empty,
+        "status": row["status"],
+        "settlementAt": row["settlement_at"],
+        "sessionDate": row["session_date"],
+        "source": row["source"],
+        "entryPolicy": metrics.get("entryPolicy", empty["entryPolicy"]),
+        "lookaheadProtected": bool(
+            metrics.get("lookaheadProtected", empty["lookaheadProtected"])
+        ),
+        "eligibleCandidates": int(row["eligible_candidates"] or 0),
+        "outcomesSaved": int(row["outcomes_saved"] or 0),
+        "accountsUpdated": int(row["accounts_updated"] or 0),
+        "newOpenPositions": int(row["new_open_positions"] or 0),
+        "newSkippedOrders": int(row["new_skipped_orders"] or 0),
+        "newClosedPositions": int(row["new_closed_positions"] or 0),
+        "pendingOrders": int(row["pending_orders"] or 0),
+        "openPositions": int(row["open_positions"] or 0),
+        "error": row["error_text"],
+        "transitions": metrics.get("transitions") or [],
+    }
+
+
 def _empty_research_health():
     return {
         "status": "building",
@@ -1791,6 +1850,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
         research_health = _research_health_snapshot(conn)
         replay_attribution = _replay_attribution_snapshot(conn)
         portfolio_tournament = _portfolio_tournament_snapshot(conn, paper_accounts)
+        paper_settlement = _paper_settlement_snapshot(conn)
         cloud_evidence = _cloud_evidence_snapshot(conn)
 
         return {
@@ -1815,6 +1875,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "paperAccounts": paper_accounts,
             "paperEquity": paper_equity,
             "paperTrades": paper_trades,
+            "paperSettlement": paper_settlement,
             "capitalTournament": portfolio_tournament,
             "globalMarket": global_market,
             "institutionalFlow": institutional_flow,

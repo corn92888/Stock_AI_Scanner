@@ -699,6 +699,28 @@ def _create_quant_tables(conn):
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS paper_settlement_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            settlement_at TEXT NOT NULL,
+            session_date TEXT NOT NULL,
+            source TEXT NOT NULL,
+            status TEXT NOT NULL,
+            eligible_candidates INTEGER NOT NULL DEFAULT 0,
+            outcomes_saved INTEGER NOT NULL DEFAULT 0,
+            accounts_updated INTEGER NOT NULL DEFAULT 0,
+            new_open_positions INTEGER NOT NULL DEFAULT 0,
+            new_skipped_orders INTEGER NOT NULL DEFAULT 0,
+            new_closed_positions INTEGER NOT NULL DEFAULT 0,
+            pending_orders INTEGER NOT NULL DEFAULT 0,
+            open_positions INTEGER NOT NULL DEFAULT 0,
+            error_text TEXT,
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS news_evidence (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             run_id INTEGER NOT NULL,
@@ -1360,6 +1382,10 @@ def _migrate_quant_tables(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_paper_equity_account_date "
         "ON paper_equity_snapshots(account_id, as_of)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_paper_settlement_session "
+        "ON paper_settlement_runs(session_date DESC, settlement_at DESC)"
     )
 
 

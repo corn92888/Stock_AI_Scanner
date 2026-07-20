@@ -647,6 +647,35 @@ export type PaperTrade = {
   skipReason: string | null;
 };
 
+export type PaperSettlement = {
+  version: string;
+  status: "not_run" | "waiting_market_data" | "completed" | "failed";
+  settlementAt: string | null;
+  sessionDate: string | null;
+  source: string | null;
+  entryPolicy: "prior_eod_signal_next_session_open";
+  lookaheadProtected: boolean;
+  eligibleCandidates: number;
+  outcomesSaved: number;
+  accountsUpdated: number;
+  newOpenPositions: number;
+  newSkippedOrders: number;
+  newClosedPositions: number;
+  pendingOrders: number;
+  openPositions: number;
+  error: string | null;
+  transitions: Array<{
+    accountKey: string;
+    code: string;
+    name: string;
+    from: PaperTrade["status"] | null;
+    to: PaperTrade["status"];
+    reason: string | null;
+    entryAt: string | null;
+    entryPrice: number | null;
+  }>;
+};
+
 export type GlobalMarketInstrument = {
   key: string;
   symbol: string | null;
@@ -783,6 +812,7 @@ export type DashboardSnapshot = {
   paperAccounts: PaperAccount[];
   paperEquity: PaperEquityPoint[];
   paperTrades: PaperTrade[];
+  paperSettlement: PaperSettlement;
   capitalTournament: CapitalTournament;
   globalMarket: GlobalMarketSnapshot;
   institutionalFlow: InstitutionalFlowSnapshot;

@@ -1040,6 +1040,8 @@ const paperReasonLabels: Record<string, string> = {
   outcome_backfill_pending: "等待行情回填",
   awaiting_exit_data: "等待退出資料",
   above_chase_limit: "開盤超過禁止追價線",
+  gap_below_defense: "開盤跌破防守價",
+  invalid_stop_at_entry: "進場價未高於防守價",
   duplicate_open_position: "已有同一標的持倉",
   max_positions_reached: "已達五檔持倉上限",
   insufficient_cash: "可用資金不足",
@@ -1076,6 +1078,15 @@ function PaperTradingView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const closedTrades = tournament.accounts.reduce((sum, account) => sum + account.closedTrades, 0);
   const promotionReady = tournament.status === "manual_review_required";
   const tournamentAccountKeys = new Set(tournament.accounts.map((account) => account.accountKey));
+  const settlement = snapshot.paperSettlement;
+  const settlementIsCurrent = settlement.sessionDate === snapshot.overview.latestTradeDate;
+  const settlementLabel = settlement.status === "completed" && settlementIsCurrent
+    ? "今日開盤結算完成"
+    : settlement.status === "waiting_market_data" && settlementIsCurrent
+      ? "等待開盤行情"
+      : settlement.status === "failed" && settlementIsCurrent
+        ? "今日結算失敗"
+        : "今日尚未完成開盤結算";
   const curve = Array.from(
     snapshot.paperEquity.reduce((map, point) => {
       if (!tournamentAccountKeys.has(point.accountKey) || point.asOf < tournament.evidenceStartDate) return map;
@@ -1087,8 +1098,8 @@ function PaperTradingView({ snapshot }: { snapshot: DashboardSnapshot }) {
       return map;
     }, new Map<string, { asOf: string; top3?: number; top5?: number; top10?: number }>()).values(),
   ).sort((a, b) => a.asOf.localeCompare(b.asOf));
-  const active = snapshot.paperTrades.filter((trade) => tournamentAccountKeys.has(trade.accountKey) && (trade.status === "open" || trade.status === "pending"));
-  const recent = snapshot.paperTrades.filter((trade) => tournamentAccountKeys.has(trade.accountKey) && (trade.status === "closed" || trade.status === "skipped")).slice(0, 30);
+  const active = snapshot.paperTrades.filter((trade) => trade.status === "open" || trade.status === "pending");
+  const recent = snapshot.paperTrades.filter((trade) => trade.status === "closed" || trade.status === "skipped").slice(0, 30);
   const accountNames = new Map(snapshot.paperAccounts.map((account) => [account.accountKey, account.name]));
   const config = benchmark?.config ?? legacyAi?.config ?? rule?.config ?? {};
 
@@ -1098,6 +1109,8 @@ function PaperTradingView({ snapshot }: { snapshot: DashboardSnapshot }) {
         <div><span className="eyebrow">Prospective capital tournament</span><h2>{promotionReady ? `${reviewCandidate?.name ?? "挑戰者"}進入人工升級審查` : "三種 AI 組合正在累積全新前瞻證據"}</h2><p>同一批每日盤後預測，同日起跑比較 Top 3 等權、Top 5 分散與 Top 10 分數加權；歷史結果不補考</p></div>
         <div className={`governance-state ${promotionReady ? "ready" : "shadow"}`}><WalletCards size={20} /><span>{promotionReady ? "MANUAL REVIEW" : "PAPER ONLY"}</span></div>
       </section>
+
+      <div className="readiness-callout"><Clock3 size={19} /><div><strong>正式資金 CASH｜{settlementLabel}</strong><p>影子帳戶仍會累積可驗證交易。開盤結算只讀取前一交易日 EOD 訊號，使用次一交易日開盤價；目前持有 {active.filter((trade) => trade.status === "open").length} 筆、等待成交 {active.filter((trade) => trade.status === "pending").length} 筆。{settlement.settlementAt ? `最近結算 ${formatDateTime(settlement.settlementAt)}，本次新成交 ${settlement.newOpenPositions}、未成交 ${settlement.newSkippedOrders}、結案 ${settlement.newClosedPositions}。` : "首次結算會在開盤後第一個可用排程執行。"}</p></div></div>
 
       <section className="metrics-grid metrics-grid-five">
         <Metric label="前瞻決策日" value={number.format(tournament.evidenceDays)} detail={`門檻 ${tournament.minimumEvidenceDays} 日 · 自 ${tournament.evidenceStartDate}`} tone={tournament.evidenceDays >= tournament.minimumEvidenceDays ? "positive" : "warning"} icon={Clock3} />
@@ -1126,12 +1139,12 @@ function PaperTradingView({ snapshot }: { snapshot: DashboardSnapshot }) {
       <div className="validation-banner"><TriangleAlert size={18} /><div><strong>這是資金配置實驗，不是買進建議</strong><p>資料只從 {tournament.evidenceStartDate} 起向前累積；至少 120 個新決策日、每個帳戶 100 筆結案且通過所有風險閘門後，也只會送交人工審查，不會自動實盤。</p></div></div>
 
       <section className="panel">
-        <PanelHeader eyebrow="Pending and open" title="目前模擬委託與持倉" description="等待成交不會預先占用資金；超過禁止追價線會留下未成交紀錄" trailing={<span className="record-count">{active.length} 筆</span>} />
+        <PanelHeader eyebrow="Order lifecycle" title="所有模擬委託與持倉" description="涵蓋規則基準、舊 AI 與新資金競賽；等待成交不會預先占用資金" trailing={<span className="record-count">{active.length} 筆</span>} />
         <div className="table-scroll"><table className="data-table compact-table paper-table"><thead><tr><th>帳戶</th><th>訊號日</th><th>標的</th><th>狀態</th><th>進場</th><th>配置</th><th>股數</th><th>禁止追價</th><th>防守價</th><th>目前價值</th><th>原因</th></tr></thead><tbody>{active.length ? active.map((trade) => <tr key={`${trade.accountKey}-${trade.sourceType}-${trade.sourceId}`}><td>{accountNames.get(trade.accountKey) ?? trade.accountKey}</td><td>{trade.signalDate}</td><td><div className="symbol-cell"><strong>{trade.code}</strong><span>{trade.name}</span></div></td><td><span className={`status-pill ${paperStatusTone(trade.status)}`}>{paperStatusLabels[trade.status]}</span></td><td>{trade.entryAt ? `${trade.entryAt} · ${formatNumeric(trade.entryPrice ?? 0, 0, 2)}` : "--"}</td><td>{trade.allocationWeight == null ? "--" : `${decimal.format(trade.allocationWeight * 100)}%`}</td><td>{trade.quantity ?? "--"}</td><td>{trade.chaseLimit == null ? "--" : formatNumeric(trade.chaseLimit, 0, 2)}</td><td>{trade.stopPrice == null ? "--" : formatNumeric(trade.stopPrice, 0, 2)}</td><td>{money(trade.marketValue)}</td><td>{paperReasonLabels[trade.skipReason ?? ""] ?? "正常持有"}</td></tr>) : <tr><td colSpan={11}>目前沒有等待成交或持有中的模擬部位。</td></tr>}</tbody></table></div>
       </section>
 
       <section className="panel">
-        <PanelHeader eyebrow="Execution ledger" title="最近模擬交易紀錄" description="未成交也保留原因，避免只統計成功進場造成倖存者偏誤" trailing={<span className="record-count">{recent.length} 筆</span>} />
+        <PanelHeader eyebrow="Execution ledger" title="所有帳戶最近模擬紀錄" description="成交、未成交與出場都保留原因，避免只統計成功進場造成倖存者偏誤" trailing={<span className="record-count">{recent.length} 筆</span>} />
         <div className="table-scroll"><table className="data-table compact-table paper-table"><thead><tr><th>帳戶</th><th>訊號日</th><th>標的</th><th>AI 分數</th><th>狀態</th><th>進場 / 出場</th><th>股數</th><th>報酬 / 超額</th><th>損益</th><th>最大漲幅</th><th>最大回撤</th><th>結果</th></tr></thead><tbody>{recent.length ? recent.map((trade) => <tr key={`${trade.accountKey}-${trade.sourceType}-${trade.sourceId}`}><td>{accountNames.get(trade.accountKey) ?? trade.accountKey}</td><td>{trade.signalDate}</td><td><div className="symbol-cell"><strong>{trade.code}</strong><span>{trade.name}</span></div></td><td>{trade.finalScore == null ? "--" : decimal.format(trade.finalScore)}</td><td><span className={`status-pill ${paperStatusTone(trade.status)}`}>{paperStatusLabels[trade.status]}</span></td><td>{trade.entryAt ?? "--"} / {trade.exitAt ?? "--"}</td><td>{trade.quantity ?? "--"}</td><td className={(trade.netReturnPct ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(trade.netReturnPct)} / {pct(trade.excessReturnPct)}</td><td className={(trade.realizedPnl ?? 0) >= 0 ? "positive-text" : "negative-text"}>{money(trade.realizedPnl)}</td><td>{pct(trade.maxReturnPct)}</td><td>{pct(trade.maxDrawdownPct)}</td><td>{paperReasonLabels[trade.skipReason ?? ""] ?? paperReasonLabels[trade.exitReason ?? ""] ?? "--"}</td></tr>) : <tr><td colSpan={12}>尚無已結案或未成交紀錄。</td></tr>}</tbody></table></div>
       </section>
 

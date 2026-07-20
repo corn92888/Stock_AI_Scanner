@@ -42,6 +42,9 @@ def load_pending_candidates(
     execution_version=CANDIDATE_EXECUTION_VERSION,
     limit=None,
     refresh=False,
+    modes=None,
+    trade_date_before=None,
+    newest_first=False,
 ):
     where = []
     params = [execution_version]
@@ -50,7 +53,24 @@ def load_pending_candidates(
             "(co.id IS NULL OR COALESCE(co.outcome_status, 'pending') "
             "NOT IN ('complete', 'skipped'))"
         )
+    normalized_modes = tuple(sorted({str(mode).lower() for mode in modes or ()}))
+    if normalized_modes:
+        placeholders = ", ".join("?" for _ in normalized_modes)
+        where.append(f"LOWER(sr.mode) IN ({placeholders})")
+        params.extend(normalized_modes)
+    if trade_date_before:
+        where.append("sr.trade_date < ?")
+        params.append(str(trade_date_before))
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    ordering = (
+        "maturity_priority DESC, sr.trade_date DESC, sr.run_at DESC, "
+        "ce.is_selected DESC, ce.is_first_eligible_event DESC, "
+        "ce.raw_rank ASC, ce.id ASC"
+        if newest_first
+        else "maturity_priority DESC, prospective_later_sessions DESC, "
+        "ce.is_selected DESC, ce.is_first_eligible_event DESC, "
+        "sr.trade_date ASC, sr.run_at ASC, ce.raw_rank ASC, ce.id ASC"
+    )
     sql = f"""
         WITH canonical_candidates AS (
             SELECT id AS candidate_id, run_id, code
@@ -108,9 +128,7 @@ def load_pending_candidates(
           ON co.candidate_id=ce.id AND co.execution_version=?
         LEFT JOIN overdue_prospective op ON op.candidate_id=ce.id
         {where_sql}
-        ORDER BY maturity_priority DESC, prospective_later_sessions DESC,
-                 ce.is_selected DESC, ce.is_first_eligible_event DESC,
-                 sr.trade_date ASC, sr.run_at ASC, ce.raw_rank ASC, ce.id ASC
+        ORDER BY {ordering}
     """
     if limit:
         sql += " LIMIT ?"
@@ -289,6 +307,9 @@ def run_candidate_backtest(
     limit=None,
     refresh=False,
     price_loader=download_price_data,
+    modes=None,
+    trade_date_before=None,
+    newest_first=False,
 ):
     config = config or CandidateExecutionConfig()
     candidates = load_pending_candidates(
@@ -296,6 +317,9 @@ def run_candidate_backtest(
         execution_version=config.execution_version,
         limit=limit,
         refresh=refresh,
+        modes=modes,
+        trade_date_before=trade_date_before,
+        newest_first=newest_first,
     )
     if not candidates:
         print("No pending candidate outcomes.")
@@ -375,8 +399,18 @@ def main():
     parser.add_argument("--db", default=str(DB_PATH))
     parser.add_argument("--limit", type=int)
     parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--mode", action="append", choices=("intraday", "eod"))
+    parser.add_argument("--before-trade-date")
+    parser.add_argument("--newest-first", action="store_true")
     args = parser.parse_args()
-    run_candidate_backtest(db_path=args.db, limit=args.limit, refresh=args.refresh)
+    run_candidate_backtest(
+        db_path=args.db,
+        limit=args.limit,
+        refresh=args.refresh,
+        modes=args.mode,
+        trade_date_before=args.before_trade_date,
+        newest_first=args.newest_first,
+    )
 
 
 if __name__ == "__main__":

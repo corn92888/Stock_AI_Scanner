@@ -72,6 +72,19 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertIn("pip install --prefer-binary -r requirements-intraday.txt", workflow)
         self.assertNotIn("pip install -r requirements.txt", workflow)
 
+    def test_intraday_workflow_settles_prior_session_orders_after_open(self):
+        workflow = (ROOT / ".github" / "workflows" / "intraday_scan.yml").read_text()
+        scan_index = workflow.index("python intraday_analysis_report.py")
+        settlement_index = workflow.index("python paper_settlement.py")
+        monitor_index = workflow.index("python research_monitor.py")
+        persistence_index = workflow.index("bash persist_scanner_data.sh")
+
+        self.assertIn("steps.gate.outputs.slot != '09:00'", workflow)
+        self.assertIn("--source github_action --send-telegram", workflow)
+        self.assertLess(scan_index, settlement_index)
+        self.assertLess(settlement_index, monitor_index)
+        self.assertLess(settlement_index, persistence_index)
+
     def test_vercel_owns_all_automation_schedules(self):
         workflow = (ROOT / ".github" / "workflows" / "intraday_scan.yml").read_text()
         daily_workflow = (ROOT / ".github" / "workflows" / "daily_scan.yml").read_text()

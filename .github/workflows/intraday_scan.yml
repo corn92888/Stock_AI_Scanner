@@ -87,6 +87,14 @@ jobs:
       run: |
         python intraday_analysis_report.py --run-scanner --run-market-monitor --run-ai --send-telegram --send-raw-scanner-telegram
 
+    - name: Settle prior-session paper orders after the opening auction
+      if: steps.gate.outputs.run == 'true' && steps.gate.outputs.slot != '09:00'
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        python paper_settlement.py --source github_action --send-telegram
+
     - name: Refresh global market context
       if: steps.gate.outputs.run == 'true'
       continue-on-error: true

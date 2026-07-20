@@ -86,6 +86,8 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertEqual(payload["overview"]["candidateOutcomes"], 0)
             self.assertEqual(payload["overview"]["paperAccounts"], 0)
             self.assertEqual(payload["paperAccounts"], [])
+            self.assertEqual(payload["paperSettlement"]["status"], "not_run")
+            self.assertTrue(payload["paperSettlement"]["lookaheadProtected"])
             self.assertEqual(payload["researchExperiments"], [])
             self.assertEqual(payload["modelChallengers"], [])
             self.assertEqual(payload["researchHealth"]["status"], "building")
@@ -200,6 +202,54 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertEqual(snapshot["paperAccounts"][0]["comparisonStartAt"], "2026-07-13")
             self.assertEqual(snapshot["paperAccounts"][0]["comparisonReturnPct"], 0)
             self.assertEqual(snapshot["paperEquity"][0]["equity"], 1010000)
+
+    def test_snapshot_exports_opening_settlement_lifecycle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scanner.db"
+            with get_connection(database) as conn:
+                init_db(conn)
+                conn.execute(
+                    """
+                    INSERT INTO paper_settlement_runs (
+                        settlement_at, session_date, source, status,
+                        eligible_candidates, outcomes_saved, accounts_updated,
+                        new_open_positions, new_skipped_orders, new_closed_positions,
+                        pending_orders, open_positions, metrics_json, created_at
+                    ) VALUES (
+                        '2026-07-20T09:35:00+08:00', '2026-07-20', 'test',
+                        'completed', 12, 10, 5, 2, 1, 0, 3, 4,
+                        ?,
+                        '2026-07-20T09:35:00+08:00'
+                    )
+                    """,
+                    (
+                        json.dumps(
+                            {
+                                "entryPolicy": "prior_eod_signal_next_session_open",
+                                "lookaheadProtected": True,
+                                "transitions": [
+                                    {
+                                        "accountKey": "ai_top3_equal_v1",
+                                        "code": "2330",
+                                        "name": "TSMC",
+                                        "from": "pending",
+                                        "to": "open",
+                                        "reason": None,
+                                        "entryAt": "2026-07-20",
+                                        "entryPrice": 1000,
+                                    }
+                                ],
+                            }
+                        ),
+                    ),
+                )
+
+            settlement = build_dashboard_snapshot(database)["paperSettlement"]
+            self.assertEqual(settlement["status"], "completed")
+            self.assertEqual(settlement["eligibleCandidates"], 12)
+            self.assertEqual(settlement["newOpenPositions"], 2)
+            self.assertTrue(settlement["lookaheadProtected"])
+            self.assertEqual(settlement["transitions"][0]["to"], "open")
 
     def test_snapshot_exports_latest_strategy_experiment_evaluation(self):
         with tempfile.TemporaryDirectory() as directory:
