@@ -193,6 +193,10 @@ def init_db(conn):
         "ON experiment_evaluations(experiment_id, evaluated_at DESC)"
     )
     conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_strategy_challenger_time "
+        "ON strategy_challenger_snapshots(evaluated_at DESC)"
+    )
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_fundamentals_code_known "
         "ON fundamental_observations(code, known_at DESC)"
     )
@@ -906,6 +910,23 @@ def _create_research_tables(conn):
             metrics_json TEXT NOT NULL,
             FOREIGN KEY (experiment_id) REFERENCES research_experiments(id),
             UNIQUE (experiment_id, evaluation_version)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS strategy_challenger_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            evaluated_at TEXT NOT NULL,
+            challenger_version TEXT NOT NULL,
+            dataset_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL,
+            selected_experiment_key TEXT,
+            recommendation_mode TEXT NOT NULL,
+            qualified_candidates INTEGER NOT NULL DEFAULT 0,
+            candidate_count INTEGER NOT NULL DEFAULT 0,
+            metrics_json TEXT NOT NULL,
+            UNIQUE (challenger_version, dataset_fingerprint)
         )
         """
     )

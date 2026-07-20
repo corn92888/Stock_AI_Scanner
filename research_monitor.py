@@ -307,11 +307,46 @@ def _formal_performance_metrics(conn):
     }
 
 
+def _strategy_challenger_metrics(conn):
+    row = conn.execute(
+        """
+        SELECT evaluated_at, challenger_version, status,
+               selected_experiment_key, recommendation_mode,
+               qualified_candidates, candidate_count
+        FROM strategy_challenger_snapshots
+        ORDER BY evaluated_at DESC, id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if not row:
+        return {
+            "strategy_challenger_evaluated_at": None,
+            "strategy_challenger_version": None,
+            "strategy_challenger_status": "not_evaluated",
+            "strategy_challenger_selected_key": None,
+            "strategy_recommendation_mode": "cash",
+            "strategy_qualified_candidates": 0,
+            "strategy_candidate_count": 0,
+        }
+    return {
+        "strategy_challenger_evaluated_at": row["evaluated_at"],
+        "strategy_challenger_version": row["challenger_version"],
+        "strategy_challenger_status": row["status"],
+        "strategy_challenger_selected_key": row["selected_experiment_key"],
+        "strategy_recommendation_mode": row["recommendation_mode"],
+        "strategy_qualified_candidates": int(row["qualified_candidates"] or 0),
+        "strategy_candidate_count": int(row["candidate_count"] or 0),
+    }
+
+
 def _positive(value):
     return value is not None and float(value) > 0
 
 
-def build_research_integrity_gate(prospective, replay, formal, approved=None):
+def build_research_integrity_gate(
+    prospective, replay, formal, approved=None, strategy=None
+):
+    strategy = strategy or {}
     expected = int(prospective.get("expected_mature_t3") or 0)
     maturity_coverage = (
         int(prospective.get("mature_t3_cohorts") or 0) / expected * 100
@@ -410,6 +445,18 @@ def build_research_integrity_gate(prospective, replay, formal, approved=None):
             ),
             "requirement": "net and excess lift > 0%",
         },
+        {
+            "key": "walk_forward_challenger",
+            "label": "擴展視窗挑戰策略已通過",
+            "passed": strategy.get("strategy_challenger_status")
+            == "prospective_shadow_ready"
+            and int(strategy.get("strategy_qualified_candidates") or 0) > 0,
+            "detail": (
+                f"{int(strategy.get('strategy_qualified_candidates') or 0)} / "
+                f"{int(strategy.get('strategy_candidate_count') or 0)} 個候選"
+            ),
+            "requirement": "at least one purged walk-forward candidate",
+        },
     ]
     passed_checks = sum(1 for check in checks if check["passed"])
     evidence_ready = passed_checks == len(checks)
@@ -441,11 +488,14 @@ def build_research_health(db_path=DB_PATH):
         execution_scenarios = _execution_scenario_metrics(conn)
         replay = _replay_metrics(conn)
         formal = _formal_performance_metrics(conn)
+        strategy = _strategy_challenger_metrics(conn)
         latest_trade_date = conn.execute(
             "SELECT MAX(trade_date) FROM scan_runs"
         ).fetchone()[0]
 
-    integrity_gate = build_research_integrity_gate(prospective, replay, formal)
+    integrity_gate = build_research_integrity_gate(
+        prospective, replay, formal, strategy=strategy
+    )
 
     warnings = []
     if prospective["prospective_cohorts"] == 0:
@@ -494,6 +544,13 @@ def build_research_health(db_path=DB_PATH):
             "量化證據已通過研究完整性閘門，但尚未取得人工核准，"
             "正式推薦仍維持關閉。"
         )
+    if strategy["strategy_challenger_status"] == "not_evaluated":
+        warnings.append("擴展視窗策略挑戰者尚未執行。")
+    elif strategy["strategy_challenger_status"] != "prospective_shadow_ready":
+        warnings.append(
+            "目前沒有策略同時通過成本後淨報酬、超額報酬、回撤與穩定度門檻；"
+            "資金模式維持 CASH。"
+        )
 
     if prospective["stale_outcomes"]:
         status = "critical"
@@ -517,6 +574,7 @@ def build_research_health(db_path=DB_PATH):
         **execution_scenarios,
         **replay,
         **formal,
+        **strategy,
         "latest_trade_date": latest_trade_date,
         "status": status,
         "maturity_coverage_pct": (

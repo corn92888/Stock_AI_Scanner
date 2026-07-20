@@ -104,6 +104,7 @@ const experimentFamilyLabels: Record<string, string> = {
   cross_sectional_return_ranker: "橫斷面 AI 排名",
   cross_sectional_alpha_ranker: "Alpha 棄權排名",
   cross_sectional_peer_ranker: "同儕相對排名",
+  walk_forward_cross_sectional_challenger: "擴展視窗挑戰者",
   generation_2_institutional_ablation: "法人增量消融",
   generation_2_institutional_interaction: "法人條件互動",
 };
@@ -133,6 +134,21 @@ const challengerReasonLabels: Record<string, string> = {
   challenger_does_not_beat_champion: "AI 未勝過規則冠軍",
   challenger_drawdown_gate_failed: "AI 回撤超標",
   challenger_fold_stability_failed: "AI 分折穩定度不足",
+};
+
+const strategyChallengerReasonLabels: Record<string, string> = {
+  insufficient_trade_dates: "參與交易日不足",
+  insufficient_trades: "成交樣本不足",
+  non_positive_net_return: "成本後交易報酬未轉正",
+  non_positive_excess_return: "交易超額未轉正",
+  non_positive_daily_net_return: "含空手日淨報酬未轉正",
+  non_positive_daily_excess_return: "含空手日超額未轉正",
+  probabilistic_sharpe_below_gate: "多重檢定後 PSR 未達標",
+  drawdown_gate_failed: "最大回撤超標",
+  fold_stability_gate_failed: "跨期穩定度不足",
+  no_formal_net_lift: "淨報酬未勝過正式規則",
+  no_formal_excess_lift: "超額未勝過正式規則",
+  insufficient_walk_forward_folds: "擴展視窗折數不足",
 };
 
 const executionMethodLabels: Record<string, string> = {
@@ -812,6 +828,12 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const experiments = snapshot.researchExperiments ?? [];
   const learnability = snapshot.learnabilityAudit;
   const learnabilityPrimary = learnability.primary;
+  const strategyLab = snapshot.strategyChallenger;
+  const strategyLeader = strategyLab.candidateLeaderboard[0];
+  const executionMatrix = useMemo(() => (
+    [...strategyLab.executionMatrix]
+      .sort((left, right) => right.validation.meanDailyExcessReturn - left.validation.meanDailyExcessReturn)
+  ), [strategyLab.executionMatrix]);
   const attribution = snapshot.replayAttribution;
   const [attributionDimension, setAttributionDimension] = useState("strategy");
   const [attributionScope, setAttributionScope] = useState<"all" | "selected" | "rejected">("all");
@@ -899,6 +921,29 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
           <div className="table-scroll"><table className="data-table compact-table strategy-table"><thead><tr><th>進場 / 持有</th><th>候選池</th><th>Oracle 上限</th><th>AI 淨報酬 / 超額</th><th>Rank IC</th><th>前後分位超額差</th><th>成交 / 捕捉</th><th>診斷</th></tr></thead><tbody>{learnability.rows.map((row) => <tr key={row.key}><td><strong>{executionMethodLabels[row.entryMethod] ?? row.entryMethod}</strong><br /><small>T+{row.holdingHorizon} · Q80</small></td><td><strong>{number.format(row.pool.filledCandidates)} 筆</strong><br /><small>正報酬 {rate(row.pool.positiveCandidateRate)} · 可湊 Top 3 {rate(row.pool.profitableTopKCapacityRatePct)}</small></td><td className={(row.oracle.meanDailyNetReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.oracle.meanDailyNetReturn)}<br /><small>超額 {pct(row.oracle.meanDailyExcessReturn)}</small></td><td className={(row.model.meanDailyNetReturn ?? 0) >= 0 && (row.model.meanDailyExcessReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.model.meanDailyNetReturn)} / {pct(row.model.meanDailyExcessReturn)}<br /><small>{number.format(row.model.trades)} 筆 · 參與 {rate(row.model.participationRatePct)}</small></td><td>{row.rankability.meanRankIc == null ? "--" : decimal.format(row.rankability.meanRankIc)}<br /><small>{row.rankability.rankIcCi95Low == null || row.rankability.rankIcCi95High == null ? "區間不足" : `${decimal.format(row.rankability.rankIcCi95Low)} ～ ${decimal.format(row.rankability.rankIcCi95High)}`}</small></td><td className={(row.rankability.topBottomExcessSpread ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.rankability.topBottomExcessSpread)}<br /><small>{number.format(row.rankability.topBottomDates)} 日</small></td><td>成交 {rate(row.model.selectedFillRatePct)}<br /><small>捕捉 {rate(row.model.opportunityCapturePct)} · 重疊 {rate(row.model.oracleOverlapRatePct)}</small></td><td><span className={`status-pill ${row.diagnosis === "historical_edge_not_promotable" ? "selected" : "blocked"}`}>{learnabilityDiagnosisLabels[row.diagnosis] ?? row.diagnosis}</span></td></tr>)}</tbody></table></div>
         </section>
       </> : null}
+
+      <section className="panel">
+        <PanelHeader eyebrow="Purged walk-forward lab" title="策略挑戰者治理" description="六個鎖定模型逐季擴展訓練；選擇階段不讀最終 holdout，通過後也只能進入全新前瞻影子測試" trailing={<span className={`status-pill ${strategyLab.status === "prospective_shadow_ready" ? "selected" : "blocked"}`}>{strategyLab.status === "prospective_shadow_ready" ? "SHADOW READY" : strategyLab.status === "not_evaluated" ? "NOT EVALUATED" : "CASH / NO DEPLOYMENT"}</span>} />
+        <div className="readiness-callout"><ShieldCheck size={19} /><div><strong>{strategyLab.status === "prospective_shadow_ready" ? `挑戰者 ${strategyLab.selectedExperimentKey} 可進入前瞻影子測試` : "目前沒有可部署的選股優勢，資金決策維持 CASH"}</strong><p>{strategyLab.status === "not_evaluated" ? "等待策略挑戰流程第一次完成。" : `共 ${strategyLab.qualifiedCandidates}/${strategyLab.candidateCount} 個候選通過。最佳診斷候選 ${strategyLab.diagnosticLeaderKey ?? "--"} 只代表最接近門檻，不等於可買進；研究資料 ${strategyLab.datasetStart ?? "--"} 至 ${strategyLab.datasetEnd ?? "--"}，${number.format(strategyLab.datasetRows)} 筆。`}</p></div></div>
+      </section>
+
+      <section className="metrics-grid metrics-grid-five">
+        <Metric label="資金模式" value={strategyLab.recommendationMode === "cash" ? "CASH" : "SHADOW"} detail="未通過時禁止硬選股票" tone={strategyLab.recommendationMode === "cash" ? "warning" : "positive"} icon={WalletCards} />
+        <Metric label="合格挑戰者" value={`${strategyLab.qualifiedCandidates}/${strategyLab.candidateCount}`} detail={`鎖定比較 ${strategyLab.lockedComparisons} 組`} tone={strategyLab.qualifiedCandidates ? "positive" : "danger"} icon={Bot} />
+        <Metric label="領先者每日淨報酬" value={pct(strategyLeader?.meanDailyNetReturn)} detail={`超額 ${pct(strategyLeader?.meanDailyExcessReturn)}`} tone={(strategyLeader?.meanDailyNetReturn ?? 0) > 0 && (strategyLeader?.meanDailyExcessReturn ?? 0) > 0 ? "positive" : "danger"} icon={TrendingUp} />
+        <Metric label="相對正式規則" value={pct(strategyLeader?.formalExcessLift)} detail={`淨增值 ${pct(strategyLeader?.formalNetLift)}`} tone={(strategyLeader?.formalExcessLift ?? 0) > 0 && (strategyLeader?.formalNetLift ?? 0) > 0 ? "positive" : "danger"} icon={Target} />
+        <Metric label="保留 Holdout" value={number.format(strategyLeader?.reservedHoldoutTradeDates ?? 0)} detail={`${strategyLeader?.reservedHoldoutStart ?? "--"} 起未參與選擇`} tone={strategyLeader && !strategyLeader.holdoutEvaluated ? "positive" : "warning"} icon={Database} />
+      </section>
+
+      <section className="panel">
+        <PanelHeader eyebrow="Locked candidate family" title="擴展視窗候選排名" description="排名只用真正樣本外折；最佳診斷候選若仍有任一拒絕原因，就不建立模擬持倉" trailing={<span className="record-count">{strategyLab.candidateLeaderboard.length} 組</span>} />
+        {strategyLab.candidateLeaderboard.length ? <div className="table-scroll"><table className="data-table compact-table strategy-table"><thead><tr><th>擴展視窗候選</th><th>樣本 / 折數</th><th>每日淨報酬</th><th>每日超額</th><th>相對正式規則</th><th>PSR</th><th>最大回撤</th><th>跨期獲利</th><th>判定</th></tr></thead><tbody>{strategyLab.candidateLeaderboard.map((row) => <tr key={row.experimentKey}><td><strong>{row.rankingTarget === "peer_rank" ? "同產業相對排序" : "大盤超額排序"}</strong><br /><small>{executionMethodLabels[row.entryMethod] ?? row.entryMethod} · T+{row.holdingHorizon} · Q80</small></td><td><strong>{number.format(row.trades)} 筆</strong><br /><small>{number.format(row.decisionDates)} 日 · {row.walkForwardFolds} 折 · 參與 {rate(row.participationRatePct)}</small></td><td className={(row.meanDailyNetReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.meanDailyNetReturn)}<br /><small>規則 {pct(row.formalBaselineMeanDailyNetReturn)}</small></td><td className={(row.meanDailyExcessReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.meanDailyExcessReturn)}<br /><small>規則 {pct(row.formalBaselineMeanDailyExcessReturn)}</small></td><td className={(row.formalExcessLift ?? 0) >= 0 ? "positive-text" : "negative-text"}>超額 {pct(row.formalExcessLift)}<br /><small>淨報酬 {pct(row.formalNetLift)}</small></td><td>{row.probabilisticSharpe == null ? "--" : `${decimal.format(row.probabilisticSharpe * 100)}%`}</td><td className="negative-text">{pct(row.maxDrawdown)}</td><td>{rate((row.profitableFoldRate ?? 0) * 100)}</td><td><span className={`status-pill ${row.qualified ? "selected" : "blocked"}`}>{row.qualified ? "可進前瞻影子" : "不可部署"}</span><br /><small>{row.rejectionReasons.map((reason) => strategyChallengerReasonLabels[reason] ?? reason).join("、")}</small></td></tr>)}</tbody></table></div> : <div className="empty-state">尚未建立擴展視窗策略評估。</div>}
+      </section>
+
+      <section className="panel">
+        <PanelHeader eyebrow="Execution and horizon audit" title="進場方式與持有期矩陣" description="正式規則在相同訊號上的成本後表現；驗證期用於比較，holdout 欄僅顯示既有稽核結果，不參與挑戰者選擇" trailing={<span className="record-count">{executionMatrix.length} 組</span>} />
+        <div className="table-scroll"><table className="data-table compact-table strategy-table"><thead><tr><th>進場 / 持有</th><th>開發期淨 / 超額</th><th>驗證期淨 / 超額</th><th>驗證參與</th><th>Holdout 稽核淨 / 超額</th><th>穩定性</th></tr></thead><tbody>{executionMatrix.map((row) => { const stable = row.development.meanDailyNetReturn > 0 && row.development.meanDailyExcessReturn > 0 && row.validation.meanDailyNetReturn > 0 && row.validation.meanDailyExcessReturn > 0; return <tr key={row.key}><td><strong>{executionMethodLabels[row.entryMethod] ?? row.entryMethod}</strong><br /><small>T+{row.holdingHorizon}</small></td><td className={row.development.meanDailyNetReturn > 0 && row.development.meanDailyExcessReturn > 0 ? "positive-text" : "negative-text"}>{pct(row.development.meanDailyNetReturn)} / {pct(row.development.meanDailyExcessReturn)}</td><td className={row.validation.meanDailyNetReturn > 0 && row.validation.meanDailyExcessReturn > 0 ? "positive-text" : "negative-text"}>{pct(row.validation.meanDailyNetReturn)} / {pct(row.validation.meanDailyExcessReturn)}</td><td>{number.format(row.validation.trades)} 筆<br /><small>{rate(row.validation.participationRatePct)}</small></td><td className={row.holdoutAudit.meanDailyNetReturn > 0 && row.holdoutAudit.meanDailyExcessReturn > 0 ? "positive-text" : "negative-text"}>{pct(row.holdoutAudit.meanDailyNetReturn)} / {pct(row.holdoutAudit.meanDailyExcessReturn)}</td><td><span className={`status-pill ${stable ? "selected" : "blocked"}`}>{stable ? "雙期為正" : "跨期失效"}</span></td></tr>; })}</tbody></table></div>
+      </section>
 
       <section className="panel">
         <PanelHeader eyebrow="Strategy tournament" title="策略競賽與升級判定" description="正式實驗顯示隔離 holdout；法人研究只顯示開發與驗證期消融，保留全新前瞻世代作最終確認" trailing={<span className="record-count">{experiments.length} 組</span>} />

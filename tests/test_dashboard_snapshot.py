@@ -143,7 +143,7 @@ class DashboardSnapshotTests(unittest.TestCase):
             gate = snapshot["researchHealth"]["integrityGate"]
             self.assertEqual(gate["status"], "blocked")
             self.assertEqual(gate["recommendationMode"], "research_only")
-            self.assertEqual(gate["totalChecks"], 11)
+            self.assertEqual(gate["totalChecks"], 12)
             self.assertEqual(snapshot["researchHealth"]["formalMatureSelected"], 0)
 
     def test_snapshot_exports_paper_account_ledger(self):

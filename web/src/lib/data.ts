@@ -3,7 +3,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { CandidateLearnabilityAudit, CapitalTournament, CloudEvidence, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, ReplayAttribution, ResearchHealth, ResearchQuality, WorkflowRun } from "./types";
+import type { CandidateLearnabilityAudit, CapitalTournament, CloudEvidence, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, ReplayAttribution, ResearchHealth, ResearchQuality, StrategyChallengerSnapshot, WorkflowRun } from "./types";
 
 const DEFAULT_DATA_URL =
   "https://raw.githubusercontent.com/corn92888/Stock_AI_Scanner/main/data/dashboard_snapshot.json";
@@ -86,6 +86,13 @@ const EMPTY_RESEARCH_HEALTH: ResearchHealth = {
   formalRejectedMeanExcessReturn3d: null,
   formalSelectionNetLift3d: null,
   formalSelectionExcessLift3d: null,
+  strategyChallengerEvaluatedAt: null,
+  strategyChallengerVersion: null,
+  strategyChallengerStatus: "not_evaluated",
+  strategyChallengerSelectedKey: null,
+  strategyRecommendationMode: "cash",
+  strategyQualifiedCandidates: 0,
+  strategyCandidateCount: 0,
   integrityGate: {
     version: "research_integrity_gate_v1",
     status: "blocked",
@@ -153,6 +160,27 @@ const EMPTY_LEARNABILITY_AUDIT: CandidateLearnabilityAudit = {
   bestDiagnosticSpecKey: null,
   primary: null,
   rows: [],
+};
+
+const EMPTY_STRATEGY_CHALLENGER: StrategyChallengerSnapshot = {
+  version: "",
+  evaluatedAt: null,
+  status: "not_evaluated",
+  recommendationMode: "cash",
+  selectedExperimentKey: null,
+  diagnosticLeaderKey: null,
+  qualifiedCandidates: 0,
+  candidateCount: 0,
+  datasetFingerprint: "",
+  datasetRows: 0,
+  datasetStart: null,
+  datasetEnd: null,
+  lockedComparisons: 0,
+  multipleTestingPsrGate: null,
+  selectionUsesHoldout: false,
+  formalRankingEnabled: false,
+  candidateLeaderboard: [],
+  executionMatrix: [],
 };
 
 const EMPTY_CAPITAL_TOURNAMENT: CapitalTournament = {
@@ -262,6 +290,12 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
     researchExperiments: snapshot.researchExperiments ?? [],
     aiModels: snapshot.aiModels ?? [],
     modelChallengers: snapshot.modelChallengers ?? [],
+    strategyChallenger: {
+      ...EMPTY_STRATEGY_CHALLENGER,
+      ...(snapshot.strategyChallenger ?? {}),
+      candidateLeaderboard: snapshot.strategyChallenger?.candidateLeaderboard ?? [],
+      executionMatrix: snapshot.strategyChallenger?.executionMatrix ?? [],
+    },
     paperAccounts: (snapshot.paperAccounts ?? []).map((account) => ({
       ...account,
       comparisonStartAt: account.comparisonStartAt ?? null,

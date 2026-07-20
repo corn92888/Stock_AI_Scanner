@@ -819,6 +819,107 @@ def _model_challenger_snapshot(conn):
     return rows
 
 
+def _empty_strategy_challenger():
+    return {
+        "version": "",
+        "evaluatedAt": None,
+        "status": "not_evaluated",
+        "recommendationMode": "cash",
+        "selectedExperimentKey": None,
+        "diagnosticLeaderKey": None,
+        "qualifiedCandidates": 0,
+        "candidateCount": 0,
+        "datasetFingerprint": "",
+        "datasetRows": 0,
+        "datasetStart": None,
+        "datasetEnd": None,
+        "lockedComparisons": 0,
+        "multipleTestingPsrGate": None,
+        "selectionUsesHoldout": False,
+        "formalRankingEnabled": False,
+        "candidateLeaderboard": [],
+        "executionMatrix": [],
+    }
+
+
+def _strategy_candidate_row(row):
+    return {
+        "experimentKey": row.get("experimentKey", ""),
+        "name": row.get("name", ""),
+        "qualified": bool(row.get("qualified")),
+        "rejectionReasons": row.get("rejectionReasons", []),
+        "entryMethod": row.get("entry_method", ""),
+        "holdingHorizon": int(row.get("holding_horizon", 0) or 0),
+        "rankingTarget": row.get("ranking_target", ""),
+        "trades": int(row.get("trades", 0) or 0),
+        "decisionDates": int(row.get("decision_dates", 0) or 0),
+        "participationRatePct": row.get("participation_rate_pct"),
+        "meanDailyNetReturn": row.get("mean_daily_net_return"),
+        "meanDailyExcessReturn": row.get("mean_daily_excess_return"),
+        "formalBaselineMeanDailyNetReturn": row.get(
+            "formal_baseline_mean_daily_net_return"
+        ),
+        "formalBaselineMeanDailyExcessReturn": row.get(
+            "formal_baseline_mean_daily_excess_return"
+        ),
+        "formalNetLift": row.get("formal_net_lift"),
+        "formalExcessLift": row.get("formal_excess_lift"),
+        "annualizedSharpe": row.get("annualized_sharpe"),
+        "probabilisticSharpe": row.get("probabilistic_sharpe"),
+        "maxDrawdown": row.get("max_drawdown"),
+        "profitableFoldRate": row.get("profitable_fold_rate"),
+        "walkForwardFolds": int(row.get("walk_forward_folds", 0) or 0),
+        "sampleStart": row.get("sample_start"),
+        "sampleEnd": row.get("sample_end"),
+        "reservedHoldoutStart": row.get("reserved_holdout_start"),
+        "reservedHoldoutEnd": row.get("reserved_holdout_end"),
+        "reservedHoldoutTradeDates": int(
+            row.get("reserved_holdout_trade_dates", 0) or 0
+        ),
+        "holdoutEvaluated": bool(row.get("holdout_evaluated", False)),
+    }
+
+
+def _strategy_challenger_snapshot(conn):
+    if not _table_exists(conn, "strategy_challenger_snapshots"):
+        return _empty_strategy_challenger()
+    row = conn.execute(
+        """
+        SELECT evaluated_at, metrics_json
+        FROM strategy_challenger_snapshots
+        ORDER BY evaluated_at DESC, id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if not row:
+        return _empty_strategy_challenger()
+    metrics = _decode_object(row["metrics_json"])
+    return {
+        "version": metrics.get("version", ""),
+        "evaluatedAt": row["evaluated_at"],
+        "status": metrics.get("status", "not_evaluated"),
+        "recommendationMode": metrics.get("recommendationMode", "cash"),
+        "selectedExperimentKey": metrics.get("selectedExperimentKey"),
+        "diagnosticLeaderKey": metrics.get("diagnosticLeaderKey"),
+        "qualifiedCandidates": int(metrics.get("qualifiedCandidates", 0) or 0),
+        "candidateCount": int(metrics.get("candidateCount", 0) or 0),
+        "datasetFingerprint": metrics.get("datasetFingerprint", ""),
+        "datasetRows": int(metrics.get("datasetRows", 0) or 0),
+        "datasetStart": metrics.get("datasetStart"),
+        "datasetEnd": metrics.get("datasetEnd"),
+        "lockedComparisons": int(metrics.get("lockedComparisons", 0) or 0),
+        "multipleTestingPsrGate": metrics.get("multipleTestingPsrGate"),
+        "selectionUsesHoldout": bool(metrics.get("selectionUsesHoldout", False)),
+        "formalRankingEnabled": bool(metrics.get("formalRankingEnabled", False)),
+        "candidateLeaderboard": [
+            _strategy_candidate_row(item)
+            for item in metrics.get("candidateLeaderboard", [])
+            if isinstance(item, dict)
+        ],
+        "executionMatrix": metrics.get("executionMatrix", []),
+    }
+
+
 def _empty_research_health():
     return {
         "status": "building",
@@ -877,6 +978,13 @@ def _empty_research_health():
         "formalRejectedMeanExcessReturn3d": None,
         "formalSelectionNetLift3d": None,
         "formalSelectionExcessLift3d": None,
+        "strategyChallengerEvaluatedAt": None,
+        "strategyChallengerVersion": None,
+        "strategyChallengerStatus": "not_evaluated",
+        "strategyChallengerSelectedKey": None,
+        "strategyRecommendationMode": "cash",
+        "strategyQualifiedCandidates": 0,
+        "strategyCandidateCount": 0,
         "integrityGate": {
             "version": "research_integrity_gate_v1",
             "status": "blocked",
@@ -994,6 +1102,25 @@ def _research_health_snapshot(conn):
         "formalSelectionNetLift3d": metrics.get("formal_selection_net_lift_3d"),
         "formalSelectionExcessLift3d": metrics.get(
             "formal_selection_excess_lift_3d"
+        ),
+        "strategyChallengerEvaluatedAt": metrics.get(
+            "strategy_challenger_evaluated_at"
+        ),
+        "strategyChallengerVersion": metrics.get("strategy_challenger_version"),
+        "strategyChallengerStatus": metrics.get(
+            "strategy_challenger_status", "not_evaluated"
+        ),
+        "strategyChallengerSelectedKey": metrics.get(
+            "strategy_challenger_selected_key"
+        ),
+        "strategyRecommendationMode": metrics.get(
+            "strategy_recommendation_mode", "cash"
+        ),
+        "strategyQualifiedCandidates": int(
+            metrics.get("strategy_qualified_candidates", 0) or 0
+        ),
+        "strategyCandidateCount": int(
+            metrics.get("strategy_candidate_count", 0) or 0
         ),
         "integrityGate": {
             "version": gate.get("version", "research_integrity_gate_v1"),
@@ -1660,6 +1787,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
         research_experiments = _research_experiment_snapshot(conn)
         learnability_audit = _learnability_audit_snapshot(conn)
         model_challengers = _model_challenger_snapshot(conn)
+        strategy_challenger = _strategy_challenger_snapshot(conn)
         research_health = _research_health_snapshot(conn)
         replay_attribution = _replay_attribution_snapshot(conn)
         portfolio_tournament = _portfolio_tournament_snapshot(conn, paper_accounts)
@@ -1675,6 +1803,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "replayAttribution": replay_attribution,
             "researchExperiments": research_experiments,
             "learnabilityAudit": learnability_audit,
+            "strategyChallenger": strategy_challenger,
             "candidates": candidates,
             "dailyCandidates": daily_candidates,
             "statusCounts": status_counts,

@@ -64,14 +64,30 @@ class ResearchMonitorTests(unittest.TestCase):
             "formal_selection_excess_lift_3d": 0.2,
         }
         review = build_research_integrity_gate(
-            prospective, replay, formal, approved=False
+            prospective,
+            replay,
+            formal,
+            approved=False,
+            strategy={
+                "strategy_challenger_status": "prospective_shadow_ready",
+                "strategy_qualified_candidates": 1,
+                "strategy_candidate_count": 6,
+            },
         )
         self.assertTrue(review["evidence_ready"])
         self.assertEqual(review["status"], "review_required")
         self.assertFalse(review["formal_recommendations_allowed"])
 
         approved = build_research_integrity_gate(
-            prospective, replay, formal, approved=True
+            prospective,
+            replay,
+            formal,
+            approved=True,
+            strategy={
+                "strategy_challenger_status": "prospective_shadow_ready",
+                "strategy_qualified_candidates": 1,
+                "strategy_candidate_count": 6,
+            },
         )
         self.assertEqual(approved["status"], "approved")
         self.assertTrue(approved["formal_recommendations_allowed"])

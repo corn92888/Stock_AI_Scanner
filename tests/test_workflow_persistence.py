@@ -102,23 +102,25 @@ class WorkflowPersistenceTests(unittest.TestCase):
 
     def test_daily_workflow_backtests_all_candidates_before_training(self):
         workflow = (ROOT / ".github" / "workflows" / "daily_scan.yml").read_text()
-        candidate_index = workflow.index("python candidate_backtest.py --limit 400")
-        prediction_sync_index = workflow.index("python prediction_outcomes.py")
+        maturation_index = workflow.index(
+            "python outcome_maturation.py --batch-size 500 --max-batches 4 --fail-on-stale"
+        )
         scenario_index = workflow.index(
             "python candidate_execution_research.py --limit 1000"
         )
         training_index = workflow.index("python ai_pipeline.py --no-news")
         evaluation_index = workflow.index("python research_evaluation.py")
+        challenger_index = workflow.index("python strategy_challenger.py")
         paper_index = workflow.index("python paper_trading.py")
         monitor_index = workflow.index("python research_monitor.py")
         export_index = workflow.index("python export_dashboard_snapshot.py")
         self.assertIn("FORMAL_RECOMMENDATIONS_APPROVED", workflow)
-        self.assertLess(candidate_index, prediction_sync_index)
-        self.assertLess(prediction_sync_index, training_index)
-        self.assertLess(candidate_index, training_index)
-        self.assertLess(candidate_index, scenario_index)
+        self.assertLess(maturation_index, training_index)
+        self.assertLess(maturation_index, scenario_index)
         self.assertLess(scenario_index, training_index)
         self.assertLess(training_index, evaluation_index)
+        self.assertLess(evaluation_index, challenger_index)
+        self.assertLess(challenger_index, paper_index)
         self.assertLess(evaluation_index, paper_index)
         self.assertLess(training_index, paper_index)
         self.assertLess(paper_index, monitor_index)
@@ -145,6 +147,7 @@ class WorkflowPersistenceTests(unittest.TestCase):
         model_index = workflow.index("python ai_pipeline.py")
         merge_index = workflow.index("python merge_historical_replay.py")
         evaluation_index = workflow.index("python research_evaluation.py")
+        challenger_index = workflow.index("python strategy_challenger.py")
         archive_index = workflow.index("python archive_historical_replay.py")
         release_index = workflow.index("gh release upload research-replay-data-v1")
         persistence_index = workflow.index("bash persist_scanner_data.sh")
@@ -185,6 +188,8 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertLess(release_index, merge_index)
         self.assertLess(attribution_index, merge_index)
         self.assertLess(merge_index, evaluation_index)
+        self.assertLess(evaluation_index, challenger_index)
+        self.assertLess(challenger_index, persistence_index)
         self.assertLess(evaluation_index, persistence_index)
         self.assertLess(merge_index, persistence_index)
 

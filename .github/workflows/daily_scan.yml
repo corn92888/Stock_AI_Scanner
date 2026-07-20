@@ -82,17 +82,11 @@ jobs:
       run: |
         python backtest.py --selection-scope formal --limit 200
 
-    - name: Mature overdue prospective outcomes first
+    - name: Drain overdue prospective outcome queue
       if: steps.gate.outputs.run == 'true'
       continue-on-error: true
       run: |
-        python candidate_backtest.py --limit 400
-
-    - name: Synchronize prospective prediction labels
-      if: steps.gate.outputs.run == 'true'
-      continue-on-error: true
-      run: |
-        python prediction_outcomes.py
+        python outcome_maturation.py --batch-size 500 --max-batches 4 --fail-on-stale
 
     - name: Mature prospective multi-horizon execution scenarios
       if: steps.gate.outputs.run == 'true'
@@ -119,6 +113,11 @@ jobs:
       if: steps.gate.outputs.run == 'true'
       run: |
         python research_evaluation.py
+
+    - name: Govern walk-forward strategy challengers
+      if: steps.gate.outputs.run == 'true'
+      run: |
+        python strategy_challenger.py
 
     - name: Settle paper accounts and prospective capital tournament
       if: steps.gate.outputs.run == 'true'

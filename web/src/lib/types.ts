@@ -223,6 +223,13 @@ export type ResearchHealth = {
   formalRejectedMeanExcessReturn3d: number | null;
   formalSelectionNetLift3d: number | null;
   formalSelectionExcessLift3d: number | null;
+  strategyChallengerEvaluatedAt: string | null;
+  strategyChallengerVersion: string | null;
+  strategyChallengerStatus: "not_evaluated" | "blocked" | "prospective_shadow_ready";
+  strategyChallengerSelectedKey: string | null;
+  strategyRecommendationMode: "cash" | "shadow";
+  strategyQualifiedCandidates: number;
+  strategyCandidateCount: number;
   integrityGate: ResearchIntegrityGate;
 };
 
@@ -436,6 +443,78 @@ export type ModelChallenger = {
   profitableFoldRate: number | null;
   qualified: boolean;
   rejectionReasons: string[];
+};
+
+export type StrategyChallengerCandidate = {
+  experimentKey: string;
+  name: string;
+  qualified: boolean;
+  rejectionReasons: string[];
+  entryMethod: string;
+  holdingHorizon: number;
+  rankingTarget: string;
+  trades: number;
+  decisionDates: number;
+  participationRatePct: number | null;
+  meanDailyNetReturn: number | null;
+  meanDailyExcessReturn: number | null;
+  formalBaselineMeanDailyNetReturn: number | null;
+  formalBaselineMeanDailyExcessReturn: number | null;
+  formalNetLift: number | null;
+  formalExcessLift: number | null;
+  annualizedSharpe: number | null;
+  probabilisticSharpe: number | null;
+  maxDrawdown: number | null;
+  profitableFoldRate: number | null;
+  walkForwardFolds: number;
+  sampleStart: string | null;
+  sampleEnd: string | null;
+  reservedHoldoutStart: string | null;
+  reservedHoldoutEnd: string | null;
+  reservedHoldoutTradeDates: number;
+  holdoutEvaluated: boolean;
+};
+
+export type StrategyExecutionPhase = {
+  decisionDates: number;
+  participatingDates: number;
+  participationRatePct: number;
+  trades: number;
+  meanNetReturn: number | null;
+  meanExcessReturn: number | null;
+  meanDailyNetReturn: number;
+  meanDailyExcessReturn: number;
+  positiveDayRate: number;
+};
+
+export type StrategyExecutionRow = {
+  key: string;
+  entryMethod: string;
+  holdingHorizon: number;
+  development: StrategyExecutionPhase;
+  validation: StrategyExecutionPhase;
+  holdoutAudit: StrategyExecutionPhase;
+};
+
+export type StrategyChallengerSnapshot = {
+  version: string;
+  evaluatedAt: string | null;
+  status: "not_evaluated" | "blocked" | "prospective_shadow_ready";
+  recommendationMode: "cash" | "shadow";
+  selectedExperimentKey: string | null;
+  diagnosticLeaderKey: string | null;
+  qualifiedCandidates: number;
+  candidateCount: number;
+  datasetFingerprint: string;
+  datasetRows: number;
+  datasetStart: string | null;
+  datasetEnd: string | null;
+  lockedComparisons: number;
+  multipleTestingPsrGate: number | null;
+  selectionUsesHoldout: boolean;
+  formalRankingEnabled: boolean;
+  candidateLeaderboard: StrategyChallengerCandidate[];
+  executionMatrix: StrategyExecutionRow[];
 };
 
 export type PaperAccount = {
@@ -700,6 +779,7 @@ export type DashboardSnapshot = {
   backtestRuns: BacktestRun[];
   aiModels: AiModel[];
   modelChallengers: ModelChallenger[];
+  strategyChallenger: StrategyChallengerSnapshot;
   paperAccounts: PaperAccount[];
   paperEquity: PaperEquityPoint[];
   paperTrades: PaperTrade[];
