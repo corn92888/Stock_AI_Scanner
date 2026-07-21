@@ -152,6 +152,50 @@ class ResearchMonitorTests(unittest.TestCase):
             self.assertEqual(current["status"], "building")
             self.assertGreater(current["snapshot_id"], 0)
 
+    def test_terminal_skipped_predictions_are_not_reported_as_stale(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scanner.db"
+            with get_connection(database) as conn:
+                init_db(conn)
+                run_ids = []
+                for day in ("2026-07-06", "2026-07-07", "2026-07-08", "2026-07-09"):
+                    run_ids.append(
+                        conn.execute(
+                            """
+                            INSERT INTO scan_runs (
+                                run_at, trade_date, mode, source, strategy_version
+                            ) VALUES (?, ?, 'eod', 'test', 'v1')
+                            """,
+                            (f"{day}T14:00:00+08:00", day),
+                        ).lastrowid
+                    )
+                prediction_id = conn.execute(
+                    """
+                    INSERT INTO predictions (
+                        run_id, code, predicted_at, model_version,
+                        is_prospective, created_at
+                    ) VALUES (?, '2330', '2026-07-06T14:01:00+08:00',
+                              'model-a', 1, '2026-07-06T14:01:00+08:00')
+                    """,
+                    (run_ids[0],),
+                ).lastrowid
+                conn.execute(
+                    """
+                    INSERT INTO prediction_outcomes (
+                        prediction_id, matured_horizon, outcome_status, updated_at
+                    ) VALUES (?, 1, 'skipped', '2026-07-07T18:00:00+08:00')
+                    """,
+                    (prediction_id,),
+                )
+
+            health = build_research_health(database)
+            self.assertEqual(health["prospective_cohorts"], 1)
+            self.assertEqual(health["terminal_skipped_cohorts"], 1)
+            self.assertEqual(health["expected_mature_t3"], 0)
+            self.assertEqual(health["pending_cohorts"], 0)
+            self.assertEqual(health["stale_outcomes"], 0)
+            self.assertNotEqual(health["status"], "critical")
+
 
 if __name__ == "__main__":
     unittest.main()

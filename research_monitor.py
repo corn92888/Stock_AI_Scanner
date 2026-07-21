@@ -48,16 +48,26 @@ def _prospective_metrics(conn):
         )
         SELECT
             COUNT(*) AS prospective_cohorts,
-            SUM(CASE WHEN COALESCE(matured_horizon, 0) < 3 THEN 1 ELSE 0 END)
+            SUM(CASE WHEN COALESCE(outcome_status, 'pending') <> 'skipped'
+                          AND COALESCE(matured_horizon, 0) < 3
+                     THEN 1 ELSE 0 END)
                 AS pending_cohorts,
-            SUM(CASE WHEN COALESCE(matured_horizon, 0) >= 3 THEN 1 ELSE 0 END)
+            SUM(CASE WHEN COALESCE(outcome_status, 'pending') <> 'skipped'
+                          AND COALESCE(matured_horizon, 0) >= 3
+                     THEN 1 ELSE 0 END)
                 AS mature_t3_cohorts,
-            SUM(CASE WHEN later_sessions >= 3 THEN 1 ELSE 0 END)
+            SUM(CASE WHEN COALESCE(outcome_status, 'pending') = 'skipped'
+                     THEN 1 ELSE 0 END) AS terminal_skipped_cohorts,
+            SUM(CASE WHEN later_sessions >= 3
+                          AND COALESCE(outcome_status, 'pending') <> 'skipped'
+                     THEN 1 ELSE 0 END)
                 AS expected_mature_t3,
             SUM(CASE WHEN later_sessions >= 3
+                          AND COALESCE(outcome_status, 'pending') <> 'skipped'
                           AND COALESCE(matured_horizon, 0) < 3
                      THEN 1 ELSE 0 END) AS stale_outcomes,
-            MAX(CASE WHEN COALESCE(matured_horizon, 0) < 3
+            MAX(CASE WHEN COALESCE(outcome_status, 'pending') <> 'skipped'
+                          AND COALESCE(matured_horizon, 0) < 3
                      THEN later_sessions ELSE 0 END) AS oldest_pending_sessions
         FROM cohorts
         """
@@ -66,6 +76,7 @@ def _prospective_metrics(conn):
         "prospective_cohorts": int(row["prospective_cohorts"] or 0),
         "pending_cohorts": int(row["pending_cohorts"] or 0),
         "mature_t3_cohorts": int(row["mature_t3_cohorts"] or 0),
+        "terminal_skipped_cohorts": int(row["terminal_skipped_cohorts"] or 0),
         "expected_mature_t3": int(row["expected_mature_t3"] or 0),
         "stale_outcomes": int(row["stale_outcomes"] or 0),
         "oldest_pending_sessions": int(row["oldest_pending_sessions"] or 0),

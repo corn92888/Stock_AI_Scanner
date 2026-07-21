@@ -75,7 +75,7 @@ class WorkflowPersistenceTests(unittest.TestCase):
         ).read_text()
 
         self.assertIn('"path": "/api/cron/cloud-audit"', vercel)
-        self.assertIn('"schedule": "10 6 * * 1-5"', vercel)
+        self.assertIn('"schedule": "40 7 * * 1-5"', vercel)
         self.assertIn("CLOUD_AUDIT_WORKFLOW", route)
         self.assertIn('require_ready: "true"', route)
         self.assertIn('trigger_source: "vercel-cron"', route)
@@ -113,9 +113,11 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertNotIn("schedule:", institutional_workflow)
         self.assertIn('"schedule": "0,30 1-5 * * 1-5"', vercel)
         self.assertIn('"schedule": "17 6 * * 1-5"', vercel)
-        self.assertIn('"schedule": "17 * * * 1-5"', vercel)
+        self.assertIn('"schedule": "17 0,7-23 * * 1-5"', vercel)
+        self.assertIn('"schedule": "40 7 * * 1-5"', vercel)
         self.assertIn('"schedule": "20 11 * * 1-5"', vercel)
         self.assertIn('SCHEDULED_CRON: ${{ inputs.scheduled_cron }}', workflow)
+        self.assertIn('INTRADAY_QUOTE_MAX_ATTEMPTS: "3"', workflow)
 
     def test_vercel_cron_routes_fail_closed_with_cron_secret(self):
         for route_name in ("intraday", "daily", "market", "institutional"):

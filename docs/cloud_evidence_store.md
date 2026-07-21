@@ -85,7 +85,7 @@ Run `Cloud Evidence Cutover Audit` manually. It downloads the live object into
 a temporary database, verifies both SHA-256 hashes, runs
 `PRAGMA integrity_check`, compares the latest scan run and durable table counts,
 and writes the result to local SQLite plus the private PostgreSQL audit ledger.
-Vercel also dispatches this audit at 14:10 Asia/Taipei on trading weekdays with
+Vercel also dispatches this audit at 15:40 Asia/Taipei on trading weekdays with
 the readiness gate enforced. A blocked result therefore creates a failed audit
 run while scanner jobs continue to use the Git fallback in `dual_write` mode.
 

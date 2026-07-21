@@ -230,7 +230,7 @@
 
   Vercel Cron 會在台灣交易日 09:00 至 13:30 每 30 分鐘呼叫受保護的站內 API，並在 14:17 觸發盤後工作。API 只負責 dispatch；GitHub Actions 作為 Python worker 執行掃描。`dual_write` 驗證期會同時上傳經雜湊與還原驗證的 Supabase 快照，並把 `data/stock_scanner.db` commit 回 `main`；只有 Cloud Primary 稽核全部通過並切換模式後，才停止提交 SQLite。GitHub workflow 本身不再使用不穩定的 `schedule` 事件。
 
-  盤中與盤後工作共用 concurrency，不會同時改寫 SQLite。若前一輪超過 30 分鐘，下一個 Vercel 時段仍會 dispatch 並等待 worker；資料庫 gate 會阻止同一時段重複落盤。非交易時段會安全略過；當日報價或全市場覆蓋率低於 65%、或盤中日報與市場快照日期/時間不一致時，流程會拒絕產生分析。失敗仍會上傳已取得的 artifacts，並透過 Telegram 發送維運警報。
+  所有會改寫 SQLite 的工作共用 concurrency，避免不同 worker 互相覆蓋資料。獨立全球市場排程會避開台股 `09:00-14:17`，因每次盤中掃描與盤後工作本身已經刷新同一份市場資料，避免重複任務占用下一個半小時時段。非交易時段會安全略過；開盤報價不足時最多重試 3 次且只重抓缺漏股票，不會重載歷史行情。最終當日報價或全市場覆蓋率仍低於 65%、或盤中日報與市場快照日期/時間不一致時，流程會拒絕產生分析。失敗仍會上傳已取得的 artifacts，並透過 Telegram 發送維運警報。
 
   每日盤後流程也會增量更新最多 200 筆成熟回測結果。行情來源暫時失敗時不會阻斷當日掃描資料保存，未完成的 `partial` 結果會在後續交易日繼續補齊。
 

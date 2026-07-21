@@ -28,6 +28,12 @@ TAIPEI_TZ = datetime.timezone(datetime.timedelta(hours=8), name="Asia/Taipei")
 TWSTOCK_TIMEOUT_SECONDS = 8
 MIN_REALTIME_COVERAGE = 0.65
 DEFAULT_REALTIME_WORKERS = 6
+DEFAULT_QUOTE_MAX_ATTEMPTS = 3
+DEFAULT_QUOTE_RETRY_DELAY_SECONDS = 45
+
+
+class RealtimeCoverageError(RuntimeError):
+    """Raised when current-session quotes remain too sparse after retries."""
 
 def send_telegram_message(msg_lines):
     try:
@@ -275,6 +281,94 @@ def fetch_realtime_prices(ticker_list, chunk_size=20, max_workers=None):
                 continue
     return result
 
+
+def collect_realtime_prices(
+    history_tickers,
+    yf_to_code,
+    max_attempts=None,
+    retry_delay_seconds=None,
+    sleep_fn=time.sleep,
+):
+    """Collect current bars, retrying only symbols that are still missing."""
+    max_attempts = max(
+        1,
+        int(
+            max_attempts
+            if max_attempts is not None
+            else os.getenv(
+                "INTRADAY_QUOTE_MAX_ATTEMPTS",
+                DEFAULT_QUOTE_MAX_ATTEMPTS,
+            )
+        ),
+    )
+    retry_delay_seconds = max(
+        0,
+        int(
+            retry_delay_seconds
+            if retry_delay_seconds is not None
+            else os.getenv(
+                "INTRADAY_QUOTE_RETRY_DELAY_SECONDS",
+                DEFAULT_QUOTE_RETRY_DELAY_SECONDS,
+            )
+        ),
+    )
+    eligible_tickers = [ticker for ticker in history_tickers if yf_to_code.get(ticker)]
+    eligible_codes = [yf_to_code[ticker] for ticker in eligible_tickers]
+    realtime = {}
+    coverage = 0.0
+
+    for attempt in range(1, max_attempts + 1):
+        missing_codes = [code for code in eligible_codes if code not in realtime]
+        if missing_codes:
+            realtime.update(fetch_realtime_prices(missing_codes, chunk_size=20))
+
+        missing_yf_tickers = [
+            ticker
+            for ticker in eligible_tickers
+            if yf_to_code[ticker] not in realtime
+        ]
+        if missing_yf_tickers:
+            if realtime:
+                print(
+                    f"⚠️ 第 {attempt} 次即時報價仍缺 {len(missing_yf_tickers)} 檔，"
+                    "改用 yfinance 當日資料補足"
+                )
+            else:
+                print("⚠️ TWSE 即時報價無法使用，改用 yfinance 當日資料備援")
+            fallback = fetch_yfinance_current_bars(
+                missing_yf_tickers,
+                yf_to_code,
+                chunk_size=200,
+            )
+            realtime.update(fallback)
+            if fallback:
+                print(f"✅ yfinance 當日資料補足 {len(fallback)} 檔")
+
+        covered = sum(
+            1
+            for code in eligible_codes
+            if code in realtime and _safe_float(realtime[code].get("Close")) > 0
+        )
+        coverage = covered / len(eligible_codes) if eligible_codes else 0.0
+        print(
+            f"📡 當日報價嘗試 {attempt}/{max_attempts}: "
+            f"{covered}/{len(eligible_codes)} 檔 ({coverage:.1%})"
+        )
+        if coverage >= MIN_REALTIME_COVERAGE:
+            return realtime, coverage, attempt
+
+        if attempt < max_attempts:
+            print(
+                f"⏳ 覆蓋率低於 {MIN_REALTIME_COVERAGE:.0%}，"
+                f"{retry_delay_seconds} 秒後只重抓缺漏股票。"
+            )
+            sleep_fn(retry_delay_seconds)
+
+    raise RealtimeCoverageError(
+        f"當日報價覆蓋率僅 {coverage:.1%}，低於 {MIN_REALTIME_COVERAGE:.0%}，"
+        f"已重試 {max_attempts} 次，拒絕產生可能失真的盤中報表。"
+    )
+
 def run_intraday_scanner(send_telegram=True, now=None):
     start_time = time.time()
     started_at = now or datetime.datetime.now(TAIPEI_TZ)
@@ -310,21 +404,10 @@ def run_intraday_scanner(send_telegram=True, now=None):
     if scan_window_open:
         print("\n📡 台股盤中！正在抓取即時報價並結合歷史資料...")
         realtime_started = time.perf_counter()
-        rt_prices = fetch_realtime_prices(tickers, chunk_size=20)
-        missing_yf_tickers = [
-            yf_ticker
-            for yf_ticker in all_yf_tickers
-            if yf_to_code.get(yf_ticker) not in rt_prices
-        ]
-        if missing_yf_tickers:
-            if rt_prices:
-                print(f"⚠️ TWSE 即時報價僅取得 {len(rt_prices)} 檔，改用 yfinance 補足缺漏")
-            else:
-                print("⚠️ TWSE 即時報價無法使用，改用 yfinance 當日資料備援")
-            yf_prices = fetch_yfinance_current_bars(missing_yf_tickers, yf_to_code, chunk_size=200)
-            rt_prices.update(yf_prices)
-            if yf_prices:
-                print(f"✅ yfinance 當日資料補足 {len(yf_prices)} 檔")
+        rt_prices, coverage, quote_attempts = collect_realtime_prices(
+            list(all_stock_data.keys()),
+            yf_to_code,
+        )
         realtime_seconds = time.perf_counter() - realtime_started
         quote_captured_at = datetime.datetime.now(TAIPEI_TZ)
         print(f"⏱️  即時報價階段: {realtime_seconds:.1f} 秒")
@@ -355,16 +438,17 @@ def run_intraday_scanner(send_telegram=True, now=None):
                             new_bar[common_cols]
                         ])
                         appended += 1
-            coverage = appended / len(all_stock_data) if all_stock_data else 0.0
+            appended_coverage = appended / len(all_stock_data) if all_stock_data else 0.0
             print(
                 f"✅ 已為 {appended} 檔追加盤中即時 K 棒 "
-                f"(帶預估量，覆蓋率 {coverage:.1%})"
+                f"(帶預估量，覆蓋率 {appended_coverage:.1%})"
             )
-            if coverage < MIN_REALTIME_COVERAGE:
-                raise RuntimeError(
-                    f"當日報價覆蓋率僅 {coverage:.1%}，低於 {MIN_REALTIME_COVERAGE:.0%}，"
-                    "拒絕產生可能失真的盤中報表。"
+            if appended_coverage < MIN_REALTIME_COVERAGE:
+                raise RealtimeCoverageError(
+                    f"可寫入的當日報價覆蓋率僅 {appended_coverage:.1%}，"
+                    f"低於 {MIN_REALTIME_COVERAGE:.0%}，拒絕產生可能失真的盤中報表。"
                 )
+            coverage = appended_coverage
             is_realtime_mode = True
         else:
             raise RuntimeError("無法取得任何當日報價，拒絕用昨日資料冒充盤中掃描。")
@@ -513,6 +597,7 @@ def run_intraday_scanner(send_telegram=True, now=None):
             "realtime_coverage": round(coverage, 4),
             "history_seconds": round(history_seconds, 2),
             "realtime_seconds": round(realtime_seconds, 2),
+            "quote_attempts": quote_attempts,
             "analysis_seconds": round(analysis_seconds, 2),
         }.items()
         if value not in (None, "")
