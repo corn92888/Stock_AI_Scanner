@@ -4,8 +4,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import joblib
+import sklearn
 
-from alpha_live import save_alpha_live_run, score_alpha_panel
+from alpha_live import load_model_artifact, save_alpha_live_run, score_alpha_panel
 from alpha_strategy_v2 import ALPHA_MODEL_VERSION
 from alpha_universe_dataset import (
     ALPHA_DATASET_VERSION,
@@ -58,6 +60,12 @@ def artifact(threshold=2.5):
             "confidence_quantile": 0.7,
         },
         "confidence_threshold": threshold,
+        "dependency_versions": {
+            "numpy": np.__version__,
+            "pandas": pd.__version__,
+            "scikit_learn": sklearn.__version__,
+            "joblib": joblib.__version__,
+        },
         "model": SignalModel(),
     }
 
@@ -104,6 +112,19 @@ class AlphaLiveTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(runs, 1)
         self.assertEqual(signals, 3)
+
+    def test_loader_rejects_runtime_dependency_drift(self):
+        incompatible = artifact()
+        incompatible["dependency_versions"] = {
+            **incompatible["dependency_versions"],
+            "numpy": "0.0.0",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "model.joblib"
+            joblib.dump(incompatible, path)
+
+            with self.assertRaisesRegex(ValueError, "runtime mismatch"):
+                load_model_artifact(path)
 
 
 if __name__ == "__main__":

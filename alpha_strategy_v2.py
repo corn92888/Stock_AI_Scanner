@@ -665,6 +665,12 @@ def build_deployment_artifact(frame, spec, dataset_fingerprint):
         "target_winsor_low": float(lower),
         "target_winsor_high": float(upper),
         "sklearn_version": sklearn.__version__,
+        "dependency_versions": {
+            "numpy": np.__version__,
+            "pandas": pd.__version__,
+            "scikit_learn": sklearn.__version__,
+            "joblib": joblib.__version__,
+        },
         "model": model,
     }
 

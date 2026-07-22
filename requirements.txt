@@ -1,6 +1,6 @@
 yfinance
-pandas
-numpy
+pandas==2.3.3
+numpy==2.2.6
 twstock
 tqdm
 requests
@@ -9,5 +9,5 @@ streamlit
 supabase
 plotly
 openpyxl
-scikit-learn
-joblib
+scikit-learn==1.7.2
+joblib==1.5.3

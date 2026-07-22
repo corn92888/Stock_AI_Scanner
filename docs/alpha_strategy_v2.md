@@ -42,8 +42,8 @@ shadow trading, never automatic real-money execution.
 
 The first governed run selected the T+10 benchmark-excess model. It passed six of
 eight true walk-forward folds and then passed the untouched 2025 holdout. The
-holdout contained 261 simulated trades across 87 active dates, with 2.89% mean
-after-cost return per trade, 1.29% mean benchmark excess, and -8.48% maximum
+holdout contained 315 simulated trades across 105 active dates, with 1.80% mean
+after-cost return per trade, 0.21% mean benchmark excess, and -11.82% maximum
 portfolio drawdown. These historical results authorize paper trading only.
 
 ## Prospective operation
@@ -52,6 +52,9 @@ After a successful challenge, the workflow publishes a versioned joblib model
 artifact. The daily EOD scan restores that artifact and scores the complete liquid
 universe with the same features, anti-chase rules, industry diversification, and
 calibrated confidence threshold used in research.
+
+The model artifact records exact NumPy, pandas, scikit-learn, and joblib versions.
+Live scoring fails closed when its runtime differs, preventing silent model drift.
 
 - weak confidence creates an explicit cash day;
 - active days create at most three paper signals from different industries;

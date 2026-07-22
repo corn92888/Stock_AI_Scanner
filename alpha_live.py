@@ -5,7 +5,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import joblib
+import numpy as np
 import pandas as pd
+import sklearn
 import yfinance as yf
 
 from alpha_strategy_v2 import (
@@ -51,6 +53,7 @@ def load_model_artifact(path=DEFAULT_MODEL_OUTPUT):
         "dataset_fingerprint",
         "spec",
         "confidence_threshold",
+        "dependency_versions",
         "model",
     }
     missing = sorted(required - set(artifact))
@@ -64,6 +67,17 @@ def load_model_artifact(path=DEFAULT_MODEL_OUTPUT):
         raise ValueError("Unsupported Alpha dataset version")
     if artifact["execution_version"] != ALPHA_EXECUTION_VERSION:
         raise ValueError("Unsupported Alpha execution version")
+    runtime_versions = {
+        "numpy": np.__version__,
+        "pandas": pd.__version__,
+        "scikit_learn": sklearn.__version__,
+        "joblib": joblib.__version__,
+    }
+    if artifact["dependency_versions"] != runtime_versions:
+        raise ValueError(
+            "Alpha model runtime mismatch: "
+            f"artifact={artifact['dependency_versions']} runtime={runtime_versions}"
+        )
     return artifact
 
 
