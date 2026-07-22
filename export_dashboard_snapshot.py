@@ -869,6 +869,10 @@ def _empty_strategy_challenger():
         "multipleTestingPsrGate": None,
         "selectionUsesHoldout": False,
         "formalRankingEnabled": False,
+        "legacyRulePrefilter": True,
+        "candidateUniverse": "legacy_rule_candidates",
+        "prequalifiedCandidates": 0,
+        "holdout": None,
         "candidateLeaderboard": [],
         "executionMatrix": [],
     }
@@ -909,6 +913,16 @@ def _strategy_candidate_row(row):
             row.get("reserved_holdout_trade_dates", 0) or 0
         ),
         "holdoutEvaluated": bool(row.get("holdout_evaluated", False)),
+        "predictionQuantile": row.get("prediction_quantile"),
+        "prequalified": bool(row.get("prequalified", False)),
+        "holdoutQualified": bool((row.get("holdout") or {}).get("qualified")),
+        "holdoutMeanDailyNetReturn": (row.get("holdout") or {}).get(
+            "mean_daily_net_return"
+        ),
+        "holdoutMeanDailyExcessReturn": (row.get("holdout") or {}).get(
+            "mean_daily_excess_return"
+        ),
+        "holdoutMaxDrawdown": (row.get("holdout") or {}).get("max_drawdown"),
     }
 
 
@@ -919,7 +933,12 @@ def _strategy_challenger_snapshot(conn):
         """
         SELECT evaluated_at, metrics_json
         FROM strategy_challenger_snapshots
-        ORDER BY evaluated_at DESC, id DESC
+        ORDER BY
+            CASE
+                WHEN challenger_version='alpha_liquid_universe_walk_forward_v2'
+                THEN 0 ELSE 1
+            END,
+            evaluated_at DESC, id DESC
         LIMIT 1
         """
     ).fetchone()
@@ -943,12 +962,76 @@ def _strategy_challenger_snapshot(conn):
         "multipleTestingPsrGate": metrics.get("multipleTestingPsrGate"),
         "selectionUsesHoldout": bool(metrics.get("selectionUsesHoldout", False)),
         "formalRankingEnabled": bool(metrics.get("formalRankingEnabled", False)),
+        "legacyRulePrefilter": bool(metrics.get("legacyRulePrefilter", True)),
+        "candidateUniverse": metrics.get(
+            "candidateUniverse", "legacy_rule_candidates"
+        ),
+        "prequalifiedCandidates": int(
+            metrics.get("prequalifiedCandidates", 0) or 0
+        ),
+        "holdout": metrics.get("holdout"),
         "candidateLeaderboard": [
             _strategy_candidate_row(item)
             for item in metrics.get("candidateLeaderboard", [])
             if isinstance(item, dict)
         ],
         "executionMatrix": metrics.get("executionMatrix", []),
+    }
+
+
+def _alpha_live_snapshot(conn):
+    empty = {
+        "status": "not_run",
+        "signalDate": None,
+        "generatedAt": None,
+        "modelVersion": None,
+        "artifactFingerprint": None,
+        "confidence": None,
+        "confidenceThreshold": None,
+        "universeCount": 0,
+        "eligibleCount": 0,
+        "selectedCount": 0,
+        "signals": [],
+    }
+    if not _table_exists(conn, "alpha_live_runs"):
+        return empty
+    run = conn.execute(
+        """
+        SELECT id, signal_date, generated_at, model_version,
+               artifact_fingerprint, status, confidence, confidence_threshold,
+               universe_count, eligible_count, selected_count
+        FROM alpha_live_runs
+        ORDER BY signal_date DESC, generated_at DESC, id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if not run:
+        return empty
+    signals = _read_records(
+        conn,
+        """
+        SELECT code, name, industry, rank_order AS rankOrder,
+               signal_price AS signalPrice, predicted_alpha AS predictedAlpha,
+               allocation_weight AS allocationWeight,
+               holding_horizon AS holdingHorizon
+        FROM alpha_live_signals
+        WHERE run_id=?
+        ORDER BY rank_order, id
+        """,
+        (run["id"],),
+    )
+    return {
+        "status": run["status"],
+        "signalDate": run["signal_date"],
+        "generatedAt": run["generated_at"],
+        "modelVersion": run["model_version"],
+        "artifactFingerprint": run["artifact_fingerprint"],
+        "confidence": run["confidence"],
+        "confidenceThreshold": run["confidence_threshold"],
+        "universeCount": int(run["universe_count"] or 0),
+        "eligibleCount": int(run["eligible_count"] or 0),
+        "selectedCount": int(run["selected_count"] or 0),
+        "signals": signals,
     }
 
 
@@ -1879,6 +1962,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
         learnability_audit = _learnability_audit_snapshot(conn)
         model_challengers = _model_challenger_snapshot(conn)
         strategy_challenger = _strategy_challenger_snapshot(conn)
+        alpha_live = _alpha_live_snapshot(conn)
         research_health = _research_health_snapshot(conn)
         replay_attribution = _replay_attribution_snapshot(conn)
         portfolio_tournament = _portfolio_tournament_snapshot(conn, paper_accounts)
@@ -1896,6 +1980,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "researchExperiments": research_experiments,
             "learnabilityAudit": learnability_audit,
             "strategyChallenger": strategy_challenger,
+            "alphaLive": alpha_live,
             "candidates": candidates,
             "dailyCandidates": daily_candidates,
             "statusCounts": status_counts,

@@ -356,6 +356,54 @@ def run_scanner():
         )
     except Exception as e:
         raise RuntimeError(f"盤後研究候選建立失敗: {e}") from e
+
+    alpha_result = {
+        "status": "unavailable",
+        "reason": "model_artifact_missing",
+        "selected": [],
+    }
+    alpha_model_path = "data/models/alpha_strategy_v2_model.joblib"
+    if os.path.exists(alpha_model_path):
+        try:
+            from alpha_live import run_alpha_live_scoring
+
+            benchmark_data = batch_download(["^TWII"], period="2y", chunk_size=1)
+            benchmark = benchmark_data.get("^TWII")
+            alpha_result = run_alpha_live_scoring(
+                all_stock_data,
+                yf_to_code,
+                codes,
+                benchmark,
+                model_path=alpha_model_path,
+                db_path="data/stock_scanner.db",
+                trade_date=trade_date,
+            )
+            alpha_message = [
+                f"Alpha v2 模擬訊號｜{trade_date}\n",
+                "PAPER ONLY｜隔日開盤模擬成交｜持有至 T+10\n",
+                (
+                    f"信心 {alpha_result.get('confidence') or 0:.3f} / "
+                    f"門檻 {alpha_result.get('confidence_threshold') or 0:.3f}\n"
+                ),
+            ]
+            if alpha_result["selected"]:
+                for row in alpha_result["selected"]:
+                    alpha_message.append(
+                        f"#{row['rank_order']} {row['code']} {row.get('name') or ''} "
+                        f"${float(row['signal_price']):.2f}｜"
+                        f"預測超額 {float(row['predicted_alpha']):.2f}%\n"
+                    )
+            else:
+                alpha_message.append("本日信心不足，模擬資金維持現金。\n")
+            send_telegram_message(alpha_message)
+            print(
+                f"Alpha v2 盤後訊號: {alpha_result['status']}，"
+                f"入選 {len(alpha_result['selected'])} 檔"
+            )
+        except Exception as e:
+            raise RuntimeError(f"Alpha v2 全市場評分失敗: {e}") from e
+    else:
+        print("Alpha v2 模型檔尚未發布，本次只保留舊策略研究輸出。")
     
     elapsed = time.time() - start_time
     minutes, seconds = divmod(int(elapsed), 60)
@@ -366,6 +414,8 @@ def run_scanner():
         "signal_count": db_result["signals"],
         "candidate_count": research["saved"],
         "selected_count": research["selected"],
+        "alpha_status": alpha_result["status"],
+        "alpha_selected_count": len(alpha_result["selected"]),
         "report_path": filename,
     }
 

@@ -476,6 +476,12 @@ export type StrategyChallengerCandidate = {
   reservedHoldoutEnd: string | null;
   reservedHoldoutTradeDates: number;
   holdoutEvaluated: boolean;
+  predictionQuantile: number | null;
+  prequalified: boolean;
+  holdoutQualified: boolean;
+  holdoutMeanDailyNetReturn: number | null;
+  holdoutMeanDailyExcessReturn: number | null;
+  holdoutMaxDrawdown: number | null;
 };
 
 export type StrategyExecutionPhase = {
@@ -516,14 +522,41 @@ export type StrategyChallengerSnapshot = {
   multipleTestingPsrGate: number | null;
   selectionUsesHoldout: boolean;
   formalRankingEnabled: boolean;
+  legacyRulePrefilter: boolean;
+  candidateUniverse: string;
+  prequalifiedCandidates: number;
+  holdout: Record<string, unknown> | null;
   candidateLeaderboard: StrategyChallengerCandidate[];
   executionMatrix: StrategyExecutionRow[];
+};
+
+export type AlphaLiveSnapshot = {
+  status: "not_run" | "active" | "abstained" | "blocked";
+  signalDate: string | null;
+  generatedAt: string | null;
+  modelVersion: string | null;
+  artifactFingerprint: string | null;
+  confidence: number | null;
+  confidenceThreshold: number | null;
+  universeCount: number;
+  eligibleCount: number;
+  selectedCount: number;
+  signals: Array<{
+    code: string;
+    name: string;
+    industry: string;
+    rankOrder: number;
+    signalPrice: number;
+    predictedAlpha: number;
+    allocationWeight: number;
+    holdingHorizon: number;
+  }>;
 };
 
 export type PaperAccount = {
   accountKey: string;
   name: string;
-  strategyKind: "rule" | "ai" | "ai_capital";
+  strategyKind: "rule" | "ai" | "ai_capital" | "alpha_v2";
   evidenceMode: string;
   policyVersion: string;
   executionVersion: string;
@@ -812,6 +845,7 @@ export type DashboardSnapshot = {
   aiModels: AiModel[];
   modelChallengers: ModelChallenger[];
   strategyChallenger: StrategyChallengerSnapshot;
+  alphaLive: AlphaLiveSnapshot;
   paperAccounts: PaperAccount[];
   paperEquity: PaperEquityPoint[];
   paperTrades: PaperTrade[];

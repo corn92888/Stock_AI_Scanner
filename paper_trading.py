@@ -49,6 +49,8 @@ class PaperAccountSpec:
     max_positions: int | None = None
     position_size_pct: float | None = None
     max_industry_exposure_pct: float | None = None
+    holding_horizon: int | None = None
+    enforce_chase_limit: bool | None = None
 
 
 ACCOUNT_SPECS = (
@@ -116,6 +118,24 @@ ACCOUNT_SPECS = (
         max_positions=20,
         position_size_pct=0.075,
         max_industry_exposure_pct=0.15,
+    ),
+    PaperAccountSpec(
+        account_key="alpha_v2_top3_t10_v1",
+        name="Alpha v2 T+10 模擬帳戶",
+        strategy_kind="alpha_v2",
+        evidence_mode="prospective_only",
+        source_type="alpha_signal",
+        role="challenger",
+        selection_scope="governed_full_universe",
+        max_daily_selections=3,
+        max_per_industry=1,
+        weighting="equal",
+        daily_budget_pct=0.24,
+        max_positions=12,
+        position_size_pct=0.08,
+        max_industry_exposure_pct=0.16,
+        holding_horizon=10,
+        enforce_chase_limit=False,
     ),
 )
 
@@ -351,6 +371,59 @@ def load_ai_tournament_universe(
         ]
 
 
+def load_alpha_signals(db_path=DB_PATH):
+    with get_connection(db_path) as conn:
+        init_db(conn)
+        return [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT
+                    'alpha_signal' AS source_type,
+                    s.id AS source_id,
+                    NULL AS candidate_id,
+                    NULL AS prediction_id,
+                    r.signal_date,
+                    r.generated_at AS signal_at,
+                    s.code,
+                    s.name,
+                    s.industry,
+                    s.rank_order,
+                    r.model_version,
+                    s.predicted_alpha AS final_score,
+                    s.allocation_weight,
+                    NULL AS benchmark_return_pct,
+                    NULL AS excess_return_pct,
+                    NULL AS raw_chase_limit,
+                    NULL AS raw_stop_price,
+                    NULL AS entry_at,
+                    NULL AS entry_price,
+                    1.0 AS entry_adjustment_factor,
+                    'pending' AS entry_status,
+                    NULL AS outcome_skip_reason,
+                    NULL AS exit_at,
+                    NULL AS exit_price,
+                    NULL AS exit_reason,
+                    NULL AS max_return_pct,
+                    NULL AS max_drawdown_pct,
+                    0 AS matured_horizon,
+                    'pending' AS outcome_status
+                FROM alpha_live_signals s
+                JOIN alpha_live_runs r ON r.id=s.run_id
+                WHERE r.status='active'
+                  AND r.id=(
+                      SELECT r2.id
+                      FROM alpha_live_runs r2
+                      WHERE r2.signal_date=r.signal_date
+                      ORDER BY r2.generated_at DESC, r2.id DESC
+                      LIMIT 1
+                  )
+                ORDER BY r.signal_date, s.rank_order, s.id
+                """
+            ).fetchall()
+        ]
+
+
 def apply_portfolio_policy(signals, spec):
     policy = ShadowSelectionPolicy()
     eligible = []
@@ -438,6 +511,7 @@ def _config_for_spec(config, spec):
             "max_positions": spec.max_positions,
             "position_size_pct": spec.position_size_pct,
             "max_industry_exposure_pct": spec.max_industry_exposure_pct,
+            "enforce_chase_limit": spec.enforce_chase_limit,
         }.items()
         if value is not None
     }
@@ -542,9 +616,87 @@ def _base_trade(signal):
     }
 
 
+def _hydrate_alpha_signal(signal, price_cache, as_of, holding_horizon, benchmark_code):
+    row = dict(signal)
+    signal_date = _normalized_date(row.get("signal_date"))
+    if signal_date is None or price_cache is None:
+        return row
+    history = price_cache.get_stock(row["code"])
+    if history is None or history.empty:
+        return row
+    future = history[history.index.normalize() > signal_date].copy()
+    future = future[future.index.normalize() <= as_of]
+    if future.empty:
+        return row
+
+    entry = future.iloc[0]
+    entry_at = pd.Timestamp(future.index[0]).normalize()
+    entry_price = _safe_number(entry.get("Open"))
+    if entry_price is None:
+        return row
+    row.update(
+        entry_at=entry_at.strftime("%Y-%m-%d"),
+        entry_price=entry_price,
+        entry_adjustment_factor=1.0,
+        entry_status="filled",
+    )
+
+    horizon = int(holding_horizon or 10)
+    if len(future) < horizon:
+        return row
+    exit_row = future.iloc[horizon - 1]
+    exit_at = pd.Timestamp(future.index[horizon - 1]).normalize()
+    exit_price = _safe_number(exit_row.get("Close"))
+    window = future.iloc[:horizon]
+    row.update(
+        exit_at=exit_at.strftime("%Y-%m-%d"),
+        exit_price=exit_price,
+        exit_reason=f"time_exit_t{horizon}",
+        max_return_pct=(
+            float(window["High"].max() / entry_price - 1.0) * 100.0
+            if "High" in window
+            else None
+        ),
+        max_drawdown_pct=(
+            float(window["Low"].min() / entry_price - 1.0) * 100.0
+            if "Low" in window
+            else None
+        ),
+        matured_horizon=horizon,
+        outcome_status="complete",
+    )
+    benchmark = price_cache.get_ticker(benchmark_code)
+    if benchmark is not None and not benchmark.empty:
+        benchmark_entry = benchmark[
+            benchmark.index.normalize() == entry_at
+        ]
+        benchmark_exit = benchmark[
+            benchmark.index.normalize() == exit_at
+        ]
+        if not benchmark_entry.empty and not benchmark_exit.empty:
+            start_price = _safe_number(benchmark_entry.iloc[0].get("Open"))
+            end_price = _safe_number(benchmark_exit.iloc[0].get("Close"))
+            if start_price and end_price:
+                row["benchmark_return_pct"] = (
+                    end_price / start_price - 1.0
+                ) * 100.0
+    return row
+
+
 def simulate_account(spec, signals, config=None, price_cache=None, as_of=None):
     config = config or PaperTradingConfig()
     as_of = _normalized_date(as_of or get_taipei_now().date())
+    if spec.source_type == "alpha_signal":
+        signals = [
+            _hydrate_alpha_signal(
+                signal,
+                price_cache,
+                as_of,
+                spec.holding_horizon,
+                config.benchmark_code,
+            )
+            for signal in signals
+        ]
     signals = sorted(
         (dict(signal) for signal in signals),
         key=lambda row: (
@@ -720,6 +872,10 @@ def simulate_account(spec, signals, config=None, price_cache=None, as_of=None):
             trade["exit_proceeds"] = exit_proceeds
             trade["realized_pnl"] = realized_pnl
             trade["net_return_pct"] = net_return
+            if net_return is not None and trade["benchmark_return_pct"] is not None:
+                trade["excess_return_pct"] = (
+                    net_return - trade["benchmark_return_pct"]
+                )
             trade["market_value"] = 0.0
             trade["unrealized_pnl"] = 0.0
             trade["status"] = "closed"
@@ -925,6 +1081,7 @@ def run_paper_trading(
     signals_by_key = {
         "rule_baseline_v1": load_rule_signals(db_path=db_path),
         "ai_shadow_v1": load_ai_signals(db_path=db_path),
+        "alpha_v2_top3_t10_v1": load_alpha_signals(db_path=db_path),
         **{
             spec.account_key: apply_portfolio_policy(tournament_universe, spec)
             for spec in selected_specs
@@ -932,7 +1089,7 @@ def run_paper_trading(
         },
     }
     all_entries = [
-        _normalized_date(signal.get("entry_at"))
+        _normalized_date(signal.get("entry_at") or signal.get("signal_date"))
         for spec in selected_specs
         for signal in signals_by_key[spec.account_key]
         if signal.get("entry_at")

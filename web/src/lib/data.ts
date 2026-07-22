@@ -3,7 +3,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { CandidateLearnabilityAudit, CapitalTournament, CloudEvidence, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, PaperSettlement, ReplayAttribution, ResearchHealth, ResearchQuality, StrategyChallengerSnapshot, WorkflowRun } from "./types";
+import type { AlphaLiveSnapshot, CandidateLearnabilityAudit, CapitalTournament, CloudEvidence, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, PaperSettlement, ReplayAttribution, ResearchHealth, ResearchQuality, StrategyChallengerSnapshot, WorkflowRun } from "./types";
 
 const DEFAULT_DATA_URL =
   "https://raw.githubusercontent.com/corn92888/Stock_AI_Scanner/main/data/dashboard_snapshot.json";
@@ -182,8 +182,26 @@ const EMPTY_STRATEGY_CHALLENGER: StrategyChallengerSnapshot = {
   multipleTestingPsrGate: null,
   selectionUsesHoldout: false,
   formalRankingEnabled: false,
+  legacyRulePrefilter: true,
+  candidateUniverse: "legacy_rule_candidates",
+  prequalifiedCandidates: 0,
+  holdout: null,
   candidateLeaderboard: [],
   executionMatrix: [],
+};
+
+const EMPTY_ALPHA_LIVE: AlphaLiveSnapshot = {
+  status: "not_run",
+  signalDate: null,
+  generatedAt: null,
+  modelVersion: null,
+  artifactFingerprint: null,
+  confidence: null,
+  confidenceThreshold: null,
+  universeCount: 0,
+  eligibleCount: 0,
+  selectedCount: 0,
+  signals: [],
 };
 
 const EMPTY_CAPITAL_TOURNAMENT: CapitalTournament = {
@@ -318,6 +336,11 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
       ...(snapshot.strategyChallenger ?? {}),
       candidateLeaderboard: snapshot.strategyChallenger?.candidateLeaderboard ?? [],
       executionMatrix: snapshot.strategyChallenger?.executionMatrix ?? [],
+    },
+    alphaLive: {
+      ...EMPTY_ALPHA_LIVE,
+      ...(snapshot.alphaLive ?? {}),
+      signals: snapshot.alphaLive?.signals ?? [],
     },
     paperAccounts: (snapshot.paperAccounts ?? []).map((account) => ({
       ...account,

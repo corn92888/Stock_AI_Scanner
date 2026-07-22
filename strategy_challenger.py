@@ -433,7 +433,12 @@ def select_challenger(results):
     }
 
 
-def save_strategy_snapshot(payload, dataset_fingerprint, db_path=DB_PATH):
+def save_strategy_snapshot(
+    payload,
+    dataset_fingerprint,
+    db_path=DB_PATH,
+    challenger_version=STRATEGY_CHALLENGER_VERSION,
+):
     evaluated_at = get_taipei_now().isoformat(timespec="seconds")
     with get_connection(db_path) as conn:
         init_db(conn)
@@ -455,7 +460,7 @@ def save_strategy_snapshot(payload, dataset_fingerprint, db_path=DB_PATH):
             """,
             (
                 evaluated_at,
-                STRATEGY_CHALLENGER_VERSION,
+                challenger_version,
                 dataset_fingerprint,
                 payload["status"],
                 payload.get("selectedExperimentKey"),

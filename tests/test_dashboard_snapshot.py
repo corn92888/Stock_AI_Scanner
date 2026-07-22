@@ -88,6 +88,8 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertEqual(payload["paperAccounts"], [])
             self.assertEqual(payload["paperSettlement"]["status"], "not_run")
             self.assertTrue(payload["paperSettlement"]["lookaheadProtected"])
+            self.assertEqual(payload["alphaLive"]["status"], "not_run")
+            self.assertEqual(payload["alphaLive"]["signals"], [])
             self.assertEqual(payload["researchExperiments"], [])
             self.assertEqual(payload["modelChallengers"], [])
             self.assertEqual(payload["researchHealth"]["status"], "building")
@@ -184,6 +186,44 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertEqual(gate["recommendationMode"], "research_only")
             self.assertEqual(gate["totalChecks"], 12)
             self.assertEqual(snapshot["researchHealth"]["formalMatureSelected"], 0)
+
+    def test_snapshot_exports_latest_alpha_live_signals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scanner.db"
+            with get_connection(database) as conn:
+                init_db(conn)
+                run_id = conn.execute(
+                    """
+                    INSERT INTO alpha_live_runs (
+                        signal_date, generated_at, model_version,
+                        artifact_fingerprint, dataset_fingerprint, status,
+                        confidence, confidence_threshold, universe_count,
+                        eligible_count, selected_count, diagnostics_json
+                    ) VALUES (
+                        '2026-07-22', '2026-07-22T14:05:00+08:00', 'alpha-v2',
+                        'artifact', 'dataset', 'active', 2.1, 1.2,
+                        1900, 700, 1, '{}'
+                    )
+                    """
+                ).lastrowid
+                conn.execute(
+                    """
+                    INSERT INTO alpha_live_signals (
+                        run_id, code, name, industry, rank_order, signal_price,
+                        predicted_alpha, allocation_weight, holding_horizon, created_at
+                    ) VALUES (?, '2330', '台積電', '半導體', 1, 1000,
+                              2.4, 0.333333, 10, '2026-07-22T14:05:00+08:00')
+                    """,
+                    (run_id,),
+                )
+
+            alpha = build_dashboard_snapshot(database)["alphaLive"]
+
+            self.assertEqual(alpha["status"], "active")
+            self.assertEqual(alpha["signalDate"], "2026-07-22")
+            self.assertEqual(alpha["eligibleCount"], 700)
+            self.assertEqual(alpha["signals"][0]["code"], "2330")
+            self.assertEqual(alpha["signals"][0]["holdingHorizon"], 10)
 
     def test_snapshot_exports_paper_account_ledger(self):
         with tempfile.TemporaryDirectory() as directory:

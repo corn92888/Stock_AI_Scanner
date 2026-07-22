@@ -67,6 +67,17 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
+    - name: Restore governed Alpha v2 model
+      if: steps.gate.outputs.run == 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        mkdir -p data/models
+        gh release download research-alpha-data-v2 \
+          --pattern 'alpha_strategy_v2_model.joblib' \
+          --dir data/models \
+          --clobber
+
     - name: Run scanner
       if: steps.gate.outputs.run == 'true'
       env:

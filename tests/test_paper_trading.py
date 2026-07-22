@@ -10,6 +10,7 @@ from paper_trading import (
     ACCOUNT_SPECS,
     PaperTradingConfig,
     apply_portfolio_policy,
+    load_alpha_signals,
     save_simulation,
     simulate_account,
 )
@@ -18,6 +19,22 @@ from paper_trading import (
 def price_frame():
     index = pd.bdate_range("2026-01-02", periods=6)
     closes = [100.0, 100.0, 105.0, 110.0, 108.0, 111.0]
+    return pd.DataFrame(
+        {
+            "Open": closes,
+            "High": [value + 1 for value in closes],
+            "Low": [value - 1 for value in closes],
+            "Close": closes,
+            "Adj Close": closes,
+            "Volume": [1_000_000] * len(index),
+        },
+        index=index,
+    )
+
+
+def alpha_price_frame():
+    index = pd.bdate_range("2026-01-02", periods=15)
+    closes = [100.0 + index for index in range(15)]
     return pd.DataFrame(
         {
             "Open": closes,
@@ -246,6 +263,81 @@ class PaperTradingTests(unittest.TestCase):
         self.assertEqual(trades[0]["status"], "closed")
         self.assertEqual(trades[1]["status"], "skipped")
         self.assertEqual(trades[1]["skip_reason"], "industry_exposure_limit")
+
+    def test_alpha_account_enters_next_open_and_exits_tenth_session_close(self):
+        spec = next(
+            item for item in ACCOUNT_SPECS if item.account_key == "alpha_v2_top3_t10_v1"
+        )
+        alpha_signal = {
+            "source_type": "alpha_signal",
+            "source_id": 99,
+            "candidate_id": None,
+            "prediction_id": None,
+            "signal_date": "2026-01-02",
+            "signal_at": "2026-01-02T14:10:00+08:00",
+            "code": "2330",
+            "name": "Alpha Stock",
+            "industry": "Semiconductor",
+            "rank_order": 1,
+            "model_version": "alpha-v2",
+            "final_score": 2.5,
+            "allocation_weight": 0.08,
+            "entry_status": "pending",
+        }
+        cache = PriceCache(
+            start="2026-01-01",
+            end="2026-02-01",
+            loader=lambda ticker, start, end: alpha_price_frame(),
+        )
+
+        result = simulate_account(
+            spec,
+            [alpha_signal],
+            config=self.config,
+            price_cache=cache,
+            as_of="2026-01-23",
+        )
+
+        trade = result["trades"][0]
+        self.assertEqual(trade["entry_at"], "2026-01-05")
+        self.assertEqual(trade["exit_at"], "2026-01-16")
+        self.assertEqual(trade["exit_reason"], "time_exit_t10")
+        self.assertEqual(trade["status"], "closed")
+
+    def test_newer_cash_decision_invalidates_same_day_active_alpha_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "scanner.db"
+            with get_connection(db_path) as conn:
+                init_db(conn)
+                conn.execute(
+                    """
+                    INSERT INTO alpha_live_runs (
+                        signal_date, generated_at, model_version,
+                        artifact_fingerprint, dataset_fingerprint, status,
+                        confidence, confidence_threshold, universe_count,
+                        eligible_count, selected_count, diagnostics_json
+                    ) VALUES
+                        ('2026-07-22', '2026-07-22T14:01:00+08:00', 'alpha',
+                         'old', 'data', 'active', 2.0, 1.0, 100, 50, 1, '{}'),
+                        ('2026-07-22', '2026-07-22T14:02:00+08:00', 'alpha',
+                         'new', 'data', 'abstained', 0.5, 1.0, 100, 50, 0, '{}')
+                    """
+                )
+                old_run = conn.execute(
+                    "SELECT id FROM alpha_live_runs WHERE artifact_fingerprint='old'"
+                ).fetchone()["id"]
+                conn.execute(
+                    """
+                    INSERT INTO alpha_live_signals (
+                        run_id, code, name, industry, rank_order, signal_price,
+                        predicted_alpha, allocation_weight, holding_horizon, created_at
+                    ) VALUES (?, '2330', 'TSMC', 'Semiconductor', 1, 1000,
+                              2.0, 0.08, 10, '2026-07-22T14:01:00+08:00')
+                    """,
+                    (old_run,),
+                )
+
+            self.assertEqual(load_alpha_signals(db_path=db_path), [])
 
 
 if __name__ == "__main__":

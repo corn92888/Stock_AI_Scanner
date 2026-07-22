@@ -168,6 +168,20 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertLess(paper_index, monitor_index)
         self.assertLess(monitor_index, export_index)
 
+    def test_alpha_v2_model_is_governed_and_restored_before_daily_scan(self):
+        research = (
+            ROOT / ".github" / "workflows" / "alpha_strategy_v2.yml"
+        ).read_text()
+        daily = (ROOT / ".github" / "workflows" / "daily_scan.yml").read_text()
+
+        self.assertIn("--model-output", research)
+        self.assertIn("alpha_strategy_v2_model.joblib", research)
+        self.assertIn("research-alpha-data-v2", research)
+        restore_index = daily.index("Restore governed Alpha v2 model")
+        scan_index = daily.index("python scanner.py")
+        self.assertIn("alpha_strategy_v2_model.joblib", daily)
+        self.assertLess(restore_index, scan_index)
+
     def test_research_health_workflows_propagate_manual_gate_approval(self):
         for workflow_name in (
             "daily_scan.yml",

@@ -162,6 +162,7 @@ def init_db(conn):
     _migrate_backtest_results(conn)
     _create_quant_tables(conn)
     _create_research_tables(conn)
+    _create_alpha_live_tables(conn)
     _create_historical_replay_tables(conn)
     _create_global_market_tables(conn)
     _create_institutional_flow_tables(conn)
@@ -951,6 +952,56 @@ def _create_research_tables(conn):
             UNIQUE (challenger_version, dataset_fingerprint)
         )
         """
+    )
+
+
+def _create_alpha_live_tables(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS alpha_live_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            signal_date TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            model_version TEXT NOT NULL,
+            artifact_fingerprint TEXT NOT NULL,
+            dataset_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL,
+            confidence REAL,
+            confidence_threshold REAL NOT NULL,
+            universe_count INTEGER NOT NULL DEFAULT 0,
+            eligible_count INTEGER NOT NULL DEFAULT 0,
+            selected_count INTEGER NOT NULL DEFAULT 0,
+            diagnostics_json TEXT NOT NULL DEFAULT '{}',
+            UNIQUE (signal_date, model_version, artifact_fingerprint)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS alpha_live_signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            code TEXT NOT NULL,
+            name TEXT,
+            industry TEXT,
+            rank_order INTEGER NOT NULL,
+            signal_price REAL NOT NULL,
+            predicted_alpha REAL NOT NULL,
+            allocation_weight REAL NOT NULL,
+            holding_horizon INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (run_id) REFERENCES alpha_live_runs(id),
+            UNIQUE (run_id, code)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_alpha_live_runs_date "
+        "ON alpha_live_runs(signal_date DESC, generated_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_alpha_live_signals_run_rank "
+        "ON alpha_live_signals(run_id, rank_order)"
     )
 
 

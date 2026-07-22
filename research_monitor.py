@@ -325,7 +325,12 @@ def _strategy_challenger_metrics(conn):
                selected_experiment_key, recommendation_mode,
                qualified_candidates, candidate_count
         FROM strategy_challenger_snapshots
-        ORDER BY evaluated_at DESC, id DESC
+        ORDER BY
+            CASE
+                WHEN challenger_version='alpha_liquid_universe_walk_forward_v2'
+                THEN 0 ELSE 1
+            END,
+            evaluated_at DESC, id DESC
         LIMIT 1
         """
     ).fetchone()

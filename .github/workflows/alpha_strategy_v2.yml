@@ -1,0 +1,136 @@
+name: Alpha Strategy V2 Research
+run-name: Full-universe Alpha v2 rebuild
+
+on:
+  workflow_dispatch:
+    inputs:
+      rebuild_dataset:
+        description: Rebuild the full liquid-universe dataset
+        required: false
+        default: true
+        type: boolean
+  workflow_run:
+    workflows:
+    - Historical Point-in-Time Replay
+    types:
+    - completed
+
+permissions:
+  contents: write
+
+jobs:
+  research:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    concurrency:
+      group: stock-scanner-automation
+      cancel-in-progress: false
+    env:
+      CLOUD_EVIDENCE_MODE: ${{ vars.CLOUD_EVIDENCE_MODE || 'dual_write' }}
+      CLOUD_EVIDENCE_REQUIRED: ${{ vars.CLOUD_EVIDENCE_REQUIRED || 'false' }}
+      EVIDENCE_WORKFLOW: alpha_strategy_v2
+
+    steps:
+    - name: Checkout latest repository
+      uses: actions/checkout@v4
+
+    - name: Synchronize latest research database
+      run: git pull --ff-only origin main
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: pip
+
+    - name: Restore newer verified cloud evidence
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      run: bash restore_scanner_data.sh
+
+    - name: Install research dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-intraday.txt
+
+    - name: Cache revised historical prices
+      uses: actions/cache@v4
+      with:
+        path: data/replay_cache/yahoo
+        key: alpha-v2-yahoo-${{ runner.os }}-${{ hashFiles('data/universe_history.metadata.json') }}
+        restore-keys: |
+          alpha-v2-yahoo-${{ runner.os }}-
+
+    - name: Restore governed Alpha v2 dataset
+      id: restore
+      if: ${{ github.event_name != 'workflow_dispatch' || inputs.rebuild_dataset != true }}
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/alpha"
+        if gh release download research-alpha-data-v2 \
+          --pattern 'alpha_universe_dataset.csv.gz*' \
+          --dir "$RUNNER_TEMP/alpha" \
+          --clobber; then
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Build independent liquid-universe dataset
+      if: ${{ steps.restore.outputs.ready != 'true' }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/alpha"
+        python alpha_universe_dataset.py \
+          --start 2021-01-01 \
+          --end 2025-12-31 \
+          --universe data/universe_history.csv \
+          --output "$RUNNER_TEMP/alpha/alpha_universe_dataset.csv.gz"
+
+    - name: Run purged Alpha v2 challenge and reserved holdout
+      run: |
+        python alpha_strategy_v2.py \
+          --dataset "$RUNNER_TEMP/alpha/alpha_universe_dataset.csv.gz" \
+          --db data/stock_scanner.db \
+          --model-output "$RUNNER_TEMP/alpha/alpha_strategy_v2_model.joblib" \
+          --output "$RUNNER_TEMP/alpha/alpha_strategy_v2_result.json"
+
+    - name: Publish governed Alpha evidence
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if ! gh release view research-alpha-data-v2 >/dev/null 2>&1; then
+          gh release create research-alpha-data-v2 \
+            --title "Alpha Strategy V2 research data" \
+            --notes "Point-in-time liquid-universe features and governed Alpha v2 evaluation evidence."
+        fi
+        gh release upload research-alpha-data-v2 \
+          "$RUNNER_TEMP/alpha/alpha_universe_dataset.csv.gz" \
+          "$RUNNER_TEMP/alpha/alpha_universe_dataset.csv.gz.metadata.json" \
+          "$RUNNER_TEMP/alpha/alpha_strategy_v2_model.joblib" \
+          "$RUNNER_TEMP/alpha/alpha_strategy_v2_result.json" \
+          --clobber
+
+    - name: Upload Alpha research artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: alpha-strategy-v2
+        path: |
+          ${{ runner.temp }}/alpha/alpha_universe_dataset.csv.gz.metadata.json
+          ${{ runner.temp }}/alpha/alpha_strategy_v2_model.joblib
+          ${{ runner.temp }}/alpha/alpha_strategy_v2_result.json
+        retention-days: 90
+        if-no-files-found: error
+
+    - name: Refresh research health and dashboard
+      run: |
+        python research_monitor.py
+        python export_dashboard_snapshot.py
+
+    - name: Persist Alpha evidence and dashboard
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      run: 'bash persist_scanner_data.sh "chore(data): record Alpha v2 research evidence"'
