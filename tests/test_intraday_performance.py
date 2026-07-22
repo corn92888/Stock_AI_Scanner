@@ -11,6 +11,7 @@ from intraday_scanner import (
     TAIPEI_TZ,
     collect_realtime_prices,
     fetch_realtime_prices,
+    fetch_yfinance_current_bars,
 )
 from market_monitor import build_market_snapshot
 
@@ -71,7 +72,7 @@ class IntradayPerformanceTests(unittest.TestCase):
         ) as realtime, patch(
             "intraday_scanner.fetch_yfinance_current_bars",
             return_value={},
-        ), patch("intraday_scanner.time.sleep") as sleep:
+        ) as fallback, patch("intraday_scanner.time.sleep") as sleep:
             quotes, coverage, attempts = collect_realtime_prices(
                 history_tickers,
                 yf_to_code,
@@ -85,7 +86,45 @@ class IntradayPerformanceTests(unittest.TestCase):
         self.assertEqual(attempts, 2)
         self.assertEqual(realtime.call_args_list[0].args[0], ["1001", "1002", "1003"])
         self.assertEqual(realtime.call_args_list[1].args[0], ["1002", "1003"])
+        fallback.assert_called_once()
         sleep.assert_called_once_with(5)
+
+    def test_yfinance_fallback_aggregates_today_minute_bars(self):
+        index = pd.to_datetime(
+            ["2026-07-22T01:01:00Z", "2026-07-22T01:02:00Z"]
+        )
+        columns = pd.MultiIndex.from_product(
+            [["Open", "High", "Low", "Close", "Volume"], ["6245.TWO"]]
+        )
+        raw = pd.DataFrame(
+            [
+                [80.0, 81.0, 79.5, 80.5, 100_000],
+                [80.5, 82.0, 80.0, 81.5, 150_000],
+            ],
+            index=index,
+            columns=columns,
+        )
+        now = dt.datetime(2026, 7, 22, 9, 5, tzinfo=TAIPEI_TZ)
+
+        with patch("intraday_scanner.yf.download", return_value=raw) as download:
+            result = fetch_yfinance_current_bars(
+                ["6245.TWO"],
+                {"6245.TWO": "6245"},
+                now=now,
+            )
+
+        self.assertEqual(
+            result["6245"],
+            {
+                "Open": 80.0,
+                "High": 82.0,
+                "Low": 79.5,
+                "Close": 81.5,
+                "Volume": 250.0,
+            },
+        )
+        self.assertEqual(download.call_args.kwargs["period"], "1d")
+        self.assertEqual(download.call_args.kwargs["interval"], "1m")
 
     def test_market_monitor_reuses_scanner_context_without_downloading(self):
         now = dt.datetime(2026, 7, 10, 10, 0, tzinfo=TAIPEI_TZ)

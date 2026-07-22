@@ -238,6 +238,8 @@
 
   雲端證據層的設定、還原演練、保留政策與安全切換流程見 [`docs/cloud_evidence_store.md`](docs/cloud_evidence_store.md)。操作中心會分別顯示最近同步狀態與 Cloud Primary 切換資格；只有顯示 `READY` 才能移除 Git 資料庫備援。
 
+  控制中心程式碼由 `.github/workflows/vercel_deploy.yml` 部署。`web` 程式碼或 Vercel cron 設定推上 `main` 後會自動建立並發布 production；單純更新 `web/public/dashboard_snapshot.json` 不會觸發昂貴的重建，因 production 會每分鐘直接讀取 GitHub 上最新的 `data/dashboard_snapshot.json`。
+
 * **開啟量化控制中心 (Next.js)：**
   ```bash
   cd web

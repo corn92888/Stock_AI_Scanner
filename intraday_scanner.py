@@ -123,14 +123,21 @@ def _extract_yf_frame(raw, ticker):
     df.dropna(subset=['Close'], inplace=True)
     return df
 
-def fetch_yfinance_current_bars(yf_tickers, yf_to_code, chunk_size=200):
-    """Fallback source when TWSE realtime quotes are unavailable."""
-    today_ts = pd.Timestamp(datetime.datetime.now(TAIPEI_TZ).date())
+def fetch_yfinance_current_bars(yf_tickers, yf_to_code, chunk_size=200, now=None):
+    """Aggregate today's one-minute bars when exchange quotes are unavailable."""
+    today = (now or datetime.datetime.now(TAIPEI_TZ)).date()
     result = {}
-    for i in tqdm(range(0, len(yf_tickers), chunk_size), desc="📥 yfinance當日備援"):
+    for i in tqdm(range(0, len(yf_tickers), chunk_size), desc="📥 yfinance分鐘備援"):
         chunk = yf_tickers[i:i+chunk_size]
         try:
-            raw = yf.download(chunk, period="5d", progress=False, auto_adjust=False, threads=True)
+            raw = yf.download(
+                chunk,
+                period="1d",
+                interval="1m",
+                progress=False,
+                auto_adjust=False,
+                threads=True,
+            )
             if raw.empty:
                 continue
             for ticker in chunk:
@@ -138,21 +145,33 @@ def fetch_yfinance_current_bars(yf_tickers, yf_to_code, chunk_size=200):
                     df = _extract_yf_frame(raw, ticker)
                     if df.empty:
                         continue
-                    latest_date = pd.Timestamp(df.index[-1]).tz_localize(None).normalize()
-                    if latest_date != today_ts:
+                    index = pd.DatetimeIndex(df.index)
+                    if index.tz is not None:
+                        session_dates = index.tz_convert(TAIPEI_TZ).date
+                    else:
+                        session_dates = index.date
+                    session = df[session_dates == today]
+                    if session.empty:
                         continue
-                    row = df.iloc[-1]
-                    price = _safe_float(row.get('Close'))
-                    volume_shares = _safe_float(row.get('Volume'))
+                    close = pd.to_numeric(session.get('Close'), errors='coerce').dropna()
+                    if close.empty:
+                        continue
+                    open_values = pd.to_numeric(session.get('Open'), errors='coerce').dropna()
+                    high_values = pd.to_numeric(session.get('High'), errors='coerce').dropna()
+                    low_values = pd.to_numeric(session.get('Low'), errors='coerce').dropna()
+                    volume = pd.to_numeric(
+                        session.get('Volume'), errors='coerce'
+                    ).fillna(0)
+                    price = float(close.iloc[-1])
                     code = yf_to_code.get(ticker)
                     if not code or price <= 0:
                         continue
                     result[code] = {
-                        'Open': _safe_float(row.get('Open')),
-                        'High': _safe_float(row.get('High')),
-                        'Low': _safe_float(row.get('Low')),
+                        'Open': float(open_values.iloc[0]) if not open_values.empty else price,
+                        'High': float(high_values.max()) if not high_values.empty else price,
+                        'Low': float(low_values.min()) if not low_values.empty else price,
                         'Close': price,
-                        'Volume': volume_shares / 1000,
+                        'Volume': float(volume.sum()) / 1000,
                     }
                 except Exception:
                     continue
@@ -327,14 +346,15 @@ def collect_realtime_prices(
             for ticker in eligible_tickers
             if yf_to_code[ticker] not in realtime
         ]
-        if missing_yf_tickers:
+        should_use_yfinance = attempt in {1, max_attempts}
+        if missing_yf_tickers and should_use_yfinance:
             if realtime:
                 print(
                     f"⚠️ 第 {attempt} 次即時報價仍缺 {len(missing_yf_tickers)} 檔，"
-                    "改用 yfinance 當日資料補足"
+                    "改用 yfinance 分鐘資料補足"
                 )
             else:
-                print("⚠️ TWSE 即時報價無法使用，改用 yfinance 當日資料備援")
+                print("⚠️ TWSE 即時報價無法使用，改用 yfinance 分鐘資料備援")
             fallback = fetch_yfinance_current_bars(
                 missing_yf_tickers,
                 yf_to_code,
@@ -342,7 +362,12 @@ def collect_realtime_prices(
             )
             realtime.update(fallback)
             if fallback:
-                print(f"✅ yfinance 當日資料補足 {len(fallback)} 檔")
+                print(f"✅ yfinance 分鐘資料補足 {len(fallback)} 檔")
+        elif missing_yf_tickers:
+            print(
+                f"ℹ️ 第 {attempt} 次僅重試交易所報價；"
+                "yfinance 留到最後一次再驗證。"
+            )
 
         covered = sum(
             1

@@ -128,6 +128,20 @@ class WorkflowPersistenceTests(unittest.TestCase):
             self.assertIn("cronAuthorized", route)
             self.assertIn("process.env.GITHUB_ACTIONS_TOKEN", route)
 
+    def test_control_center_code_changes_deploy_through_github_actions(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "vercel_deploy.yml"
+        ).read_text()
+
+        self.assertIn('branches:\n    - main', workflow)
+        self.assertIn('- "web/**"', workflow)
+        self.assertIn('- "!web/public/dashboard_snapshot.json"', workflow)
+        self.assertIn("secrets.VERCEL_TOKEN", workflow)
+        self.assertIn("secrets.VERCEL_ORG_ID", workflow)
+        self.assertIn("secrets.VERCEL_PROJECT_ID", workflow)
+        self.assertIn("vercel build --prod", workflow)
+        self.assertIn("vercel deploy --prebuilt --prod", workflow)
+
     def test_daily_workflow_backtests_all_candidates_before_training(self):
         workflow = (ROOT / ".github" / "workflows" / "daily_scan.yml").read_text()
         maturation_index = workflow.index(
