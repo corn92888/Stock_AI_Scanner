@@ -88,7 +88,9 @@ class AlphaLiveTests(unittest.TestCase):
         self.assertEqual(diagnostics["status"], "abstained")
 
     def test_live_run_is_idempotent_for_same_artifact_and_date(self):
-        selected, diagnostics = score_alpha_panel(inference_panel(), artifact())
+        selected, diagnostics, scored_pool = score_alpha_panel(
+            inference_panel(), artifact(), return_pool=True
+        )
         diagnostics.update(
             signal_date="2026-07-22",
             history_symbols=6,
@@ -97,10 +99,20 @@ class AlphaLiveTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "scanner.db"
             first = save_alpha_live_run(
-                selected, diagnostics, artifact(), "artifact-sha", db_path=db_path
+                selected,
+                diagnostics,
+                artifact(),
+                "artifact-sha",
+                scored_pool=scored_pool,
+                db_path=db_path,
             )
             second = save_alpha_live_run(
-                selected, diagnostics, artifact(), "artifact-sha", db_path=db_path
+                selected,
+                diagnostics,
+                artifact(),
+                "artifact-sha",
+                scored_pool=scored_pool,
+                db_path=db_path,
             )
             with get_connection(db_path) as conn:
                 init_db(conn)
@@ -108,10 +120,14 @@ class AlphaLiveTests(unittest.TestCase):
                 signals = conn.execute(
                     "SELECT COUNT(*) FROM alpha_live_signals"
                 ).fetchone()[0]
+                candidates = conn.execute(
+                    "SELECT COUNT(*) FROM alpha_live_candidates"
+                ).fetchone()[0]
 
         self.assertEqual(first, second)
         self.assertEqual(runs, 1)
         self.assertEqual(signals, 3)
+        self.assertEqual(candidates, 6)
 
     def test_loader_rejects_runtime_dependency_drift(self):
         incompatible = artifact()

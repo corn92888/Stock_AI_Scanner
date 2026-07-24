@@ -137,22 +137,36 @@ def build_live_panel(histories, yf_to_code, codes, benchmark, trade_date=None):
     }
 
 
-def score_alpha_panel(panel, artifact):
+def score_alpha_panel(panel, artifact, return_pool=False):
+    def result(selected, diagnostics, pool=None):
+        if return_pool:
+            return selected, diagnostics, pool if pool is not None else selected
+        return selected, diagnostics
+
     if panel.empty:
-        return pd.DataFrame(), {
-            "status": "blocked",
-            "reason": "empty_feature_panel",
-            "confidence": None,
-        }
+        empty = pd.DataFrame()
+        return result(
+            empty,
+            {
+                "status": "blocked",
+                "reason": "empty_feature_panel",
+                "confidence": None,
+            },
+            empty,
+        )
     spec = AlphaSpec(**artifact["spec"])
     pool = _anti_chase_pool(panel)
     if pool.empty:
-        return pool, {
-            "status": "abstained",
-            "reason": "anti_chase_pool_empty",
-            "confidence": None,
-            "eligible_after_risk": 0,
-        }
+        return result(
+            pool,
+            {
+                "status": "abstained",
+                "reason": "anti_chase_pool_empty",
+                "confidence": None,
+                "eligible_after_risk": 0,
+            },
+            pool,
+        )
     pool = pool.copy()
     features = _feature_frame(pool)
     expected_features = artifact.get("feature_columns")
@@ -176,13 +190,43 @@ def score_alpha_panel(panel, artifact):
         selected["rank_order"] = range(1, len(selected) + 1)
         selected["allocation_weight"] = 1.0 / max(spec.top_k, 1)
         selected["holding_horizon"] = spec.horizon
-    return selected, {
-        "status": "active" if active else "abstained",
-        "reason": "" if active else "confidence_below_threshold",
-        "confidence": confidence,
-        "confidence_threshold": threshold,
-        "eligible_after_risk": int(len(pool)),
-    }
+    return result(
+        selected,
+        {
+            "status": "active" if active else "abstained",
+            "reason": "" if active else "confidence_below_threshold",
+            "confidence": confidence,
+            "confidence_threshold": threshold,
+            "eligible_after_risk": int(len(pool)),
+        },
+        pool,
+    )
+
+
+def _optional_float(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) else None
+
+
+def _latest_governance_pause(db_path):
+    with get_connection(db_path) as conn:
+        init_db(conn)
+        row = conn.execute(
+            """
+            SELECT state, metrics_json
+            FROM alpha_forward_snapshots
+            ORDER BY evaluated_at DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    if not row or row["state"] != "PAUSED":
+        return None
+    metrics = json.loads(row["metrics_json"] or "{}")
+    reasons = metrics.get("reason_codes") or ["alpha_forward_governance_paused"]
+    return ",".join(str(reason) for reason in reasons)
 
 
 def save_alpha_live_run(
@@ -190,6 +234,7 @@ def save_alpha_live_run(
     diagnostics,
     artifact,
     artifact_fingerprint,
+    scored_pool=None,
     db_path=DB_PATH,
 ):
     now = get_taipei_now().isoformat(timespec="seconds")
@@ -237,6 +282,43 @@ def save_alpha_live_run(
             (signal_date, artifact["model_version"], artifact_fingerprint),
         ).fetchone()["id"]
         conn.execute("DELETE FROM alpha_live_signals WHERE run_id=?", (run_id,))
+        conn.execute("DELETE FROM alpha_live_candidates WHERE run_id=?", (run_id,))
+        candidate_columns = (
+            "return_1d",
+            "return_20d",
+            "relative_return_20d",
+            "volume_ratio_5",
+            "distance_ma20_pct",
+            "gap_open_pct",
+            "intraday_position",
+            "turnover_20d_billion",
+            "market_return_20d",
+            "market_above_ma200",
+            "market_up_ratio",
+        )
+        for row in (
+            scored_pool.to_dict("records")
+            if scored_pool is not None and not scored_pool.empty
+            else []
+        ):
+            conn.execute(
+                f"""
+                INSERT INTO alpha_live_candidates (
+                    run_id, code, name, industry, signal_price, predicted_alpha,
+                    {", ".join(candidate_columns)}, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, {", ".join("?" for _ in candidate_columns)}, ?)
+                """,
+                (
+                    run_id,
+                    str(row["code"]),
+                    row.get("name") or "",
+                    row.get("industry") or "其他",
+                    float(row["signal_price"]),
+                    float(row["predicted_alpha"]),
+                    *(_optional_float(row.get(column)) for column in candidate_columns),
+                    now,
+                ),
+            )
         for row in selected.to_dict("records"):
             conn.execute(
                 """
@@ -278,18 +360,31 @@ def run_alpha_live_scoring(
         benchmark,
         trade_date=trade_date,
     )
-    selected, score_diagnostics = score_alpha_panel(panel, artifact)
+    selected, score_diagnostics, scored_pool = score_alpha_panel(
+        panel,
+        artifact,
+        return_pool=True,
+    )
     diagnostics = {
         "version": ALPHA_LIVE_VERSION,
         **panel_diagnostics,
         **score_diagnostics,
     }
+    pause_reason = _latest_governance_pause(db_path)
+    if pause_reason:
+        selected = selected.iloc[0:0].copy()
+        diagnostics.update(
+            status="paused",
+            reason=pause_reason,
+            governance_override=True,
+        )
     artifact_fingerprint = _sha256(model_path)
     run_id = save_alpha_live_run(
         selected,
         diagnostics,
         artifact,
         artifact_fingerprint,
+        scored_pool=scored_pool,
         db_path=db_path,
     )
     return {

@@ -531,7 +531,7 @@ export type StrategyChallengerSnapshot = {
 };
 
 export type AlphaLiveSnapshot = {
-  status: "not_run" | "active" | "abstained" | "blocked";
+  status: "not_run" | "active" | "abstained" | "blocked" | "paused";
   signalDate: string | null;
   generatedAt: string | null;
   modelVersion: string | null;
@@ -553,10 +553,76 @@ export type AlphaLiveSnapshot = {
   }>;
 };
 
+export type AlphaForwardSnapshot = {
+  version: string;
+  evaluatedAt: string | null;
+  evidenceStartDate: string;
+  state: "COLLECTING" | "HEALTHY" | "WATCH" | "PAUSED";
+  allowNewPositions: boolean;
+  minimumDecisionDays: number;
+  minimumClosedTrades: number;
+  decisionDays: number;
+  closedTrades: number;
+  openPositions: number;
+  totalReturnPct: number;
+  maxDrawdownPct: number;
+  avgNetReturnPct: number | null;
+  avgExcessReturnPct: number | null;
+  positiveRatePct: number | null;
+  profitableMonthRatePct: number | null;
+  profitableMonthCount: number;
+  probabilisticSharpe: number | null;
+  latestSignalDate: string | null;
+  latestSignalStatus: string;
+  universeCoveragePct: number;
+  candidatePoolRows: number;
+  dataQualityStatus: "waiting" | "healthy" | "degraded" | "critical";
+  quoteHealth: {
+    tradeDate: string | null;
+    runAt: string | null;
+    coveragePct: number | null;
+    attempts: number | null;
+  };
+  warnings: string[];
+  reasonCodes: string[];
+  gates: Array<{
+    key: string;
+    label: string;
+    value: number | null;
+    requirement: string;
+    passed: boolean;
+  }>;
+  accounts: Array<{
+    accountKey: string;
+    name: string;
+    role: string;
+    selectionPolicy: string | null;
+    totalReturnPct: number;
+    maxDrawdownPct: number;
+    closedTrades: number;
+    openPositions: number;
+    pendingOrders: number;
+    signalDates: number;
+    winRatePct: number | null;
+    avgNetReturnPct: number | null;
+    avgExcessReturnPct: number | null;
+  }>;
+  cohorts: Array<{
+    accountKey: string;
+    name: string;
+    signalDate: string | null;
+    trades: number;
+    closed: number;
+    open: number;
+    avgNetReturnPct: number | null;
+    avgExcessReturnPct: number | null;
+  }>;
+};
+
 export type PaperAccount = {
   accountKey: string;
   name: string;
-  strategyKind: "rule" | "ai" | "ai_capital" | "alpha_v2";
+  strategyKind: "rule" | "ai" | "ai_capital" | "alpha_v2" | "alpha_forward";
   evidenceMode: string;
   policyVersion: string;
   executionVersion: string;
@@ -846,6 +912,7 @@ export type DashboardSnapshot = {
   modelChallengers: ModelChallenger[];
   strategyChallenger: StrategyChallengerSnapshot;
   alphaLive: AlphaLiveSnapshot;
+  alphaForward: AlphaForwardSnapshot;
   paperAccounts: PaperAccount[];
   paperEquity: PaperEquityPoint[];
   paperTrades: PaperTrade[];

@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import math
 from dataclasses import asdict, dataclass, replace
@@ -7,6 +8,7 @@ import pandas as pd
 
 from backtest import BacktestConfig, PriceCache, download_price_data
 from database import (
+    ALPHA_FORWARD_START_DATE,
     CANDIDATE_EXECUTION_VERSION,
     DB_PATH,
     PAPER_POLICY_VERSION,
@@ -51,6 +53,7 @@ class PaperAccountSpec:
     max_industry_exposure_pct: float | None = None
     holding_horizon: int | None = None
     enforce_chase_limit: bool | None = None
+    selection_policy: str | None = None
 
 
 ACCOUNT_SPECS = (
@@ -136,6 +139,107 @@ ACCOUNT_SPECS = (
         max_industry_exposure_pct=0.16,
         holding_horizon=10,
         enforce_chase_limit=False,
+        selection_policy="champion",
+    ),
+    PaperAccountSpec(
+        account_key="alpha_v2_champion_forward_t10_v1",
+        name="Alpha v2 前瞻冠軍",
+        strategy_kind="alpha_forward",
+        evidence_mode="prospective_alpha_forward",
+        source_type="alpha_candidate",
+        role="benchmark",
+        evidence_start_date=ALPHA_FORWARD_START_DATE,
+        selection_scope="same_day_scored_pool",
+        max_daily_selections=3,
+        max_per_industry=1,
+        weighting="equal",
+        daily_budget_pct=0.24,
+        max_positions=12,
+        position_size_pct=0.08,
+        max_industry_exposure_pct=0.16,
+        holding_horizon=10,
+        enforce_chase_limit=False,
+        selection_policy="model_top3",
+    ),
+    PaperAccountSpec(
+        account_key="alpha_v2_anti_chase_t10_v1",
+        name="Alpha v2 嚴格反追高",
+        strategy_kind="alpha_forward",
+        evidence_mode="prospective_alpha_forward",
+        source_type="alpha_candidate",
+        role="challenger",
+        evidence_start_date=ALPHA_FORWARD_START_DATE,
+        selection_scope="same_day_scored_pool",
+        max_daily_selections=3,
+        max_per_industry=1,
+        weighting="equal",
+        daily_budget_pct=0.24,
+        max_positions=12,
+        position_size_pct=0.08,
+        max_industry_exposure_pct=0.16,
+        holding_horizon=10,
+        enforce_chase_limit=False,
+        selection_policy="strict_anti_chase",
+    ),
+    PaperAccountSpec(
+        account_key="alpha_v2_market_gate_t10_v1",
+        name="Alpha v2 市場狀態閘門",
+        strategy_kind="alpha_forward",
+        evidence_mode="prospective_alpha_forward",
+        source_type="alpha_candidate",
+        role="challenger",
+        evidence_start_date=ALPHA_FORWARD_START_DATE,
+        selection_scope="same_day_scored_pool",
+        max_daily_selections=3,
+        max_per_industry=1,
+        weighting="equal",
+        daily_budget_pct=0.24,
+        max_positions=12,
+        position_size_pct=0.08,
+        max_industry_exposure_pct=0.16,
+        holding_horizon=10,
+        enforce_chase_limit=False,
+        selection_policy="market_regime",
+    ),
+    PaperAccountSpec(
+        account_key="alpha_v2_momentum_t10_v1",
+        name="同股票池動能基準",
+        strategy_kind="alpha_forward",
+        evidence_mode="prospective_alpha_forward",
+        source_type="alpha_candidate",
+        role="benchmark",
+        evidence_start_date=ALPHA_FORWARD_START_DATE,
+        selection_scope="same_day_scored_pool",
+        max_daily_selections=3,
+        max_per_industry=1,
+        weighting="equal",
+        daily_budget_pct=0.24,
+        max_positions=12,
+        position_size_pct=0.08,
+        max_industry_exposure_pct=0.16,
+        holding_horizon=10,
+        enforce_chase_limit=False,
+        selection_policy="momentum",
+    ),
+    PaperAccountSpec(
+        account_key="alpha_v2_random_t10_v1",
+        name="同股票池隨機基準",
+        strategy_kind="alpha_forward",
+        evidence_mode="prospective_alpha_forward",
+        source_type="alpha_candidate",
+        role="benchmark",
+        evidence_start_date=ALPHA_FORWARD_START_DATE,
+        selection_scope="same_day_scored_pool",
+        max_daily_selections=3,
+        max_per_industry=1,
+        weighting="equal",
+        daily_budget_pct=0.24,
+        max_positions=12,
+        position_size_pct=0.08,
+        max_industry_exposure_pct=0.16,
+        holding_horizon=10,
+        enforce_chase_limit=False,
+        selection_policy="deterministic_random",
     ),
 )
 
@@ -424,6 +528,153 @@ def load_alpha_signals(db_path=DB_PATH):
         ]
 
 
+def load_alpha_candidate_pool(db_path=DB_PATH):
+    with get_connection(db_path) as conn:
+        init_db(conn)
+        return [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT
+                    'alpha_candidate' AS source_type,
+                    c.id AS source_id,
+                    NULL AS candidate_id,
+                    NULL AS prediction_id,
+                    r.signal_date,
+                    r.generated_at AS signal_at,
+                    c.code,
+                    c.name,
+                    c.industry,
+                    NULL AS rank_order,
+                    r.model_version,
+                    c.predicted_alpha AS final_score,
+                    NULL AS allocation_weight,
+                    NULL AS benchmark_return_pct,
+                    NULL AS excess_return_pct,
+                    NULL AS raw_chase_limit,
+                    NULL AS raw_stop_price,
+                    NULL AS entry_at,
+                    NULL AS entry_price,
+                    1.0 AS entry_adjustment_factor,
+                    'pending' AS entry_status,
+                    NULL AS outcome_skip_reason,
+                    NULL AS exit_at,
+                    NULL AS exit_price,
+                    NULL AS exit_reason,
+                    NULL AS max_return_pct,
+                    NULL AS max_drawdown_pct,
+                    0 AS matured_horizon,
+                    'pending' AS outcome_status,
+                    c.return_1d,
+                    c.return_20d,
+                    c.relative_return_20d,
+                    c.volume_ratio_5,
+                    c.distance_ma20_pct,
+                    c.gap_open_pct,
+                    c.intraday_position,
+                    c.turnover_20d_billion,
+                    c.market_return_20d,
+                    c.market_above_ma200,
+                    c.market_up_ratio
+                FROM alpha_live_candidates c
+                JOIN alpha_live_runs r ON r.id=c.run_id
+                WHERE r.status='active'
+                  AND r.id=(
+                      SELECT r2.id
+                      FROM alpha_live_runs r2
+                      WHERE r2.signal_date=r.signal_date
+                      ORDER BY r2.generated_at DESC, r2.id DESC
+                      LIMIT 1
+                  )
+                ORDER BY r.signal_date, c.predicted_alpha DESC, c.id
+                """
+            ).fetchall()
+        ]
+
+
+def apply_alpha_forward_policy(signals, spec):
+    if not spec.selection_policy or spec.selection_policy == "champion":
+        return [dict(signal) for signal in signals]
+    by_date = {}
+    for signal in signals:
+        row = dict(signal)
+        signal_date = str(row.get("signal_date") or "")
+        if spec.evidence_start_date and signal_date < spec.evidence_start_date:
+            continue
+        by_date.setdefault(signal_date, []).append(row)
+
+    selected = []
+    for signal_date in sorted(by_date):
+        pool = by_date[signal_date]
+        if spec.selection_policy == "strict_anti_chase":
+            pool = [
+                row
+                for row in pool
+                if (_safe_number(row.get("return_1d"), math.inf) or 0.0) <= 4.0
+                and (_safe_number(row.get("volume_ratio_5"), math.inf) or 0.0)
+                <= 2.5
+                and (
+                    _safe_number(row.get("distance_ma20_pct"), math.inf) or 0.0
+                )
+                <= 8.0
+                and abs(_safe_number(row.get("gap_open_pct"), math.inf) or 0.0)
+                <= 3.0
+            ]
+        elif spec.selection_policy == "market_regime":
+            pool = [
+                row
+                for row in pool
+                if (_safe_number(row.get("market_return_20d"), -math.inf) or 0.0)
+                > 0.0
+                and (
+                    _safe_number(row.get("market_above_ma200"), -math.inf) or 0.0
+                )
+                >= 0.5
+                and (_safe_number(row.get("market_up_ratio"), -math.inf) or 0.0)
+                >= 0.45
+            ]
+
+        if spec.selection_policy == "momentum":
+            rank_key = lambda row: (
+                -(_safe_number(row.get("relative_return_20d"), -math.inf) or 0.0),
+                -(_safe_number(row.get("turnover_20d_billion"), 0.0) or 0.0),
+                str(row.get("code") or ""),
+            )
+        elif spec.selection_policy == "deterministic_random":
+            rank_key = lambda row: (
+                hashlib.sha256(
+                    f"{signal_date}|{row.get('code')}".encode("utf-8")
+                ).hexdigest(),
+            )
+        else:
+            rank_key = lambda row: (
+                -(_safe_number(row.get("final_score"), -math.inf) or 0.0),
+                -(_safe_number(row.get("turnover_20d_billion"), 0.0) or 0.0),
+                str(row.get("code") or ""),
+            )
+
+        industry_counts = {}
+        daily = []
+        for row in sorted(pool, key=rank_key):
+            industry = str(row.get("industry") or "")
+            if (
+                industry
+                and spec.max_per_industry is not None
+                and industry_counts.get(industry, 0) >= spec.max_per_industry
+            ):
+                continue
+            chosen = dict(row)
+            chosen["rank_order"] = len(daily) + 1
+            chosen["allocation_weight"] = float(spec.position_size_pct or 0.08)
+            daily.append(chosen)
+            if industry:
+                industry_counts[industry] = industry_counts.get(industry, 0) + 1
+            if spec.max_daily_selections and len(daily) >= spec.max_daily_selections:
+                break
+        selected.extend(daily)
+    return selected
+
+
 def apply_portfolio_policy(signals, spec):
     policy = ShadowSelectionPolicy()
     eligible = []
@@ -686,7 +937,7 @@ def _hydrate_alpha_signal(signal, price_cache, as_of, holding_horizon, benchmark
 def simulate_account(spec, signals, config=None, price_cache=None, as_of=None):
     config = config or PaperTradingConfig()
     as_of = _normalized_date(as_of or get_taipei_now().date())
-    if spec.source_type == "alpha_signal":
+    if spec.strategy_kind in {"alpha_v2", "alpha_forward"}:
         signals = [
             _hydrate_alpha_signal(
                 signal,
@@ -1078,6 +1329,7 @@ def run_paper_trading(
         if not account_keys or spec.account_key in set(account_keys)
     ]
     tournament_universe = load_ai_tournament_universe(db_path=db_path)
+    alpha_candidate_pool = load_alpha_candidate_pool(db_path=db_path)
     signals_by_key = {
         "rule_baseline_v1": load_rule_signals(db_path=db_path),
         "ai_shadow_v1": load_ai_signals(db_path=db_path),
@@ -1087,12 +1339,17 @@ def run_paper_trading(
             for spec in selected_specs
             if spec.evidence_mode == "prospective_tournament"
         },
+        **{
+            spec.account_key: apply_alpha_forward_policy(alpha_candidate_pool, spec)
+            for spec in selected_specs
+            if spec.evidence_mode == "prospective_alpha_forward"
+        },
     }
     all_entries = [
         _normalized_date(signal.get("entry_at") or signal.get("signal_date"))
         for spec in selected_specs
         for signal in signals_by_key[spec.account_key]
-        if signal.get("entry_at")
+        if signal.get("entry_at") or signal.get("signal_date")
     ]
     start = min(all_entries, default=as_of_date) - pd.Timedelta(days=5)
     price_cache = PriceCache(

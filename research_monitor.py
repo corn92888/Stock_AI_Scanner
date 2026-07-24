@@ -42,6 +42,7 @@ def _prospective_metrics(conn):
                     SELECT COUNT(DISTINCT later.trade_date)
                     FROM scan_runs later
                     WHERE later.trade_date > ranked.trade_date
+                      AND LOWER(later.mode)='eod'
                 ) AS later_sessions
             FROM ranked
             WHERE cohort_order=1

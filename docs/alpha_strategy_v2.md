@@ -62,6 +62,43 @@ Live scoring fails closed when its runtime differs, preventing silent model drif
 - each position exits at the T+10 close with fees, tax, and slippage applied;
 - real-money recommendations remain disabled until prospective evidence is reviewed.
 
+## Forward validation and capital governance
+
+Beginning on 2026-07-24, each EOD scoring run also freezes the complete eligible
+candidate pool in `alpha_live_candidates`. This permits five policies to be compared
+from the same point-in-time input without retrospective substitutions:
+
+- the model-ranked Top 3 champion;
+- a stricter anti-chase model-ranked Top 3;
+- a model-ranked Top 3 that participates only in a supportive market regime;
+- an industry-diversified relative-momentum Top 3 baseline;
+- a deterministic random Top 3 baseline.
+
+Every account uses the same next-open execution, T+10 exit, 8% position size, 24%
+daily deployment budget, 12-position maximum, and 16% industry exposure cap. The
+random baseline is seeded from the signal date and stock code, so reruns are
+reproducible.
+
+`alpha_forward_monitor.py` evaluates this evidence after each daily and intraday
+automation run. Its state is one of:
+
+- `COLLECTING`: the frozen minimum sample has not been reached;
+- `HEALTHY`: every return, excess-return, drawdown, stability, coverage, and sample
+  gate passes;
+- `WATCH`: enough evidence exists but one or more economic gates fail, or drawdown
+  has crossed the -8% warning level;
+- `PAUSED`: candidate-pool or quote integrity fails, the Alpha run is blocked, or
+  prospective drawdown reaches -12%.
+
+Only `PAUSED` disables new Alpha paper positions. Cloud evidence failures remain a
+degraded warning while the verified Git database fallback is active. They do not
+silently change model decisions.
+
+Promotion remains manual even after `HEALTHY`. The minimum evidence is 120
+independent decision days, 150 closed champion trades, three observed months, a
+positive total and mean excess return, at least 60% profitable months, PSR of at
+least 0.95, drawdown better than -12%, and at least 20% eligible-universe coverage.
+
 ## Commands
 
 ```bash
@@ -78,4 +115,8 @@ python alpha_strategy_v2.py \
 python alpha_live.py \
   --model data/models/alpha_strategy_v2_model.joblib \
   --db data/stock_scanner.db
+
+python paper_trading.py --db data/stock_scanner.db
+
+python alpha_forward_monitor.py --db data/stock_scanner.db
 ```

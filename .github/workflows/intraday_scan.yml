@@ -84,8 +84,8 @@ jobs:
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
         INTRADAY_AUTOMATION_SLOT: ${{ steps.gate.outputs.slot }}
-        INTRADAY_QUOTE_MAX_ATTEMPTS: "3"
-        INTRADAY_QUOTE_RETRY_DELAY_SECONDS: "45"
+        INTRADAY_QUOTE_MAX_ATTEMPTS: "6"
+        INTRADAY_QUOTE_RETRY_DELAY_SECONDS: "60"
       run: |
         python intraday_analysis_report.py --run-scanner --run-market-monitor --run-ai --send-telegram --send-raw-scanner-telegram
 
@@ -110,6 +110,11 @@ jobs:
       if: steps.gate.outputs.run == 'true'
       run: |
         python research_monitor.py
+
+    - name: Evaluate prospective Alpha governance
+      if: steps.gate.outputs.run == 'true'
+      run: |
+        python alpha_forward_monitor.py
 
     - name: Export dashboard snapshot
       if: steps.gate.outputs.run == 'true'

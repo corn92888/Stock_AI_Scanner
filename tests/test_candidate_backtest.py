@@ -245,14 +245,14 @@ class CandidateOutcomeDatabaseTests(unittest.TestCase):
             with get_connection(db_path) as conn:
                 init_db(conn)
 
-                def insert_run(trade_date):
+                def insert_run(trade_date, mode="intraday"):
                     return conn.execute(
                         """
                         INSERT INTO scan_runs (
                             run_at, trade_date, mode, source, strategy_version
-                        ) VALUES (?, ?, 'intraday', 'test', 'v1')
+                        ) VALUES (?, ?, ?, 'test', 'v1')
                         """,
-                        (f"{trade_date}T10:00:00+08:00", trade_date),
+                        (f"{trade_date}T10:00:00+08:00", trade_date, mode),
                     ).lastrowid
 
                 def insert_candidate(run_id, trade_date, code):
@@ -285,7 +285,7 @@ class CandidateOutcomeDatabaseTests(unittest.TestCase):
                     cohort_run, "2026-07-01", "2330"
                 )
                 for trade_date in ("2026-07-02", "2026-07-03", "2026-07-06"):
-                    insert_run(trade_date)
+                    insert_run(trade_date, mode="eod")
                 conn.execute(
                     """
                     INSERT INTO predictions (

@@ -149,6 +149,11 @@ jobs:
       run: |
         python research_monitor.py
 
+    - name: Evaluate prospective Alpha governance
+      if: steps.gate.outputs.run == 'true'
+      run: |
+        python alpha_forward_monitor.py
+
     - name: Export dashboard snapshot
       if: steps.gate.outputs.run == 'true'
       run: |

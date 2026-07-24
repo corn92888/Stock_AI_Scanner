@@ -9,6 +9,7 @@ from database import get_connection, init_db
 from paper_trading import (
     ACCOUNT_SPECS,
     PaperTradingConfig,
+    apply_alpha_forward_policy,
     apply_portfolio_policy,
     load_alpha_signals,
     save_simulation,
@@ -303,6 +304,46 @@ class PaperTradingTests(unittest.TestCase):
         self.assertEqual(trade["exit_at"], "2026-01-16")
         self.assertEqual(trade["exit_reason"], "time_exit_t10")
         self.assertEqual(trade["status"], "closed")
+
+    def test_alpha_forward_policies_use_the_same_pool_without_lookahead(self):
+        strict = next(
+            item
+            for item in ACCOUNT_SPECS
+            if item.account_key == "alpha_v2_anti_chase_t10_v1"
+        )
+        momentum = next(
+            item
+            for item in ACCOUNT_SPECS
+            if item.account_key == "alpha_v2_momentum_t10_v1"
+        )
+        rows = []
+        for index, code in enumerate(("2330", "2454", "2317", "1301"), start=1):
+            row = tournament_signal(index, code, 100 - index, f"Industry {index}")
+            row.update(
+                source_type="alpha_candidate",
+                signal_date="2026-07-24",
+                return_1d=2.0,
+                volume_ratio_5=1.5,
+                distance_ma20_pct=3.0,
+                gap_open_pct=1.0,
+                relative_return_20d=float(index),
+                turnover_20d_billion=10.0,
+            )
+            rows.append(row)
+        rows[0]["volume_ratio_5"] = 3.0
+
+        strict_selected = apply_alpha_forward_policy(rows, strict)
+        momentum_selected = apply_alpha_forward_policy(rows, momentum)
+
+        self.assertEqual(
+            [row["code"] for row in strict_selected], ["2454", "2317", "1301"]
+        )
+        self.assertEqual(
+            [row["code"] for row in momentum_selected], ["1301", "2317", "2454"]
+        )
+        self.assertTrue(
+            all(row["allocation_weight"] == 0.08 for row in strict_selected)
+        )
 
     def test_newer_cash_decision_invalidates_same_day_active_alpha_run(self):
         with tempfile.TemporaryDirectory() as directory:

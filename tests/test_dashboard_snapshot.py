@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from database import get_connection, init_db, record_cloud_evidence_event
+from alpha_forward_monitor import run_alpha_forward_monitor
 from export_dashboard_snapshot import build_dashboard_snapshot, write_dashboard_snapshot
 from research_monitor import run_research_health_monitor
 
@@ -90,6 +91,8 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertTrue(payload["paperSettlement"]["lookaheadProtected"])
             self.assertEqual(payload["alphaLive"]["status"], "not_run")
             self.assertEqual(payload["alphaLive"]["signals"], [])
+            self.assertEqual(payload["alphaForward"]["state"], "COLLECTING")
+            self.assertEqual(payload["alphaForward"]["accounts"], [])
             self.assertEqual(payload["researchExperiments"], [])
             self.assertEqual(payload["modelChallengers"], [])
             self.assertEqual(payload["researchHealth"]["status"], "building")
@@ -224,6 +227,20 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertEqual(alpha["eligibleCount"], 700)
             self.assertEqual(alpha["signals"][0]["code"], "2330")
             self.assertEqual(alpha["signals"][0]["holdingHorizon"], 10)
+
+    def test_snapshot_exports_alpha_forward_governance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scanner.db"
+            with get_connection(database) as conn:
+                init_db(conn)
+            run_alpha_forward_monitor(database)
+
+            forward = build_dashboard_snapshot(database)["alphaForward"]
+
+            self.assertEqual(forward["state"], "COLLECTING")
+            self.assertTrue(forward["allowNewPositions"])
+            self.assertEqual(forward["minimumDecisionDays"], 120)
+            self.assertGreater(len(forward["gates"]), 0)
 
     def test_snapshot_exports_paper_account_ledger(self):
         with tempfile.TemporaryDirectory() as directory:

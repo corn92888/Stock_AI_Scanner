@@ -3,7 +3,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { AlphaLiveSnapshot, CandidateLearnabilityAudit, CapitalTournament, CloudEvidence, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, PaperSettlement, ReplayAttribution, ResearchHealth, ResearchQuality, StrategyChallengerSnapshot, WorkflowRun } from "./types";
+import type { AlphaForwardSnapshot, AlphaLiveSnapshot, CandidateLearnabilityAudit, CapitalTournament, CloudEvidence, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, PaperSettlement, ReplayAttribution, ResearchHealth, ResearchQuality, StrategyChallengerSnapshot, WorkflowRun } from "./types";
 
 const DEFAULT_DATA_URL =
   "https://raw.githubusercontent.com/corn92888/Stock_AI_Scanner/main/data/dashboard_snapshot.json";
@@ -204,6 +204,43 @@ const EMPTY_ALPHA_LIVE: AlphaLiveSnapshot = {
   signals: [],
 };
 
+const EMPTY_ALPHA_FORWARD: AlphaForwardSnapshot = {
+  version: "alpha_forward_validation_v1",
+  evaluatedAt: null,
+  evidenceStartDate: "2026-07-24",
+  state: "COLLECTING",
+  allowNewPositions: true,
+  minimumDecisionDays: 120,
+  minimumClosedTrades: 150,
+  decisionDays: 0,
+  closedTrades: 0,
+  openPositions: 0,
+  totalReturnPct: 0,
+  maxDrawdownPct: 0,
+  avgNetReturnPct: null,
+  avgExcessReturnPct: null,
+  positiveRatePct: null,
+  profitableMonthRatePct: null,
+  profitableMonthCount: 0,
+  probabilisticSharpe: null,
+  latestSignalDate: null,
+  latestSignalStatus: "not_run",
+  universeCoveragePct: 0,
+  candidatePoolRows: 0,
+  dataQualityStatus: "waiting",
+  quoteHealth: {
+    tradeDate: null,
+    runAt: null,
+    coveragePct: null,
+    attempts: null,
+  },
+  warnings: [],
+  reasonCodes: ["minimum_evidence_not_reached"],
+  gates: [],
+  accounts: [],
+  cohorts: [],
+};
+
 const EMPTY_CAPITAL_TOURNAMENT: CapitalTournament = {
   version: "prospective_capital_tournament_v1",
   evidenceStartDate: "2026-07-20",
@@ -341,6 +378,19 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
       ...EMPTY_ALPHA_LIVE,
       ...(snapshot.alphaLive ?? {}),
       signals: snapshot.alphaLive?.signals ?? [],
+    },
+    alphaForward: {
+      ...EMPTY_ALPHA_FORWARD,
+      ...(snapshot.alphaForward ?? {}),
+      quoteHealth: {
+        ...EMPTY_ALPHA_FORWARD.quoteHealth,
+        ...(snapshot.alphaForward?.quoteHealth ?? {}),
+      },
+      warnings: snapshot.alphaForward?.warnings ?? [],
+      reasonCodes: snapshot.alphaForward?.reasonCodes ?? [],
+      gates: snapshot.alphaForward?.gates ?? [],
+      accounts: snapshot.alphaForward?.accounts ?? [],
+      cohorts: snapshot.alphaForward?.cohorts ?? [],
     },
     paperAccounts: (snapshot.paperAccounts ?? []).map((account) => ({
       ...account,

@@ -1035,6 +1035,145 @@ def _alpha_live_snapshot(conn):
     }
 
 
+def _alpha_forward_snapshot(conn):
+    empty = {
+        "version": "alpha_forward_validation_v1",
+        "evaluatedAt": None,
+        "evidenceStartDate": "2026-07-24",
+        "state": "COLLECTING",
+        "allowNewPositions": True,
+        "minimumDecisionDays": 120,
+        "minimumClosedTrades": 150,
+        "decisionDays": 0,
+        "closedTrades": 0,
+        "openPositions": 0,
+        "totalReturnPct": 0,
+        "maxDrawdownPct": 0,
+        "avgNetReturnPct": None,
+        "avgExcessReturnPct": None,
+        "positiveRatePct": None,
+        "profitableMonthRatePct": None,
+        "profitableMonthCount": 0,
+        "probabilisticSharpe": None,
+        "latestSignalDate": None,
+        "latestSignalStatus": "not_run",
+        "universeCoveragePct": 0,
+        "candidatePoolRows": 0,
+        "dataQualityStatus": "waiting",
+        "quoteHealth": {
+            "tradeDate": None,
+            "runAt": None,
+            "coveragePct": None,
+            "attempts": None,
+        },
+        "warnings": [],
+        "reasonCodes": ["minimum_evidence_not_reached"],
+        "gates": [],
+        "accounts": [],
+        "cohorts": [],
+    }
+    if not _table_exists(conn, "alpha_forward_snapshots"):
+        return empty
+    row = conn.execute(
+        """
+        SELECT evaluated_at, metrics_json
+        FROM alpha_forward_snapshots
+        ORDER BY evaluated_at DESC, id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if not row:
+        return empty
+    metrics = _decode_object(row["metrics_json"])
+    quote = metrics.get("quote_health") or {}
+    return {
+        **empty,
+        "version": metrics.get("version", empty["version"]),
+        "evaluatedAt": row["evaluated_at"],
+        "evidenceStartDate": metrics.get(
+            "evidence_start_date", empty["evidenceStartDate"]
+        ),
+        "state": metrics.get("state", empty["state"]),
+        "allowNewPositions": bool(metrics.get("allow_new_positions", True)),
+        "minimumDecisionDays": int(
+            metrics.get("minimum_decision_days", empty["minimumDecisionDays"])
+        ),
+        "minimumClosedTrades": int(
+            metrics.get("minimum_closed_trades", empty["minimumClosedTrades"])
+        ),
+        "decisionDays": int(metrics.get("decision_days", 0) or 0),
+        "closedTrades": int(metrics.get("closed_trades", 0) or 0),
+        "openPositions": int(metrics.get("open_positions", 0) or 0),
+        "totalReturnPct": metrics.get("total_return_pct"),
+        "maxDrawdownPct": metrics.get("max_drawdown_pct"),
+        "avgNetReturnPct": metrics.get("avg_net_return_pct"),
+        "avgExcessReturnPct": metrics.get("avg_excess_return_pct"),
+        "positiveRatePct": metrics.get("positive_rate_pct"),
+        "profitableMonthRatePct": metrics.get("profitable_month_rate_pct"),
+        "profitableMonthCount": int(
+            metrics.get("profitable_month_count", 0) or 0
+        ),
+        "probabilisticSharpe": metrics.get("probabilistic_sharpe"),
+        "latestSignalDate": metrics.get("latest_signal_date"),
+        "latestSignalStatus": metrics.get("latest_signal_status", "not_run"),
+        "universeCoveragePct": metrics.get("universe_coverage_pct", 0),
+        "candidatePoolRows": int(metrics.get("candidate_pool_rows", 0) or 0),
+        "dataQualityStatus": metrics.get("data_quality_status", "waiting"),
+        "quoteHealth": {
+            "tradeDate": quote.get("trade_date"),
+            "runAt": quote.get("run_at"),
+            "coveragePct": quote.get("coverage_pct"),
+            "attempts": quote.get("attempts"),
+        },
+        "warnings": metrics.get("warnings") or [],
+        "reasonCodes": metrics.get("reason_codes") or [],
+        "gates": [
+            {
+                "key": gate.get("key", ""),
+                "label": gate.get("label", ""),
+                "value": gate.get("value"),
+                "requirement": gate.get("requirement", ""),
+                "passed": bool(gate.get("passed", False)),
+            }
+            for gate in metrics.get("gates", [])
+            if isinstance(gate, dict)
+        ],
+        "accounts": [
+            {
+                "accountKey": account.get("account_key", ""),
+                "name": account.get("name", ""),
+                "role": account.get("role", "challenger"),
+                "selectionPolicy": account.get("selection_policy"),
+                "totalReturnPct": account.get("total_return_pct", 0),
+                "maxDrawdownPct": account.get("max_drawdown_pct", 0),
+                "closedTrades": int(account.get("closed_trades", 0) or 0),
+                "openPositions": int(account.get("open_positions", 0) or 0),
+                "pendingOrders": int(account.get("pending_orders", 0) or 0),
+                "signalDates": int(account.get("signal_dates", 0) or 0),
+                "winRatePct": account.get("win_rate_pct"),
+                "avgNetReturnPct": account.get("avg_net_return_pct"),
+                "avgExcessReturnPct": account.get("avg_excess_return_pct"),
+            }
+            for account in metrics.get("accounts", [])
+            if isinstance(account, dict)
+        ],
+        "cohorts": [
+            {
+                "accountKey": cohort.get("account_key", ""),
+                "name": cohort.get("name", ""),
+                "signalDate": cohort.get("signal_date"),
+                "trades": int(cohort.get("trades", 0) or 0),
+                "closed": int(cohort.get("closed", 0) or 0),
+                "open": int(cohort.get("open", 0) or 0),
+                "avgNetReturnPct": cohort.get("avg_net_return_pct"),
+                "avgExcessReturnPct": cohort.get("avg_excess_return_pct"),
+            }
+            for cohort in metrics.get("cohorts", [])
+            if isinstance(cohort, dict)
+        ],
+    }
+
+
 def _paper_settlement_snapshot(conn):
     empty = {
         "version": "opening_paper_settlement_v1",
@@ -1963,6 +2102,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
         model_challengers = _model_challenger_snapshot(conn)
         strategy_challenger = _strategy_challenger_snapshot(conn)
         alpha_live = _alpha_live_snapshot(conn)
+        alpha_forward = _alpha_forward_snapshot(conn)
         research_health = _research_health_snapshot(conn)
         replay_attribution = _replay_attribution_snapshot(conn)
         portfolio_tournament = _portfolio_tournament_snapshot(conn, paper_accounts)
@@ -1981,6 +2121,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "learnabilityAudit": learnability_audit,
             "strategyChallenger": strategy_challenger,
             "alphaLive": alpha_live,
+            "alphaForward": alpha_forward,
             "candidates": candidates,
             "dailyCandidates": daily_candidates,
             "statusCounts": status_counts,

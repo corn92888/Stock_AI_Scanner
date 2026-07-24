@@ -13,6 +13,8 @@ CANDIDATE_EXECUTION_VERSION = "mode_aligned_after_costs_t3_v2"
 PAPER_POLICY_VERSION = "risk_budget_portfolio_v2"
 PORTFOLIO_TOURNAMENT_VERSION = "prospective_capital_tournament_v1"
 PORTFOLIO_TOURNAMENT_START_DATE = "2026-07-20"
+ALPHA_FORWARD_VERSION = "alpha_forward_validation_v1"
+ALPHA_FORWARD_START_DATE = "2026-07-24"
 CLOUD_EVIDENCE_SCHEMA_VERSION = "supabase_sqlite_snapshot_v1"
 CLOUD_CUTOVER_AUDIT_VERSION = "cloud_primary_cutover_audit_v1"
 HISTORICAL_REPLAY_VERSION = "point_in_time_eod_replay_v2"
@@ -996,12 +998,61 @@ def _create_alpha_live_tables(conn):
         """
     )
     conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS alpha_live_candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            code TEXT NOT NULL,
+            name TEXT,
+            industry TEXT,
+            signal_price REAL NOT NULL,
+            predicted_alpha REAL NOT NULL,
+            return_1d REAL,
+            return_20d REAL,
+            relative_return_20d REAL,
+            volume_ratio_5 REAL,
+            distance_ma20_pct REAL,
+            gap_open_pct REAL,
+            intraday_position REAL,
+            turnover_20d_billion REAL,
+            market_return_20d REAL,
+            market_above_ma200 REAL,
+            market_up_ratio REAL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (run_id) REFERENCES alpha_live_runs(id),
+            UNIQUE (run_id, code)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS alpha_forward_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            evaluated_at TEXT NOT NULL,
+            validation_version TEXT NOT NULL,
+            evidence_start_date TEXT NOT NULL,
+            state TEXT NOT NULL,
+            allow_new_positions INTEGER NOT NULL DEFAULT 1,
+            metrics_json TEXT NOT NULL,
+            UNIQUE (validation_version, evaluated_at)
+        )
+        """
+    )
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_alpha_live_runs_date "
         "ON alpha_live_runs(signal_date DESC, generated_at DESC)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_alpha_live_signals_run_rank "
         "ON alpha_live_signals(run_id, rank_order)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_alpha_live_candidates_run_score "
+        "ON alpha_live_candidates(run_id, predicted_alpha DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_alpha_forward_snapshots_time "
+        "ON alpha_forward_snapshots(validation_version, evaluated_at DESC)"
     )
 
 

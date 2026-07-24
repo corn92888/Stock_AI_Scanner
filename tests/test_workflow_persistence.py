@@ -117,7 +117,8 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertIn('"schedule": "40 7 * * 1-5"', vercel)
         self.assertIn('"schedule": "20 11 * * 1-5"', vercel)
         self.assertIn('SCHEDULED_CRON: ${{ inputs.scheduled_cron }}', workflow)
-        self.assertIn('INTRADAY_QUOTE_MAX_ATTEMPTS: "3"', workflow)
+        self.assertIn('INTRADAY_QUOTE_MAX_ATTEMPTS: "6"', workflow)
+        self.assertIn('INTRADAY_QUOTE_RETRY_DELAY_SECONDS: "60"', workflow)
 
     def test_vercel_cron_routes_fail_closed_with_cron_secret(self):
         for route_name in ("intraday", "daily", "market", "institutional"):

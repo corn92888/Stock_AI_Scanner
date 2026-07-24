@@ -98,6 +98,7 @@ def load_pending_candidates(
                         SELECT COUNT(DISTINCT later.trade_date)
                         FROM scan_runs later
                         WHERE later.trade_date > sr.trade_date
+                          AND LOWER(later.mode)='eod'
                     ) AS later_sessions,
                     ROW_NUMBER() OVER (
                         PARTITION BY p.run_id, p.code
