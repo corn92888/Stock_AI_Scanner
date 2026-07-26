@@ -169,6 +169,15 @@ const learnabilityDiagnosisLabels: Record<string, string> = {
   not_available: "尚未完成稽核",
 };
 
+const capitalIntentReasonLabels: Record<string, string> = {
+  governance_paused: "治理停止線已觸發",
+  capital_stage_shadow: "仍在影子觀察階段",
+  market_regime_blocked: "市場狀態不允許新增曝險",
+  liquidity_below_minimum: "流動性未達最低要求",
+  non_positive_predicted_alpha: "預測超額報酬不為正",
+  invalid_signal_price: "訊號價格無效",
+};
+
 const tooltipStyle = {
   background: "#151719",
   border: "1px solid #363a3d",
@@ -833,6 +842,8 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const strategyLab = snapshot.strategyChallenger;
   const alphaLive = snapshot.alphaLive;
   const alphaForward = snapshot.alphaForward;
+  const capital = snapshot.capitalGovernance;
+  const nextCapitalStage = capital.stages.find((stage) => stage.key === capital.nextStage);
   const isAlphaV2 = strategyLab.version === "alpha_liquid_universe_walk_forward_v2";
   const strategyLeader = strategyLab.candidateLeaderboard[0];
   const executionMatrix = useMemo(() => (
@@ -957,6 +968,41 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
           <Metric label="合格股票池覆蓋" value={`${decimal.format(alphaForward.universeCoveragePct)}%`} detail={`${number.format(alphaForward.candidatePoolRows)} 筆同日候選`} tone={alphaForward.universeCoveragePct >= 20 && alphaForward.dataQualityStatus !== "critical" ? "positive" : "warning"} icon={Database} />
         </div>
         <div className="table-scroll"><table className="data-table compact-table strategy-table"><thead><tr><th>治理門檻</th><th>目前值</th><th>要求</th><th>判定</th></tr></thead><tbody>{alphaForward.gates.length ? alphaForward.gates.map((gate) => <tr key={gate.key}><td><strong>{gate.label}</strong></td><td>{gate.value == null ? "--" : decimal.format(gate.value)}</td><td>{gate.requirement}</td><td><span className={`status-pill ${gate.passed ? "selected" : "neutral"}`}>{gate.passed ? "通過" : "累積中"}</span></td></tr>) : <tr><td colSpan={4}>下一次自動監控會建立治理門檻快照。</td></tr>}</tbody></table></div>
+      </section>
+
+      <section className="panel">
+        <PanelHeader
+          eyebrow="Staged capital control"
+          title="實盤資金階梯"
+          description="階段可以自動降級，但真單傳送永遠不會因模型分數自動開啟；每筆訂單仍需人工核准與持倉核對"
+          trailing={<span className={`status-pill ${capital.stage === "PRODUCTION" ? "selected" : capital.stage === "PAUSED" ? "blocked" : "neutral"}`}>{capital.stage}</span>}
+        />
+        <div className="readiness-callout">
+          <ShieldCheck size={19} />
+          <div>
+            <strong>{capital.stage === "PAUSED" ? "資金停止線已觸發，所有新單歸零" : capital.stage === "SHADOW" ? `目前只允許影子觀察；下一階段為 ${capital.nextStageLabel ?? "微型實盤"}` : `${capital.stageLabel}額度已通過，但仍只產生人工核准預覽`}</strong>
+            <p>參考資金 {money(capital.referenceCapital)} · 執行鏈 {capital.operationalReady ? "完整" : "尚未通過升級檢查"} · 持倉同步 {capital.positionLedgerConnected ? "已連線" : "未連線"} · 真單傳送固定為 {capital.liveTransmissionEnabled ? "開啟" : "關閉"}。{nextCapitalStage ? `下一階段需要 ${nextCapitalStage.minDecisionDays} 個決策日與 ${nextCapitalStage.minClosedTrades} 筆結案。` : "目前已位於最高資金階段。"}</p>
+          </div>
+        </div>
+        <div className="metrics-grid metrics-grid-five">
+          <Metric label="目前階段" value={capital.stageLabel} detail={capital.policyVersion} tone={capital.stage === "PAUSED" ? "danger" : capital.stage === "SHADOW" ? "warning" : "positive"} icon={Layers3} />
+          <Metric label="策略總曝險上限" value={rate(capital.maxStrategyWeight * 100)} detail={money(capital.referenceCapital * capital.maxStrategyWeight)} tone={capital.maxStrategyWeight > 0 ? "positive" : "warning"} icon={WalletCards} />
+          <Metric label="單檔上限" value={rate(capital.maxPositionWeight * 100)} detail={money(capital.referenceCapital * capital.maxPositionWeight)} tone={capital.maxPositionWeight > 0 ? "positive" : "warning"} icon={Target} />
+          <Metric label="最大同時持倉" value={`${capital.maxPositions} 檔`} detail="同產業另受既有曝險限制" tone={capital.maxPositions > 0 ? "positive" : "warning"} icon={SlidersHorizontal} />
+          <Metric label="可送真單" value={capital.liveTransmissionEnabled ? "YES" : "NO"} detail="尚未接券商與人工簽核" tone={capital.liveTransmissionEnabled ? "positive" : "warning"} icon={ShieldCheck} />
+        </div>
+        <div className="table-scroll">
+          <table className="data-table compact-table strategy-table">
+            <thead><tr><th>階段</th><th>決策日 / 結案</th><th>總曝險</th><th>單檔</th><th>持倉數</th><th>門檻進度</th><th>判定</th></tr></thead>
+            <tbody>{capital.stages.length ? capital.stages.map((stage) => <tr key={stage.key}><td><strong>{stage.label}</strong><br /><small>{stage.key}</small></td><td>{stage.minDecisionDays} / {stage.minClosedTrades}</td><td>{rate(stage.maxStrategyWeight * 100)}</td><td>{rate(stage.maxPositionWeight * 100)}</td><td>{stage.maxPositions}</td><td>{decimal.format(stage.progressPct)}%</td><td><span className={`status-pill ${stage.passed ? "selected" : "neutral"}`}>{stage.passed ? "通過" : "尚未通過"}</span></td></tr>) : <tr><td colSpan={7}>下一次自動流程會建立資金階梯快照。</td></tr>}</tbody>
+          </table>
+        </div>
+        <div className="table-scroll">
+          <table className="data-table compact-table strategy-table">
+            <thead><tr><th>訊號日</th><th>標的</th><th>訊號價</th><th>模型 T+10 超額</th><th>市場閘門</th><th>階段預覽權重</th><th>實際允許額度</th><th>股數</th><th>決策</th></tr></thead>
+            <tbody>{capital.orderIntents.length ? capital.orderIntents.map((intent) => <tr key={`${intent.signalDate}-${intent.code}`}><td>{intent.signalDate}</td><td><strong>{intent.code}</strong> {intent.name}<br /><small>{intent.industry}</small></td><td>{decimal.format(intent.signalPrice)}</td><td className={(intent.predictedAlpha ?? 0) > 0 ? "positive-text" : "negative-text"}>{pct(intent.predictedAlpha)}</td><td><span className={`status-pill ${intent.marketGatePassed ? "selected" : "blocked"}`}>{intent.marketGatePassed ? "通過" : "阻擋"}</span><br /><small>大盤 20 日 {pct(intent.marketContext.market_return_20d)}</small></td><td>{rate(intent.proposedWeight * 100)}</td><td>{money(intent.maxNotional)}<br /><small>{rate(intent.targetWeight * 100)}</small></td><td>{intent.suggestedQuantity || "--"}</td><td><span className={`status-pill ${intent.decisionStatus === "manual_approval_required" ? "selected" : "blocked"}`}>{intent.decisionStatus === "manual_approval_required" ? "等待人工核准" : "禁止建立真單"}</span><br /><small>{intent.reasonCodes.map((reason) => capitalIntentReasonLabels[reason] ?? reason).join("、") || "全部預交易檢查通過"}</small></td></tr>) : <tr><td colSpan={9}>目前沒有可建立的訂單意圖。</td></tr>}</tbody>
+          </table>
+        </div>
       </section>
 
       <section className="panel">

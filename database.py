@@ -15,6 +15,7 @@ PORTFOLIO_TOURNAMENT_VERSION = "prospective_capital_tournament_v1"
 PORTFOLIO_TOURNAMENT_START_DATE = "2026-07-20"
 ALPHA_FORWARD_VERSION = "alpha_forward_validation_v1"
 ALPHA_FORWARD_START_DATE = "2026-07-24"
+LIVE_CAPITAL_POLICY_VERSION = "alpha_capital_ladder_v1"
 CLOUD_EVIDENCE_SCHEMA_VERSION = "supabase_sqlite_snapshot_v1"
 CLOUD_CUTOVER_AUDIT_VERSION = "cloud_primary_cutover_audit_v1"
 HISTORICAL_REPLAY_VERSION = "point_in_time_eod_replay_v2"
@@ -1039,6 +1040,53 @@ def _create_alpha_live_tables(conn):
         """
     )
     conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS live_capital_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            evaluated_at TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            evidence_start_date TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            order_preview_enabled INTEGER NOT NULL DEFAULT 0,
+            live_transmission_enabled INTEGER NOT NULL DEFAULT 0,
+            reference_capital REAL NOT NULL,
+            max_strategy_weight REAL NOT NULL,
+            max_position_weight REAL NOT NULL,
+            max_positions INTEGER NOT NULL,
+            metrics_json TEXT NOT NULL,
+            UNIQUE (policy_version, evaluated_at)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS live_order_intents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id INTEGER NOT NULL,
+            signal_date TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            code TEXT NOT NULL,
+            name TEXT,
+            industry TEXT,
+            side TEXT NOT NULL,
+            signal_price REAL NOT NULL,
+            predicted_alpha REAL,
+            proposed_weight REAL NOT NULL,
+            target_weight REAL NOT NULL,
+            max_notional REAL NOT NULL,
+            suggested_quantity INTEGER NOT NULL DEFAULT 0,
+            decision_status TEXT NOT NULL,
+            approval_status TEXT NOT NULL,
+            validity_policy TEXT NOT NULL,
+            market_gate_passed INTEGER NOT NULL DEFAULT 0,
+            market_context_json TEXT NOT NULL DEFAULT '{}',
+            reason_codes_json TEXT NOT NULL DEFAULT '[]',
+            FOREIGN KEY (snapshot_id) REFERENCES live_capital_snapshots(id),
+            UNIQUE (snapshot_id, code)
+        )
+        """
+    )
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_alpha_live_runs_date "
         "ON alpha_live_runs(signal_date DESC, generated_at DESC)"
     )
@@ -1053,6 +1101,14 @@ def _create_alpha_live_tables(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_alpha_forward_snapshots_time "
         "ON alpha_forward_snapshots(validation_version, evaluated_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_live_capital_snapshots_time "
+        "ON live_capital_snapshots(policy_version, evaluated_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_live_order_intents_snapshot "
+        "ON live_order_intents(snapshot_id, decision_status, code)"
     )
 
 

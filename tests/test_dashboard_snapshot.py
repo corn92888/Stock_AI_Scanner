@@ -6,6 +6,7 @@ from pathlib import Path
 
 from database import get_connection, init_db, record_cloud_evidence_event
 from alpha_forward_monitor import run_alpha_forward_monitor
+from capital_governance import run_capital_governance
 from export_dashboard_snapshot import build_dashboard_snapshot, write_dashboard_snapshot
 from research_monitor import run_research_health_monitor
 
@@ -241,6 +242,22 @@ class DashboardSnapshotTests(unittest.TestCase):
             self.assertTrue(forward["allowNewPositions"])
             self.assertEqual(forward["minimumDecisionDays"], 120)
             self.assertGreater(len(forward["gates"]), 0)
+
+    def test_snapshot_exports_staged_capital_governance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scanner.db"
+            with get_connection(database) as conn:
+                init_db(conn)
+            run_alpha_forward_monitor(database)
+            run_capital_governance(database, reference_capital=500_000)
+
+            capital = build_dashboard_snapshot(database)["capitalGovernance"]
+
+            self.assertEqual(capital["stage"], "SHADOW")
+            self.assertEqual(capital["referenceCapital"], 500_000)
+            self.assertFalse(capital["liveTransmissionEnabled"])
+            self.assertEqual(capital["nextStage"], "MICRO")
+            self.assertEqual(len(capital["stages"]), 4)
 
     def test_snapshot_exports_paper_account_ledger(self):
         with tempfile.TemporaryDirectory() as directory:

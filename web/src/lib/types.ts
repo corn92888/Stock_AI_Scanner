@@ -619,6 +619,70 @@ export type AlphaForwardSnapshot = {
   }>;
 };
 
+export type CapitalGovernanceSnapshot = {
+  policyVersion: string;
+  evaluatedAt: string | null;
+  evidenceStartDate: string;
+  stage: "SHADOW" | "MICRO" | "LIMITED" | "PRODUCTION" | "PAUSED";
+  stageLabel: string;
+  orderPreviewEnabled: boolean;
+  liveTransmissionEnabled: boolean;
+  manualApprovalRequired: boolean;
+  positionLedgerConnected: boolean;
+  referenceCapital: number;
+  maxStrategyWeight: number;
+  maxPositionWeight: number;
+  maxPositions: number;
+  nextStage: "MICRO" | "LIMITED" | "PRODUCTION" | null;
+  nextStageLabel: string | null;
+  operationalReady: boolean;
+  reasonCodes: string[];
+  stages: Array<{
+    key: "SHADOW" | "MICRO" | "LIMITED" | "PRODUCTION";
+    label: string;
+    passed: boolean;
+    progressPct: number;
+    minDecisionDays: number;
+    minClosedTrades: number;
+    maxStrategyWeight: number;
+    maxPositionWeight: number;
+    maxPositions: number;
+    gates: Array<{
+      key: string;
+      label: string;
+      value: number | null;
+      requirement: string;
+      passed: boolean;
+    }>;
+  }>;
+  orderIntents: Array<{
+    signalDate: string;
+    generatedAt: string;
+    code: string;
+    name: string;
+    industry: string;
+    side: "BUY";
+    signalPrice: number;
+    predictedAlpha: number | null;
+    proposedWeight: number;
+    targetWeight: number;
+    maxNotional: number;
+    suggestedQuantity: number;
+    decisionStatus:
+      | "manual_approval_required"
+      | "blocked_by_pretrade_policy";
+    approvalStatus: "pending_manual" | "not_eligible";
+    validityPolicy: "next_trading_session_open_only";
+    marketGatePassed: boolean;
+    marketContext: {
+      market_return_20d?: number | null;
+      market_above_ma200?: number | null;
+      market_up_ratio?: number | null;
+    };
+    reasonCodes: string[];
+  }>;
+};
+
 export type PaperAccount = {
   accountKey: string;
   name: string;
@@ -913,6 +977,7 @@ export type DashboardSnapshot = {
   strategyChallenger: StrategyChallengerSnapshot;
   alphaLive: AlphaLiveSnapshot;
   alphaForward: AlphaForwardSnapshot;
+  capitalGovernance: CapitalGovernanceSnapshot;
   paperAccounts: PaperAccount[];
   paperEquity: PaperEquityPoint[];
   paperTrades: PaperTrade[];

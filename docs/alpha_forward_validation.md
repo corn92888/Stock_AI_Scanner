@@ -17,10 +17,16 @@ forward promotion sample and cannot authorize real-money execution.
 4. `research_monitor.py` verifies outcome maturity.
 5. `alpha_forward_monitor.py` evaluates data integrity, evidence gates, account
    performance, and the governance state.
-6. `export_dashboard_snapshot.py` publishes the same evidence to the dashboard.
+6. `capital_governance.py` converts the evidence into a staged capital limit and
+   auditable next-session order previews.
+7. `export_dashboard_snapshot.py` publishes the same evidence to the dashboard.
 
-Intraday automation repeats steps 4 through 6 so settlement, quote health, and the
+Intraday automation repeats steps 4 through 7 so settlement, quote health, and the
 dashboard remain current. It does not create a new EOD Alpha cohort.
+
+The staged limits and pre-trade controls are documented in
+[`live_capital_governance.md`](live_capital_governance.md). Live broker
+transmission remains disabled at every stage.
 
 ## Controls
 

@@ -156,6 +156,8 @@ class WorkflowPersistenceTests(unittest.TestCase):
         challenger_index = workflow.index("python strategy_challenger.py")
         paper_index = workflow.index("python paper_trading.py")
         monitor_index = workflow.index("python research_monitor.py")
+        alpha_monitor_index = workflow.index("python alpha_forward_monitor.py")
+        capital_index = workflow.index("python capital_governance.py")
         export_index = workflow.index("python export_dashboard_snapshot.py")
         self.assertIn("FORMAL_RECOMMENDATIONS_APPROVED", workflow)
         self.assertLess(maturation_index, training_index)
@@ -168,6 +170,20 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertLess(training_index, paper_index)
         self.assertLess(paper_index, monitor_index)
         self.assertLess(monitor_index, export_index)
+        self.assertLess(alpha_monitor_index, capital_index)
+        self.assertLess(capital_index, export_index)
+
+    def test_intraday_rechecks_capital_governance_before_export(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "intraday_scan.yml"
+        ).read_text()
+        alpha_monitor_index = workflow.index("python alpha_forward_monitor.py")
+        capital_index = workflow.index("python capital_governance.py")
+        export_index = workflow.index("python export_dashboard_snapshot.py")
+
+        self.assertIn("LIVE_CAPITAL_REFERENCE", workflow)
+        self.assertLess(alpha_monitor_index, capital_index)
+        self.assertLess(capital_index, export_index)
 
     def test_alpha_v2_model_is_governed_and_restored_before_daily_scan(self):
         research = (

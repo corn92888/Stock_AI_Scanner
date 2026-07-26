@@ -1174,6 +1174,142 @@ def _alpha_forward_snapshot(conn):
     }
 
 
+def _capital_governance_snapshot(conn):
+    empty = {
+        "policyVersion": "alpha_capital_ladder_v1",
+        "evaluatedAt": None,
+        "evidenceStartDate": "2026-07-24",
+        "stage": "SHADOW",
+        "stageLabel": "影子觀察",
+        "orderPreviewEnabled": False,
+        "liveTransmissionEnabled": False,
+        "manualApprovalRequired": True,
+        "positionLedgerConnected": False,
+        "referenceCapital": 1_000_000,
+        "maxStrategyWeight": 0,
+        "maxPositionWeight": 0,
+        "maxPositions": 0,
+        "nextStage": "MICRO",
+        "nextStageLabel": "微型實盤",
+        "operationalReady": False,
+        "reasonCodes": ["micro_live_evidence_not_reached"],
+        "stages": [],
+        "orderIntents": [],
+    }
+    if not _table_exists(conn, "live_capital_snapshots"):
+        return empty
+    row = conn.execute(
+        """
+        SELECT id, evaluated_at, metrics_json
+        FROM live_capital_snapshots
+        ORDER BY evaluated_at DESC, id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if not row:
+        return empty
+    metrics = _decode_object(row["metrics_json"])
+    intents = _read_records(
+        conn,
+        """
+        SELECT
+            signal_date AS signalDate,
+            generated_at AS generatedAt,
+            code,
+            name,
+            industry,
+            side,
+            signal_price AS signalPrice,
+            predicted_alpha AS predictedAlpha,
+            proposed_weight AS proposedWeight,
+            target_weight AS targetWeight,
+            max_notional AS maxNotional,
+            suggested_quantity AS suggestedQuantity,
+            decision_status AS decisionStatus,
+            approval_status AS approvalStatus,
+            validity_policy AS validityPolicy,
+            market_gate_passed AS marketGatePassed,
+            market_context_json AS marketContextJson,
+            reason_codes_json AS reasonCodesJson
+        FROM live_order_intents
+        WHERE snapshot_id=?
+        ORDER BY id
+        """,
+        (row["id"],),
+    )
+    for intent in intents:
+        intent["marketGatePassed"] = bool(intent.get("marketGatePassed"))
+        intent["marketContext"] = _decode_object(
+            intent.pop("marketContextJson", "")
+        )
+        intent["reasonCodes"] = _decode_list(intent.pop("reasonCodesJson", ""))
+    return {
+        **empty,
+        "policyVersion": metrics.get(
+            "policy_version", empty["policyVersion"]
+        ),
+        "evaluatedAt": row["evaluated_at"],
+        "evidenceStartDate": metrics.get(
+            "evidence_start_date", empty["evidenceStartDate"]
+        ),
+        "stage": metrics.get("stage", empty["stage"]),
+        "stageLabel": metrics.get("stage_label", empty["stageLabel"]),
+        "orderPreviewEnabled": bool(
+            metrics.get("order_preview_enabled", False)
+        ),
+        "liveTransmissionEnabled": bool(
+            metrics.get("live_transmission_enabled", False)
+        ),
+        "manualApprovalRequired": bool(
+            metrics.get("manual_approval_required", True)
+        ),
+        "positionLedgerConnected": bool(
+            metrics.get("position_ledger_connected", False)
+        ),
+        "referenceCapital": metrics.get(
+            "reference_capital", empty["referenceCapital"]
+        ),
+        "maxStrategyWeight": metrics.get("max_strategy_weight", 0),
+        "maxPositionWeight": metrics.get("max_position_weight", 0),
+        "maxPositions": int(metrics.get("max_positions", 0) or 0),
+        "nextStage": metrics.get("next_stage"),
+        "nextStageLabel": metrics.get("next_stage_label"),
+        "operationalReady": bool(metrics.get("operational_ready", False)),
+        "reasonCodes": metrics.get("reason_codes") or [],
+        "stages": [
+            {
+                "key": stage.get("key", ""),
+                "label": stage.get("label", ""),
+                "passed": bool(stage.get("passed", False)),
+                "progressPct": stage.get("progress_pct", 0),
+                "minDecisionDays": int(
+                    stage.get("min_decision_days", 0) or 0
+                ),
+                "minClosedTrades": int(
+                    stage.get("min_closed_trades", 0) or 0
+                ),
+                "maxStrategyWeight": stage.get("max_strategy_weight", 0),
+                "maxPositionWeight": stage.get("max_position_weight", 0),
+                "maxPositions": int(stage.get("max_positions", 0) or 0),
+                "gates": [
+                    {
+                        "key": gate.get("key", ""),
+                        "label": gate.get("label", ""),
+                        "value": gate.get("value"),
+                        "requirement": gate.get("requirement", ""),
+                        "passed": bool(gate.get("passed", False)),
+                    }
+                    for gate in stage.get("gates", [])
+                    if isinstance(gate, dict)
+                ],
+            }
+            for stage in metrics.get("stages", [])
+            if isinstance(stage, dict)
+        ],
+        "orderIntents": intents,
+    }
+
+
 def _paper_settlement_snapshot(conn):
     empty = {
         "version": "opening_paper_settlement_v1",
@@ -2103,6 +2239,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
         strategy_challenger = _strategy_challenger_snapshot(conn)
         alpha_live = _alpha_live_snapshot(conn)
         alpha_forward = _alpha_forward_snapshot(conn)
+        capital_governance = _capital_governance_snapshot(conn)
         research_health = _research_health_snapshot(conn)
         replay_attribution = _replay_attribution_snapshot(conn)
         portfolio_tournament = _portfolio_tournament_snapshot(conn, paper_accounts)
@@ -2122,6 +2259,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "strategyChallenger": strategy_challenger,
             "alphaLive": alpha_live,
             "alphaForward": alpha_forward,
+            "capitalGovernance": capital_governance,
             "candidates": candidates,
             "dailyCandidates": daily_candidates,
             "statusCounts": status_counts,

@@ -116,6 +116,13 @@ jobs:
       run: |
         python alpha_forward_monitor.py
 
+    - name: Re-evaluate staged live-capital governance
+      if: steps.gate.outputs.run == 'true'
+      env:
+        LIVE_CAPITAL_REFERENCE: ${{ vars.LIVE_CAPITAL_REFERENCE || '1000000' }}
+      run: |
+        python capital_governance.py
+
     - name: Export dashboard snapshot
       if: steps.gate.outputs.run == 'true'
       run: |

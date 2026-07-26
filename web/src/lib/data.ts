@@ -3,7 +3,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { AlphaForwardSnapshot, AlphaLiveSnapshot, CandidateLearnabilityAudit, CapitalTournament, CloudEvidence, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, PaperSettlement, ReplayAttribution, ResearchHealth, ResearchQuality, StrategyChallengerSnapshot, WorkflowRun } from "./types";
+import type { AlphaForwardSnapshot, AlphaLiveSnapshot, CandidateLearnabilityAudit, CapitalGovernanceSnapshot, CapitalTournament, CloudEvidence, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, PaperSettlement, ReplayAttribution, ResearchHealth, ResearchQuality, StrategyChallengerSnapshot, WorkflowRun } from "./types";
 
 const DEFAULT_DATA_URL =
   "https://raw.githubusercontent.com/corn92888/Stock_AI_Scanner/main/data/dashboard_snapshot.json";
@@ -241,6 +241,28 @@ const EMPTY_ALPHA_FORWARD: AlphaForwardSnapshot = {
   cohorts: [],
 };
 
+const EMPTY_CAPITAL_GOVERNANCE: CapitalGovernanceSnapshot = {
+  policyVersion: "alpha_capital_ladder_v1",
+  evaluatedAt: null,
+  evidenceStartDate: "2026-07-24",
+  stage: "SHADOW",
+  stageLabel: "影子觀察",
+  orderPreviewEnabled: false,
+  liveTransmissionEnabled: false,
+  manualApprovalRequired: true,
+  positionLedgerConnected: false,
+  referenceCapital: 1_000_000,
+  maxStrategyWeight: 0,
+  maxPositionWeight: 0,
+  maxPositions: 0,
+  nextStage: "MICRO",
+  nextStageLabel: "微型實盤",
+  operationalReady: false,
+  reasonCodes: ["micro_live_evidence_not_reached"],
+  stages: [],
+  orderIntents: [],
+};
+
 const EMPTY_CAPITAL_TOURNAMENT: CapitalTournament = {
   version: "prospective_capital_tournament_v1",
   evidenceStartDate: "2026-07-20",
@@ -391,6 +413,16 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
       gates: snapshot.alphaForward?.gates ?? [],
       accounts: snapshot.alphaForward?.accounts ?? [],
       cohorts: snapshot.alphaForward?.cohorts ?? [],
+    },
+    capitalGovernance: {
+      ...EMPTY_CAPITAL_GOVERNANCE,
+      ...(snapshot.capitalGovernance ?? {}),
+      reasonCodes: snapshot.capitalGovernance?.reasonCodes ?? [],
+      stages: (snapshot.capitalGovernance?.stages ?? []).map((stage) => ({
+        ...stage,
+        gates: stage.gates ?? [],
+      })),
+      orderIntents: snapshot.capitalGovernance?.orderIntents ?? [],
     },
     paperAccounts: (snapshot.paperAccounts ?? []).map((account) => ({
       ...account,
