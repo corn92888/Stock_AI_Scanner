@@ -284,7 +284,20 @@ def build_market_snapshot(market_context=None):
     df = pd.DataFrame(rows)
     if df.empty:
         return df, pd.DataFrame(), pd.DataFrame(), now
-    coverage = len(df) / len(yf_to_code) if yf_to_code else 0.0
+    coverage_codes = set(
+        market_context.get("coverage_codes") or yf_to_code.values()
+    ) if market_context else set(yf_to_code.values())
+    covered_codes = set(df["代號"].astype(str))
+    coverage = (
+        len(covered_codes & coverage_codes) / len(coverage_codes)
+        if coverage_codes
+        else 0.0
+    )
+    coverage_policy = (
+        market_context.get("coverage_policy", "all_listed_equities")
+        if market_context
+        else "all_listed_equities"
+    )
     if coverage < MIN_MARKET_COVERAGE:
         raise RuntimeError(
             f"全市場報價覆蓋率僅 {coverage:.1%}，低於 {MIN_MARKET_COVERAGE:.0%}，"
@@ -319,6 +332,8 @@ def build_market_snapshot(market_context=None):
             {"項目": "更新時間", "數值": now.strftime("%Y-%m-%d %H:%M:%S")},
             {"項目": "有效即時股票數", "數值": len(df)},
             {"項目": "報價覆蓋率", "數值": f"{coverage * 100:.2f}%"},
+            {"項目": "覆蓋母體", "數值": coverage_policy},
+            {"項目": "覆蓋母體股票數", "數值": len(coverage_codes)},
             {"項目": "上漲家數", "數值": int(df["上漲"].sum())},
             {"項目": "下跌家數", "數值": int(df["下跌"].sum())},
             {"項目": "上漲比例", "數值": f"{df['上漲'].mean() * 100:.2f}%"},

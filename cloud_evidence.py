@@ -56,6 +56,12 @@ class SupabaseConfig:
         key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
         if not url or not key:
             return None
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise EvidenceError(
+                "invalid_configuration",
+                "SUPABASE_URL must be a valid HTTPS project URL.",
+            )
         return cls(url=url, service_role_key=key)
 
 
@@ -77,6 +83,25 @@ def cloud_is_required():
 class SupabaseEvidenceClient:
     def __init__(self, config):
         self.config = config
+
+    def preflight(self):
+        hostname = urllib.parse.urlparse(self.config.url).hostname
+        if not hostname:
+            raise EvidenceError(
+                "invalid_configuration",
+                "SUPABASE_URL does not contain a valid hostname.",
+            )
+        try:
+            socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            raise EvidenceError(
+                "dns_resolution_failed",
+                (
+                    f"Supabase project hostname '{hostname}' could not be resolved; "
+                    "the project may be paused, deleted, or misconfigured."
+                ),
+            ) from exc
+        return True
 
     def _request(self, method, path, *, body=None, headers=None):
         request_headers = {
@@ -492,6 +517,7 @@ def push(database_path, *, archive_daily=False):
             "not_configured", "Supabase cloud evidence credentials are not configured."
         )
     client = SupabaseEvidenceClient(config)
+    client.preflight()
     with tempfile.TemporaryDirectory(prefix="scanner-evidence-") as directory:
         backup_path = Path(directory) / "stock_scanner.db"
         archive_path = Path(directory) / "stock_scanner.db.gz"
@@ -550,6 +576,7 @@ def restore(database_path, *, if_newer=False):
             "not_configured", "Supabase cloud evidence credentials are not configured."
         )
     client = SupabaseEvidenceClient(config)
+    client.preflight()
     manifest = client.get_live_snapshot()
     if not manifest or manifest.get("status") != "verified":
         raise EvidenceError(
@@ -720,6 +747,7 @@ def audit_cutover(
             "not_configured", "Supabase cloud evidence credentials are not configured."
         )
     client = SupabaseEvidenceClient(config)
+    client.preflight()
     snapshots = client.list_snapshots()
     live_manifest = next(
         (row for row in snapshots if row.get("snapshot_key") == LIVE_SNAPSHOT_KEY),
@@ -938,6 +966,7 @@ def prune_daily_snapshots(*, retention_days=DEFAULT_RETENTION_DAYS, apply=False)
             "not_configured", "Supabase cloud evidence credentials are not configured."
         )
     client = SupabaseEvidenceClient(config)
+    client.preflight()
     cutoff = dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(
         days=retention_days
     )

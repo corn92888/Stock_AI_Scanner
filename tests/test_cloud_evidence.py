@@ -29,6 +29,9 @@ class FakeSupabaseEvidenceClient:
         cls.events = []
         cls.audits = []
 
+    def preflight(self):
+        return True
+
     def upload(self, object_path, content):
         self.__class__.objects[object_path] = content
 
@@ -143,6 +146,35 @@ class CloudEvidenceTests(unittest.TestCase):
         with patch("urllib.request.urlopen", side_effect=failure):
             with self.assertRaises(cloud_evidence.EvidenceError) as context:
                 client.list_snapshots()
+
+        self.assertEqual(context.exception.code, "dns_resolution_failed")
+
+    def test_config_rejects_a_malformed_project_url(self):
+        with patch.dict(
+            os.environ,
+            {
+                "SUPABASE_URL": "missing.supabase.co",
+                "SUPABASE_SERVICE_ROLE_KEY": "service-role-test-key",
+            },
+        ):
+            with self.assertRaises(cloud_evidence.EvidenceError) as context:
+                cloud_evidence.SupabaseConfig.from_environment()
+
+        self.assertEqual(context.exception.code, "invalid_configuration")
+
+    def test_preflight_reports_an_unresolvable_project_hostname(self):
+        config = cloud_evidence.SupabaseConfig(
+            url="https://missing.supabase.co",
+            service_role_key="service-role-test-key",
+        )
+        client = cloud_evidence.SupabaseEvidenceClient(config)
+
+        with patch(
+            "cloud_evidence.socket.getaddrinfo",
+            side_effect=socket.gaierror(-2, "Name or service not known"),
+        ):
+            with self.assertRaises(cloud_evidence.EvidenceError) as context:
+                client.preflight()
 
         self.assertEqual(context.exception.code, "dns_resolution_failed")
 

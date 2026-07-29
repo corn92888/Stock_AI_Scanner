@@ -30,6 +30,11 @@ MIN_REALTIME_COVERAGE = 0.65
 DEFAULT_REALTIME_WORKERS = 6
 DEFAULT_QUOTE_MAX_ATTEMPTS = 6
 DEFAULT_QUOTE_RETRY_DELAY_SECONDS = 60
+DEFAULT_COVERAGE_MIN_TURNOVER_TWD = 50_000_000
+DEFAULT_COVERAGE_MIN_VOLUME_SHARES = 200_000
+DEFAULT_COVERAGE_MIN_SYMBOLS = 300
+DEFAULT_VOLUME_PROJECTION_MINUTES = 15
+COVERAGE_POLICY_VERSION = "previous_session_liquid_turnover_v1"
 
 
 class RealtimeCoverageError(RuntimeError):
@@ -213,16 +218,129 @@ def _safe_float(val, default=0.0):
         except: pass
     return default
 
-def get_projected_volume(current_volume_lots):
+def get_projected_volume(
+    current_volume_lots,
+    now=None,
+    min_elapsed_minutes=None,
+):
     """根據開盤時間推算今天收盤時的預估量 (張)"""
-    now = datetime.datetime.now(TAIPEI_TZ)
+    now = now or datetime.datetime.now(TAIPEI_TZ)
     market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
     elapsed_seconds = (now - market_open).total_seconds()
     total_seconds = 4.5 * 3600
-    
-    if elapsed_seconds <= 0: return 0
-    if elapsed_seconds >= total_seconds: return current_volume_lots
-    return current_volume_lots * (total_seconds / elapsed_seconds)
+
+    if elapsed_seconds <= 0:
+        return 0
+    if elapsed_seconds >= total_seconds:
+        return current_volume_lots
+    configured_floor = (
+        min_elapsed_minutes
+        if min_elapsed_minutes is not None
+        else os.getenv(
+            "INTRADAY_VOLUME_PROJECTION_MINUTES",
+            DEFAULT_VOLUME_PROJECTION_MINUTES,
+        )
+    )
+    floor_seconds = max(1, int(configured_floor)) * 60
+    effective_elapsed = max(elapsed_seconds, floor_seconds)
+    return current_volume_lots * (total_seconds / effective_elapsed)
+
+
+def build_liquid_coverage_universe(
+    history_data,
+    *,
+    min_turnover_twd=None,
+    min_volume_shares=None,
+    min_symbols=None,
+):
+    """Build a previous-session liquidity universe for quote quality checks."""
+    turnover_floor = float(
+        min_turnover_twd
+        if min_turnover_twd is not None
+        else os.getenv(
+            "INTRADAY_COVERAGE_MIN_TURNOVER_TWD",
+            DEFAULT_COVERAGE_MIN_TURNOVER_TWD,
+        )
+    )
+    volume_floor = float(
+        min_volume_shares
+        if min_volume_shares is not None
+        else os.getenv(
+            "INTRADAY_COVERAGE_MIN_VOLUME_SHARES",
+            DEFAULT_COVERAGE_MIN_VOLUME_SHARES,
+        )
+    )
+    minimum_count = max(
+        1,
+        int(
+            min_symbols
+            if min_symbols is not None
+            else os.getenv(
+                "INTRADAY_COVERAGE_MIN_SYMBOLS",
+                DEFAULT_COVERAGE_MIN_SYMBOLS,
+            )
+        ),
+    )
+    ranked = []
+    selected = []
+    for ticker, frame in history_data.items():
+        if frame is None or frame.empty or "Close" not in frame or "Volume" not in frame:
+            continue
+        recent = pd.DataFrame(
+            {
+                "Close": pd.to_numeric(frame["Close"], errors="coerce"),
+                "Volume": pd.to_numeric(frame["Volume"], errors="coerce"),
+            }
+        ).dropna()
+        recent = recent[(recent["Close"] > 0) & (recent["Volume"] >= 0)].tail(20)
+        if len(recent) < 10:
+            continue
+        median_volume = float(recent["Volume"].median())
+        median_turnover = float((recent["Close"] * recent["Volume"]).median())
+        ranked.append((ticker, median_turnover, median_volume))
+        if median_turnover >= turnover_floor and median_volume >= volume_floor:
+            selected.append(ticker)
+
+    if len(selected) < minimum_count:
+        ranked.sort(key=lambda row: (row[1], row[2], row[0]), reverse=True)
+        selected = [row[0] for row in ranked[:minimum_count]]
+    return selected
+
+
+def append_realtime_bars(history_data, realtime, yf_to_code, now=None):
+    """Return only symbols that received a valid current-session bar."""
+    captured_at = now or datetime.datetime.now(TAIPEI_TZ)
+    today_ts = pd.Timestamp(captured_at.date())
+    fresh_data = {}
+    fresh_codes = set()
+    for yf_ticker, history in history_data.items():
+        code = yf_to_code.get(yf_ticker)
+        rt = realtime.get(code) if code else None
+        if not rt or _safe_float(rt.get("Close")) <= 0:
+            continue
+        price = _safe_float(rt.get("Close"))
+        projected_lots = get_projected_volume(
+            _safe_float(rt.get("Volume")),
+            now=captured_at,
+        )
+        new_bar = pd.DataFrame(
+            {
+                "Open": [_safe_float(rt.get("Open"), price)],
+                "High": [_safe_float(rt.get("High"), price) or price],
+                "Low": [_safe_float(rt.get("Low"), price) or price],
+                "Close": [price],
+                "Volume": [projected_lots * 1000],
+            },
+            index=[today_ts],
+        )
+        common_cols = [column for column in new_bar.columns if column in history.columns]
+        if not common_cols:
+            continue
+        fresh_data[yf_ticker] = pd.concat(
+            [history[common_cols], new_bar[common_cols]]
+        )
+        fresh_codes.add(code)
+    return fresh_data, fresh_codes
 
 def twstock_realtime_get_with_timeout(chunk, timeout=TWSTOCK_TIMEOUT_SECONDS):
     executor = ThreadPoolExecutor(max_workers=1)
@@ -304,6 +422,7 @@ def fetch_realtime_prices(ticker_list, chunk_size=20, max_workers=None):
 def collect_realtime_prices(
     history_tickers,
     yf_to_code,
+    coverage_tickers=None,
     max_attempts=None,
     retry_delay_seconds=None,
     sleep_fn=time.sleep,
@@ -333,6 +452,14 @@ def collect_realtime_prices(
     )
     eligible_tickers = [ticker for ticker in history_tickers if yf_to_code.get(ticker)]
     eligible_codes = [yf_to_code[ticker] for ticker in eligible_tickers]
+    requested_coverage_tickers = coverage_tickers or eligible_tickers
+    coverage_codes = {
+        yf_to_code[ticker]
+        for ticker in requested_coverage_tickers
+        if yf_to_code.get(ticker)
+    }
+    if not coverage_codes:
+        coverage_codes = set(eligible_codes)
     realtime = {}
     coverage = 0.0
 
@@ -340,6 +467,19 @@ def collect_realtime_prices(
         missing_codes = [code for code in eligible_codes if code not in realtime]
         if missing_codes:
             realtime.update(fetch_realtime_prices(missing_codes, chunk_size=20))
+
+        covered = sum(
+            1
+            for code in coverage_codes
+            if code in realtime and _safe_float(realtime[code].get("Close")) > 0
+        )
+        coverage = covered / len(coverage_codes) if coverage_codes else 0.0
+        if coverage >= MIN_REALTIME_COVERAGE:
+            print(
+                f"📡 當日報價嘗試 {attempt}/{max_attempts}: 品質母體 "
+                f"{covered}/{len(coverage_codes)} 檔 ({coverage:.1%})"
+            )
+            return realtime, coverage, attempt
 
         missing_yf_tickers = [
             ticker
@@ -371,13 +511,13 @@ def collect_realtime_prices(
 
         covered = sum(
             1
-            for code in eligible_codes
+            for code in coverage_codes
             if code in realtime and _safe_float(realtime[code].get("Close")) > 0
         )
-        coverage = covered / len(eligible_codes) if eligible_codes else 0.0
+        coverage = covered / len(coverage_codes) if coverage_codes else 0.0
         print(
-            f"📡 當日報價嘗試 {attempt}/{max_attempts}: "
-            f"{covered}/{len(eligible_codes)} 檔 ({coverage:.1%})"
+            f"📡 當日報價嘗試 {attempt}/{max_attempts}: 品質母體 "
+            f"{covered}/{len(coverage_codes)} 檔 ({coverage:.1%})"
         )
         if coverage >= MIN_REALTIME_COVERAGE:
             return realtime, coverage, attempt
@@ -423,6 +563,11 @@ def run_intraday_scanner(send_telegram=True, now=None):
     history_seconds = time.perf_counter() - history_started
     print(f"📊 歷史基準下載: {len(all_stock_data)} 檔")
     print(f"⏱️  歷史資料階段: {history_seconds:.1f} 秒")
+    coverage_tickers = build_liquid_coverage_universe(all_stock_data)
+    print(
+        f"🧪 報價品質母體: {len(coverage_tickers)} 檔 "
+        f"({COVERAGE_POLICY_VERSION})"
+    )
     
     # 2. 抓取即時報價並推算預估量
     is_realtime_mode = False
@@ -432,47 +577,45 @@ def run_intraday_scanner(send_telegram=True, now=None):
         rt_prices, coverage, quote_attempts = collect_realtime_prices(
             list(all_stock_data.keys()),
             yf_to_code,
+            coverage_tickers=coverage_tickers,
         )
         realtime_seconds = time.perf_counter() - realtime_started
         quote_captured_at = datetime.datetime.now(TAIPEI_TZ)
         print(f"⏱️  即時報價階段: {realtime_seconds:.1f} 秒")
         
         if rt_prices:
-            today_ts = pd.Timestamp(datetime.datetime.now(TAIPEI_TZ).date())
-            appended = 0
-            for yf_ticker in list(all_stock_data.keys()):
-                code = yf_to_code.get(yf_ticker)
-                if code and code in rt_prices:
-                    rt = rt_prices[code]
-                    if rt['Close'] > 0:
-                        # 預算全天總成交量 (計算 MA 等指標才不會失真)
-                        proj_vol_lots = get_projected_volume(rt['Volume'])
-                        proj_vol_shares = proj_vol_lots * 1000  # 轉回股數供 logic.py 使用
-                        
-                        new_bar = pd.DataFrame({
-                            'Open': [rt['Open']],
-                            'High': [rt['High'] if rt['High'] > 0 else rt['Close']],
-                            'Low': [rt['Low'] if rt['Low'] > 0 else rt['Close']],
-                            'Close': [rt['Close']],
-                            'Volume': [proj_vol_shares]
-                        }, index=[today_ts])
-                        
-                        common_cols = [c for c in new_bar.columns if c in all_stock_data[yf_ticker].columns]
-                        all_stock_data[yf_ticker] = pd.concat([
-                            all_stock_data[yf_ticker][common_cols], 
-                            new_bar[common_cols]
-                        ])
-                        appended += 1
-            appended_coverage = appended / len(all_stock_data) if all_stock_data else 0.0
+            full_universe_size = len(all_stock_data)
+            fresh_stock_data, fresh_codes = append_realtime_bars(
+                all_stock_data,
+                rt_prices,
+                yf_to_code,
+                now=quote_captured_at,
+            )
+            coverage_codes = {
+                yf_to_code[ticker]
+                for ticker in coverage_tickers
+                if yf_to_code.get(ticker)
+            }
+            appended = len(fresh_stock_data)
+            appended_coverage = (
+                len(fresh_codes & coverage_codes) / len(coverage_codes)
+                if coverage_codes
+                else 0.0
+            )
+            all_market_coverage = (
+                appended / full_universe_size if full_universe_size else 0.0
+            )
             print(
                 f"✅ 已為 {appended} 檔追加盤中即時 K 棒 "
-                f"(帶預估量，覆蓋率 {appended_coverage:.1%})"
+                f"(品質母體 {appended_coverage:.1%} / "
+                f"全市場 {all_market_coverage:.1%})"
             )
             if appended_coverage < MIN_REALTIME_COVERAGE:
                 raise RealtimeCoverageError(
-                    f"可寫入的當日報價覆蓋率僅 {appended_coverage:.1%}，"
+                    f"流動性品質母體的當日報價覆蓋率僅 {appended_coverage:.1%}，"
                     f"低於 {MIN_REALTIME_COVERAGE:.0%}，拒絕產生可能失真的盤中報表。"
                 )
+            all_stock_data = fresh_stock_data
             coverage = appended_coverage
             is_realtime_mode = True
         else:
@@ -620,6 +763,9 @@ def run_intraday_scanner(send_telegram=True, now=None):
             "github_run_id": os.getenv("GITHUB_RUN_ID", ""),
             "github_run_attempt": os.getenv("GITHUB_RUN_ATTEMPT", ""),
             "realtime_coverage": round(coverage, 4),
+            "realtime_all_coverage": round(all_market_coverage, 4),
+            "coverage_universe_size": len(coverage_tickers),
+            "coverage_policy": COVERAGE_POLICY_VERSION,
             "history_seconds": round(history_seconds, 2),
             "realtime_seconds": round(realtime_seconds, 2),
             "quote_attempts": quote_attempts,
@@ -663,6 +809,9 @@ def run_intraday_scanner(send_telegram=True, now=None):
             "history": all_stock_data,
             "realtime": rt_prices,
             "captured_at": quote_captured_at,
+            "coverage_codes": sorted(coverage_codes),
+            "coverage_policy": COVERAGE_POLICY_VERSION,
+            "all_universe_size": full_universe_size,
         },
     }
 

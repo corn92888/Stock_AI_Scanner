@@ -3,6 +3,8 @@ import datetime as dt
 import json
 import math
 import os
+import urllib.parse
+import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -14,7 +16,8 @@ from database import DB_PATH, get_connection, init_db
 
 
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
-MODEL_VERSION = "global_regime_shadow_v1"
+MODEL_VERSION = "global_regime_shadow_v2"
+TWSE_MARKET_URL = "https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK"
 
 
 @dataclass(frozen=True)
@@ -150,6 +153,100 @@ class YFinanceProvider:
         return _split_download(daily, symbols), _split_download(intraday, symbols)
 
 
+def _twse_number(value):
+    return _finite(str(value).replace(",", "").replace("+", ""))
+
+
+def _twse_date(value):
+    year, month, day = (int(part) for part in str(value).split("/"))
+    return dt.date(year + 1911, month, day)
+
+
+class TwseOfficialCloseProvider:
+    def fetch(self, as_of):
+        if isinstance(as_of, dt.datetime):
+            as_of = as_of.astimezone(TAIPEI_TZ).date()
+        query = urllib.parse.urlencode(
+            {"date": as_of.strftime("%Y%m%d"), "response": "json"}
+        )
+        request = urllib.request.Request(
+            f"{TWSE_MARKET_URL}?{query}",
+            headers={"User-Agent": "Stock-AI-Scanner/1.0"},
+        )
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if payload.get("stat") != "OK":
+            return {}
+
+        fields = payload.get("fields") or []
+        rows = payload.get("data") or []
+        required = {"日期", "發行量加權股價指數", "漲跌點數"}
+        if not required.issubset(fields):
+            return {}
+        field_index = {field: index for index, field in enumerate(fields)}
+        eligible = []
+        for row in rows:
+            try:
+                trade_date = _twse_date(row[field_index["日期"]])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if trade_date <= as_of:
+                eligible.append((trade_date, row))
+        if not eligible:
+            return {}
+
+        trade_date, row = max(eligible, key=lambda item: item[0])
+        price = _twse_number(row[field_index["發行量加權股價指數"]])
+        change = _twse_number(row[field_index["漲跌點數"]])
+        if price is None or change is None:
+            return {}
+        previous_close = price - change
+        pct_change = (
+            change / previous_close * 100 if previous_close not in (None, 0) else None
+        )
+        market_at = dt.datetime.combine(
+            trade_date,
+            dt.time(13, 30),
+            tzinfo=TAIPEI_TZ,
+        )
+        return {
+            "taiex": {
+                "marketAt": market_at.isoformat(),
+                "price": price,
+                "previousClose": previous_close,
+                "pctChange": pct_change,
+                "shockZ": pct_change / 1.5 if pct_change is not None else None,
+                "sourceName": "TWSE official close",
+                "sourceTier": "official_close",
+                "dataStatus": "closed",
+                "sessionStatus": "closed",
+            }
+        }
+
+
+def apply_official_closes(observations, official_closes, now):
+    official_closes = official_closes or {}
+    for observation in observations:
+        official = official_closes.get(observation["key"])
+        if not official or not official.get("marketAt"):
+            continue
+        official_date = _market_date(official["marketAt"], "Asia/Taipei")
+        observed_date = _market_date(observation.get("marketAt"), "Asia/Taipei")
+        if observed_date is not None and official_date < observed_date:
+            continue
+        observation.update(official)
+        market_time = dt.datetime.fromisoformat(official["marketAt"])
+        observation["latencyMinutes"] = max(
+            0,
+            (
+                now.astimezone(dt.timezone.utc)
+                - market_time.astimezone(dt.timezone.utc)
+            ).total_seconds()
+            / 60,
+        )
+    return observations
+
+
 def _observation(instrument, daily, intraday, now):
     daily = daily.copy() if daily is not None else pd.DataFrame()
     intraday = intraday.copy() if intraday is not None else pd.DataFrame()
@@ -260,7 +357,12 @@ def _label(score, positive, neutral, negative):
     return neutral
 
 
-def build_market_snapshot(daily_frames, intraday_frames, now=None):
+def build_market_snapshot(
+    daily_frames,
+    intraday_frames,
+    now=None,
+    official_closes=None,
+):
     now = now or dt.datetime.now(TAIPEI_TZ)
     if now.tzinfo is None:
         now = now.replace(tzinfo=TAIPEI_TZ)
@@ -273,6 +375,7 @@ def build_market_snapshot(daily_frames, intraday_frames, now=None):
         )
         for instrument in INSTRUMENTS
     ]
+    apply_official_closes(observations, official_closes, now)
 
     weighted = [
         row for row in observations
@@ -291,6 +394,25 @@ def build_market_snapshot(daily_frames, intraday_frames, now=None):
             else 0
         )
     score = float(np.clip(50 + sum(row["impactPoints"] for row in weighted), 0, 100))
+    local_rows = [
+        row
+        for row in observations
+        if row["key"] in {"taiex", "otc"} and row["shockZ"] is not None
+    ]
+    local_score = 50.0
+    if local_rows:
+        local_score = float(
+            np.clip(
+                50
+                + np.mean(
+                    [float(np.clip(row["shockZ"], -3, 3)) for row in local_rows]
+                )
+                * 8,
+                0,
+                100,
+            )
+        )
+    taiwan_bias_score = float(np.clip(score * 0.5 + local_score * 0.5, 0, 100))
 
     components = []
     for key, (name, members) in COMPONENTS.items():
@@ -334,22 +456,42 @@ def build_market_snapshot(daily_frames, intraday_frames, now=None):
     warnings = []
     if "taifex_night" in missing:
         warnings.append("台指期夜盤尚未接入授權行情，未納入風險分數。")
-    warnings.append("目前跨市場行情使用延遲備援資料，只供研究情境判讀，不直接改寫正式選股排名。")
+    has_official_close = any(
+        row["sourceTier"] == "official_close" for row in observations
+    )
+    if has_official_close:
+        warnings.append(
+            "台灣加權收盤採 TWSE 官方資料；其餘跨市場行情仍使用延遲備援資料。"
+        )
+    else:
+        warnings.append(
+            "目前跨市場行情使用延遲備援資料，只供研究情境判讀，不直接改寫正式選股排名。"
+        )
 
     return {
         "modelVersion": MODEL_VERSION,
         "snapshotAt": now.astimezone(TAIPEI_TZ).isoformat(timespec="seconds"),
         "score": score,
         "regimeLabel": _label(score, "風險偏多", "中性盤整", "風險偏空"),
-        "taiwanBiasScore": score,
-        "taiwanBiasLabel": _label(score, "正向", "中性", "負向"),
+        "taiwanBiasScore": taiwan_bias_score,
+        "taiwanBiasLabel": _label(
+            taiwan_bias_score,
+            "正向",
+            "中性",
+            "負向",
+        ),
         "components": components,
         "drivers": drivers,
         "instruments": observations,
         "quality": {
-            "status": "fallback_delayed",
+            "status": (
+                "official_close_plus_fallback"
+                if has_official_close
+                else "fallback_delayed"
+            ),
             "coveragePct": coverage_pct,
             "activeFreshPct": active_fresh_pct,
+            "taiwanLocalScore": local_score,
             "available": len(available),
             "total": len(observations),
             "missingKeys": missing,
@@ -359,10 +501,30 @@ def build_market_snapshot(daily_frames, intraday_frames, now=None):
     }
 
 
-def collect_global_market(provider=None, now=None):
+def collect_global_market(provider=None, now=None, official_provider=None):
+    now = now or dt.datetime.now(TAIPEI_TZ)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=TAIPEI_TZ)
     provider = provider or YFinanceProvider()
     daily_frames, intraday_frames = provider.fetch(INSTRUMENTS)
-    snapshot = build_market_snapshot(daily_frames, intraday_frames, now=now)
+    official_closes = {}
+    try:
+        official_provider = official_provider or TwseOfficialCloseProvider()
+        official_closes = official_provider.fetch(now)
+    except (
+        OSError,
+        TimeoutError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        ValueError,
+    ) as exc:
+        print(f"TWSE official close unavailable: {exc}")
+    snapshot = build_market_snapshot(
+        daily_frames,
+        intraday_frames,
+        now=now,
+        official_closes=official_closes,
+    )
     if not any(row["price"] is not None for row in snapshot["instruments"]):
         raise RuntimeError("Global market provider returned no usable prices")
     return snapshot
@@ -394,7 +556,7 @@ def persist_global_market(snapshot, db_path=DB_PATH):
                 (
                     instrument.key, instrument.symbol, instrument.name, instrument.group,
                     instrument.region, instrument.asset_class, instrument.currency,
-                    instrument.source_name, instrument.source_tier,
+                    row["sourceName"], row["sourceTier"],
                     instrument.impact_direction, instrument.model_weight,
                     json.dumps({"timezone": instrument.timezone,
                                 "session_open": instrument.session_open,
