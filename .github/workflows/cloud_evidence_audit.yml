@@ -26,6 +26,7 @@ jobs:
       group: stock-scanner-automation
       cancel-in-progress: false
     env:
+      GH_TOKEN: ${{ github.token }}
       CLOUD_EVIDENCE_MODE: ${{ vars.CLOUD_EVIDENCE_MODE || 'dual_write' }}
       CLOUD_EVIDENCE_REQUIRED: ${{ vars.CLOUD_EVIDENCE_REQUIRED || 'false' }}
       EVIDENCE_WORKFLOW: cloud_evidence_audit

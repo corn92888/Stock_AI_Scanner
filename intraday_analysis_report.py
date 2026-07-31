@@ -650,9 +650,25 @@ def generate_intraday_analysis_report(
     if run_scanner:
         import intraday_scanner
 
-        scanner_result = intraday_scanner.run_intraday_scanner(
-            send_telegram=send_raw_scanner_telegram
-        )
+        try:
+            scanner_result = intraday_scanner.run_intraday_scanner(
+                send_telegram=send_raw_scanner_telegram
+            )
+        except intraday_scanner.RealtimeCoverageError as exc:
+            if os.getenv("INTRADAY_AUTOMATION_SLOT", "").strip() != "09:00":
+                raise
+            message = (
+                "09:00 開盤行情仍在暖機，報價覆蓋不足，"
+                "本時段不產生選股或模擬委託；09:30 將以完整行情重新決策。"
+            )
+            result = _skipped_result("opening_quote_warmup", message)
+            if send_telegram:
+                sent, telegram_message = send_telegram_message(
+                    f"{message}\n資料品質：{exc}"
+                )
+                result["telegram_sent"] = sent
+                result["telegram_message"] = telegram_message
+            return result
         if scanner_result.get("status") != "completed":
             return _skipped_result(
                 scanner_result.get("reason", "scanner_skipped"),

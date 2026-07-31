@@ -23,18 +23,24 @@ class WorkflowPersistenceTests(unittest.TestCase):
             self.assertIn("bash persist_scanner_data.sh", workflow)
             self.assertIn("SUPABASE_SERVICE_ROLE_KEY", workflow)
             self.assertIn("CLOUD_EVIDENCE_MODE", workflow)
+            self.assertIn("GH_TOKEN: ${{ github.token }}", workflow)
             self.assertNotIn("git pull --rebase origin main\n            git push", workflow)
 
     def test_snapshot_is_exported_after_main_is_synchronized(self):
         script = (ROOT / "persist_scanner_data.sh").read_text()
         pull_index = script.index("git pull --rebase origin main")
-        cloud_index = script.index('python cloud_evidence.py "${cloud_args[@]}"')
-        export_index = script.index("python export_dashboard_snapshot.py")
+        cloud_index = script.index(
+            '"$python_bin" cloud_evidence.py "${cloud_args[@]}"'
+        )
+        export_index = script.index('"$python_bin" export_dashboard_snapshot.py')
+        release_index = script.index('gh release upload "$release_tag"')
         commit_index = script.index('git commit -m "$commit_message"')
 
         self.assertLess(pull_index, export_index)
         self.assertLess(pull_index, cloud_index)
         self.assertLess(cloud_index, export_index)
+        self.assertLess(export_index, release_index)
+        self.assertLess(release_index, commit_index)
         self.assertLess(export_index, commit_index)
 
     def test_daily_workflow_creates_one_verified_archive_per_trade_date(self):
@@ -43,18 +49,21 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertIn('CLOUD_EVIDENCE_ARCHIVE: "true"', workflow)
         self.assertIn("cloud_args+=(--archive-daily)", script)
         self.assertIn("cloud_args+=(--required)", script)
-        self.assertIn("cloud_evidence.py prune", script)
+        self.assertIn('"$python_bin" cloud_evidence.py prune', script)
         self.assertIn("CLOUD_EVIDENCE_RETENTION_DAYS", script)
 
-    def test_cloud_primary_requires_restore_and_stops_committing_sqlite(self):
+    def test_dual_write_uses_a_release_asset_instead_of_a_git_sqlite_blob(self):
         restore_script = (ROOT / "restore_scanner_data.sh").read_text()
         persist_script = (ROOT / "persist_scanner_data.sh").read_text()
         gitignore = (ROOT / ".gitignore").read_text()
 
         self.assertIn("cloud_primary)", restore_script)
-        self.assertIn("args=(restore --database data/stock_scanner.db --required)", restore_script)
+        self.assertIn('args=(restore --database "$database_path" --required)', restore_script)
+        self.assertIn("scanner-live-data-v1", restore_script)
+        self.assertIn('gh release download "$release_tag"', restore_script)
         self.assertIn('if [ "$migration_mode" = "dual_write" ]; then', persist_script)
-        self.assertIn("git add data/stock_scanner.db", persist_script)
+        self.assertIn('gh release upload "$release_tag"', persist_script)
+        self.assertNotIn("git add data/stock_scanner.db", persist_script)
         self.assertIn("data/stock_scanner.db", gitignore)
 
     def test_manual_cloud_audit_publishes_a_machine_readable_gate(self):

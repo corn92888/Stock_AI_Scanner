@@ -20,7 +20,11 @@ from intraday_analysis_report import (
     generate_intraday_analysis_report,
     validate_report_freshness,
 )
-from intraday_scanner import is_intraday_scan_window, run_intraday_scanner
+from intraday_scanner import (
+    RealtimeCoverageError,
+    is_intraday_scan_window,
+    run_intraday_scanner,
+)
 
 
 class AutomationGuardTests(unittest.TestCase):
@@ -160,6 +164,40 @@ class IntradaySafetyTests(unittest.TestCase):
         monitor.assert_not_called()
         self.assertEqual(result["status"], "skipped")
         self.assertEqual(result["scan_path"], "")
+
+    def test_opening_coverage_failure_defers_to_the_next_slot(self):
+        with patch.dict(
+            "os.environ",
+            {"INTRADAY_AUTOMATION_SLOT": "09:00"},
+        ), patch(
+            "intraday_scanner.run_intraday_scanner",
+            side_effect=RealtimeCoverageError("coverage 28.9%"),
+        ), patch("market_monitor.run_market_monitor") as monitor:
+            result = generate_intraday_analysis_report(
+                run_scanner=True,
+                run_market_monitor=True,
+                send_telegram=False,
+            )
+
+        monitor.assert_not_called()
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "opening_quote_warmup")
+        self.assertIn("09:30", result["text"])
+
+    def test_non_opening_coverage_failure_remains_fatal(self):
+        with patch.dict(
+            "os.environ",
+            {"INTRADAY_AUTOMATION_SLOT": "10:00"},
+        ), patch(
+            "intraday_scanner.run_intraday_scanner",
+            side_effect=RealtimeCoverageError("coverage 28.9%"),
+        ):
+            with self.assertRaises(RealtimeCoverageError):
+                generate_intraday_analysis_report(
+                    run_scanner=True,
+                    run_market_monitor=True,
+                    send_telegram=False,
+                )
 
     def test_report_pipeline_passes_scanner_market_context_to_monitor(self):
         market_context = {"realtime": {"2330": {"Close": 100}}}

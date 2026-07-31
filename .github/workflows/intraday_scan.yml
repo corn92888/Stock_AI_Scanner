@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
+      GH_TOKEN: ${{ github.token }}
       PYTHONUNBUFFERED: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       CLOUD_EVIDENCE_MODE: ${{ vars.CLOUD_EVIDENCE_MODE || 'dual_write' }}

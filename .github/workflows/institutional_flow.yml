@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      GH_TOKEN: ${{ github.token }}
       CLOUD_EVIDENCE_MODE: ${{ vars.CLOUD_EVIDENCE_MODE || 'dual_write' }}
       CLOUD_EVIDENCE_REQUIRED: ${{ vars.CLOUD_EVIDENCE_REQUIRED || 'false' }}
       EVIDENCE_WORKFLOW: institutional_flow
