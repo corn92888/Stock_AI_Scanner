@@ -14,20 +14,23 @@ else
   python_bin="python3"
 fi
 
+gh_release() {
+  if [ -n "${GITHUB_REPOSITORY:-}" ]; then
+    gh release "$@" --repo "$GITHUB_REPOSITORY"
+  else
+    gh release "$@"
+  fi
+}
+
 restore_release_snapshot() {
   local release_dir
-  local repository_args=()
   release_dir="$(mktemp -d)"
-  if [ -n "${GITHUB_REPOSITORY:-}" ]; then
-    repository_args=(--repo "$GITHUB_REPOSITORY")
-  fi
 
   if ! command -v gh >/dev/null 2>&1; then
     rm -rf "$release_dir"
     return 1
   fi
-  if ! gh release download "$release_tag" \
-    "${repository_args[@]}" \
+  if ! gh_release download "$release_tag" \
     --pattern "$release_asset" \
     --dir "$release_dir" \
     --clobber; then

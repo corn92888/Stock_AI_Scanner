@@ -14,6 +14,14 @@ else
   python_bin="python3"
 fi
 
+gh_release() {
+  if [ -n "${GITHUB_REPOSITORY:-}" ]; then
+    gh release "$@" --repo "$GITHUB_REPOSITORY"
+  else
+    gh release "$@"
+  fi
+}
+
 case "$migration_mode" in
   dual_write|cloud_primary) ;;
   *)
@@ -94,10 +102,6 @@ fi
 
 if [ "$migration_mode" = "dual_write" ]; then
   release_archive="$snapshot_dir/$release_asset"
-  repository_args=()
-  if [ -n "${GITHUB_REPOSITORY:-}" ]; then
-    repository_args=(--repo "$GITHUB_REPOSITORY")
-  fi
   "$python_bin" - data/stock_scanner.db "$release_archive" <<'PY'
 import gzip
 import sqlite3
@@ -117,14 +121,12 @@ with database.open("rb") as source, gzip.open(archive, "wb", compresslevel=9) as
     while chunk := source.read(1024 * 1024):
         target.write(chunk)
 PY
-  if gh release view "$release_tag" "${repository_args[@]}" >/dev/null 2>&1; then
-    gh release upload "$release_tag" \
-      "${repository_args[@]}" \
+  if gh_release view "$release_tag" >/dev/null 2>&1; then
+    gh_release upload "$release_tag" \
       "$release_archive#$release_asset" \
       --clobber
   else
-    gh release create "$release_tag" \
-      "${repository_args[@]}" \
+    gh_release create "$release_tag" \
       "$release_archive#$release_asset" \
       --target main \
       --title "Scanner Live Data" \

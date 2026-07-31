@@ -33,7 +33,7 @@ class WorkflowPersistenceTests(unittest.TestCase):
             '"$python_bin" cloud_evidence.py "${cloud_args[@]}"'
         )
         export_index = script.index('"$python_bin" export_dashboard_snapshot.py')
-        release_index = script.index('gh release upload "$release_tag"')
+        release_index = script.index('gh_release upload "$release_tag"')
         commit_index = script.index('git commit -m "$commit_message"')
 
         self.assertLess(pull_index, export_index)
@@ -60,9 +60,11 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertIn("cloud_primary)", restore_script)
         self.assertIn('args=(restore --database "$database_path" --required)', restore_script)
         self.assertIn("scanner-live-data-v1", restore_script)
-        self.assertIn('gh release download "$release_tag"', restore_script)
+        self.assertIn('gh_release download "$release_tag"', restore_script)
         self.assertIn('if [ "$migration_mode" = "dual_write" ]; then', persist_script)
-        self.assertIn('gh release upload "$release_tag"', persist_script)
+        self.assertIn('gh_release upload "$release_tag"', persist_script)
+        self.assertNotIn("repository_args", restore_script)
+        self.assertNotIn("repository_args", persist_script)
         self.assertNotIn("git add data/stock_scanner.db", persist_script)
         self.assertIn("data/stock_scanner.db", gitignore)
 
