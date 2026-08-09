@@ -79,6 +79,12 @@ jobs:
           --dir data/models \
           --clobber
 
+    - name: Capture official point-in-time fundamentals
+      if: steps.gate.outputs.run == 'true'
+      continue-on-error: true
+      run: |
+        python fundamental_ingestion.py --fail-on-empty
+
     - name: Run scanner
       if: steps.gate.outputs.run == 'true'
       env:
@@ -159,6 +165,11 @@ jobs:
       if: steps.gate.outputs.run == 'true'
       run: |
         python learning_cycle.py
+
+    - name: Materialize approved shadow challengers
+      if: steps.gate.outputs.run == 'true'
+      run: |
+        python challenger_factory.py
 
     - name: Evaluate staged live-capital governance
       if: steps.gate.outputs.run == 'true'

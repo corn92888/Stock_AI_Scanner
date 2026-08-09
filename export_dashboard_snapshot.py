@@ -705,8 +705,112 @@ def _empty_learning_cycle():
         "metrics": {},
         "attributions": [],
         "hypotheses": [],
+        "fundamentalData": {
+            "status": "not_run",
+            "snapshotDate": None,
+            "finishedAt": None,
+            "sourceVersion": "",
+            "observations": 0,
+            "codes": 0,
+            "latestKnownAt": None,
+            "valuationDate": None,
+            "revenuePeriod": None,
+            "epsPeriod": None,
+            "warnings": [],
+        },
+        "challengers": [],
         "recentCycles": [],
     }
+
+
+def _fundamental_data_snapshot(conn):
+    result = _empty_learning_cycle()["fundamentalData"]
+    if not _table_exists(conn, "fundamental_ingestion_runs"):
+        return result
+    latest = conn.execute(
+        """
+        SELECT * FROM fundamental_ingestion_runs
+        ORDER BY snapshot_date DESC, finished_at DESC, id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    counts = conn.execute(
+        """
+        SELECT COUNT(*) AS observations, COUNT(DISTINCT code) AS codes,
+               MAX(known_at) AS latest_known_at
+        FROM fundamental_observations
+        """
+    ).fetchone()
+    if not latest:
+        return {
+            **result,
+            "observations": int(counts["observations"] or 0),
+            "codes": int(counts["codes"] or 0),
+            "latestKnownAt": counts["latest_known_at"],
+        }
+    return {
+        "status": latest["status"],
+        "snapshotDate": latest["snapshot_date"],
+        "finishedAt": latest["finished_at"],
+        "sourceVersion": latest["source_version"],
+        "observations": int(counts["observations"] or 0),
+        "codes": int(counts["codes"] or 0),
+        "latestKnownAt": counts["latest_known_at"],
+        "valuationDate": latest["valuation_date"],
+        "revenuePeriod": latest["revenue_period"],
+        "epsPeriod": latest["eps_period"],
+        "warnings": _decode_list(latest["warnings_json"]),
+    }
+
+
+def _learning_challengers_snapshot(conn):
+    if not _table_exists(conn, "challenger_experiments"):
+        return []
+    rows = _read_records(
+        conn,
+        """
+        WITH latest_run AS (
+            SELECT cer.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY cer.experiment_id
+                       ORDER BY cer.started_at DESC, cer.id DESC
+                   ) AS row_number
+            FROM challenger_experiment_runs cer
+        )
+        SELECT ce.hypothesis_key AS hypothesisKey,
+               ce.experiment_version AS experimentVersion,
+               ce.factory_version AS factoryVersion,
+               ce.target_layer AS targetLayer,
+               ce.status, ce.approval_status AS approvalStatus,
+               ce.approved_scope AS approvedScope,
+               ce.approved_by AS approvedBy, ce.approved_at AS approvedAt,
+               ce.data_start_date AS dataStartDate,
+               ce.data_end_date AS dataEndDate,
+               ce.sample_count AS sampleCount, ce.trade_dates AS tradeDates,
+               ce.feature_coverage_pct AS featureCoveragePct,
+               ce.metrics_json AS metricsJson,
+               ce.rejection_reasons_json AS rejectionReasonsJson,
+               ce.updated_at AS updatedAt,
+               latest_run.report_markdown AS reportMarkdown
+        FROM challenger_experiments ce
+        LEFT JOIN latest_run
+          ON latest_run.experiment_id=ce.id AND latest_run.row_number=1
+        WHERE ce.id=(
+            SELECT ce2.id FROM challenger_experiments ce2
+            WHERE ce2.hypothesis_key=ce.hypothesis_key
+            ORDER BY ce2.updated_at DESC, ce2.id DESC LIMIT 1
+        )
+        ORDER BY CASE ce.approval_status WHEN 'approved' THEN 0 ELSE 1 END,
+                 ce.updated_at DESC, ce.hypothesis_key
+        LIMIT 20
+        """,
+    )
+    for row in rows:
+        row["metrics"] = _decode_object(row.pop("metricsJson", ""))
+        row["rejectionReasons"] = _decode_list(
+            row.pop("rejectionReasonsJson", "")
+        )
+    return rows
 
 
 def _learning_cycle_snapshot(conn):
@@ -725,7 +829,10 @@ def _learning_cycle_snapshot(conn):
         """
     ).fetchone()
     if not latest:
-        return _empty_learning_cycle()
+        empty = _empty_learning_cycle()
+        empty["fundamentalData"] = _fundamental_data_snapshot(conn)
+        empty["challengers"] = _learning_challengers_snapshot(conn)
+        return empty
     attributions = _read_records(
         conn,
         """
@@ -753,7 +860,7 @@ def _learning_cycle_snapshot(conn):
                updated_at AS updatedAt,
                CASE WHEN latest_cycle_id=? THEN 1 ELSE 0 END AS seenThisCycle
         FROM learning_hypotheses
-        WHERE status IN ('proposed', 'approved', 'testing')
+        WHERE status IN ('proposed', 'approved', 'approved_for_shadow', 'testing')
         ORDER BY priority DESC, updated_at DESC, hypothesis_key
         LIMIT 30
         """,
@@ -790,6 +897,8 @@ def _learning_cycle_snapshot(conn):
         "metrics": _decode_object(latest["metrics_json"]),
         "attributions": attributions,
         "hypotheses": hypotheses,
+        "fundamentalData": _fundamental_data_snapshot(conn),
+        "challengers": _learning_challengers_snapshot(conn),
         "recentCycles": recent_cycles,
     }
 

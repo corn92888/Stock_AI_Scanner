@@ -116,6 +116,41 @@ export type LearningHypothesis = {
   seenThisCycle: boolean;
 };
 
+export type FundamentalDataReadiness = {
+  status: "not_run" | "completed" | "partial" | "failed" | string;
+  snapshotDate: string | null;
+  finishedAt: string | null;
+  sourceVersion: string;
+  observations: number;
+  codes: number;
+  latestKnownAt: string | null;
+  valuationDate: string | null;
+  revenuePeriod: string | null;
+  epsPeriod: string | null;
+  warnings: string[];
+};
+
+export type GovernedChallenger = {
+  hypothesisKey: string;
+  experimentVersion: string;
+  factoryVersion: string;
+  targetLayer: string;
+  status: "draft" | "collecting_data" | "evaluated" | "promotion_review" | "implementation_required" | string;
+  approvalStatus: "pending" | "approved" | string;
+  approvedScope: string | null;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  dataStartDate: string | null;
+  dataEndDate: string | null;
+  sampleCount: number;
+  tradeDates: number;
+  featureCoveragePct: number | null;
+  metrics: Record<string, unknown>;
+  rejectionReasons: string[];
+  updatedAt: string;
+  reportMarkdown: string | null;
+};
+
 export type LearningCycle = {
   cycleVersion: string;
   cycleDate: string | null;
@@ -170,6 +205,9 @@ export type LearningCycle = {
       pbFeatureRows: number;
       revenueFeatureRows: number;
       epsFeatureRows: number;
+      epsLatestFeatureRows: number;
+      pitFundamentalFeatureRows: number;
+      pitFundamentalTradeDates: number;
     };
     qualityExclusions?: Array<{
       tradeDate: string;
@@ -192,6 +230,8 @@ export type LearningCycle = {
   };
   attributions: LearningCycleAttribution[];
   hypotheses: LearningHypothesis[];
+  fundamentalData: FundamentalDataReadiness;
+  challengers: GovernedChallenger[];
   recentCycles: Array<{
     cycleDate: string;
     generatedAt: string;

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "shadow_challenger_approvals_v1",
+  "approvals": [
+    {
+      "hypothesisKey": "point_in_time_fundamentals_v1",
+      "scope": "shadow_research_only",
+      "approvedBy": "project_owner",
+      "approvedAt": "2026-08-10",
+      "implementation": "pit_fundamentals_ablation_v1",
+      "minimumSamples": 300,
+      "minimumTradeDates": 30,
+      "minimumCoveragePct": 60.0,
+      "notes": "Approved for implementation and shadow evaluation only; this is not approval for production ranking or live capital."
+    }
+  ]
+}

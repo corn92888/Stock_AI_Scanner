@@ -199,6 +199,23 @@ const learningLayerLabels: Record<string, string> = {
   portfolio: "組合層",
 };
 
+const governedChallengerStatusLabels: Record<string, string> = {
+  draft: "待審查",
+  collecting_data: "累積前瞻資料",
+  implementation_required: "等待實作",
+  evaluated: "未通過樣本外門檻",
+  promotion_review: "等待人工升級審查",
+  rejected: "已拒絕",
+};
+
+const governedChallengerReasonLabels: Record<string, string> = {
+  insufficient_mature_samples: "成熟樣本不足",
+  insufficient_trade_dates: "獨立交易日不足",
+  insufficient_point_in_time_coverage: "時間點基本面覆蓋不足",
+  insufficient_walk_forward_folds: "樣本外分折不足",
+  fundamentals_do_not_add_oof_excess_return: "基本面尚未增加樣本外超額報酬",
+};
+
 const capitalIntentReasonLabels: Record<string, string> = {
   governance_paused: "治理停止線已觸發",
   capital_stage_shadow: "仍在影子觀察階段",
@@ -877,7 +894,8 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const learningForward = learning.metrics.alphaForward ?? {};
   const learningSelected = learning.metrics.recentSelected;
   const learningRejected = learning.metrics.recentRejected;
-  const learningGaps = learning.metrics.dataGaps;
+  const fundamentalData = learning.fundamentalData;
+  const governedChallengers = learning.challengers.slice(0, 8);
   const activeHypotheses = learning.hypotheses
     .filter((row) => row.seenThisCycle)
     .slice(0, 8);
@@ -960,13 +978,25 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
         <Metric label="前瞻最大回撤" value={pct(learningForward.max_drawdown_pct)} detail={`PSR ${learningForward.probabilistic_sharpe == null ? "--" : decimal.format(learningForward.probabilistic_sharpe)}`} tone={(learningForward.max_drawdown_pct ?? -99) > -6 ? "positive" : "danger"} icon={TrendingDown} />
         <Metric label="近期選股增值" value={pct(learning.metrics.selectionNetLift)} detail={`入選 ${learningSelected?.samples ?? 0} / 落選 ${learningRejected?.samples ?? 0} 筆`} tone={(learning.metrics.selectionNetLift ?? 0) > 0 ? "positive" : "danger"} icon={Target} />
         <Metric label="本輪研究假設" value={number.format(activeHypotheses.length)} detail="只建立 challenger 提案" tone={activeHypotheses.length ? "warning" : "info"} icon={Bot} />
-        <Metric label="基本面特徵" value={number.format(learningGaps?.fundamentalObservations ?? 0)} detail={`${number.format(learningGaps?.newsEvidence ?? 0)} 筆新聞證據`} tone={(learningGaps?.fundamentalObservations ?? 0) > 0 ? "positive" : "danger"} icon={Database} />
+        <Metric label="官方基本面觀測" value={number.format(fundamentalData.observations)} detail={`${number.format(fundamentalData.codes)} 檔 · 最新 ${fundamentalData.snapshotDate ?? "--"}`} tone={fundamentalData.status === "completed" ? "positive" : fundamentalData.status === "partial" ? "warning" : "danger"} icon={Database} />
+      </section>
+
+      <section className="analysis-grid equal-grid">
+        <div className="panel">
+          <PanelHeader eyebrow="Point-in-time fundamentals" title="官方基本面資料閘門" description="TWSE／TPEx 估值、月營收與季度 EPS；只允許決策當下已知的版本進入模型" trailing={<span className={`status-pill ${fundamentalData.status === "completed" ? "selected" : fundamentalData.status === "partial" ? "neutral" : "blocked"}`}>{fundamentalData.status === "completed" ? "OFFICIAL READY" : fundamentalData.status === "partial" ? "PARTIAL" : "NOT READY"}</span>} />
+          <div className="table-scroll"><table className="data-table compact-table"><tbody><tr><th>估值資料日</th><td><strong>{fundamentalData.valuationDate ?? "--"}</strong></td><th>月營收期間</th><td><strong>{fundamentalData.revenuePeriod ?? "--"}</strong></td></tr><tr><th>EPS 期間</th><td><strong>{fundamentalData.epsPeriod ?? "--"}</strong></td><th>最後得知時間</th><td>{fundamentalData.latestKnownAt ?? "--"}</td></tr><tr><th>官方觀測</th><td>{number.format(fundamentalData.observations)} 筆</td><th>股票覆蓋</th><td>{number.format(fundamentalData.codes)} 檔</td></tr></tbody></table></div>
+          {fundamentalData.warnings.length ? <div className="readiness-callout"><CircleAlert size={18} /><div><strong>資料來源部分缺漏</strong><p>{fundamentalData.warnings.slice(0, 3).join("；")}</p></div></div> : null}
+        </div>
+        <div className="panel">
+          <PanelHeader eyebrow="Versioned challenger lab" title="已治理 Challenger 實驗" description="版本、核准範圍、前瞻覆蓋與失敗原因均固定保存；不會直接改正式排名" trailing={<span className="record-count">{governedChallengers.length} 組</span>} />
+          {governedChallengers.length ? <div className="table-scroll"><table className="data-table compact-table"><thead><tr><th>實驗</th><th>核准</th><th>成熟證據</th><th>狀態</th></tr></thead><tbody>{governedChallengers.map((row) => <tr key={row.experimentVersion}><td><strong>{row.hypothesisKey}</strong><br /><small>{row.experimentVersion.slice(-10)}</small></td><td><span className={`status-pill ${row.approvalStatus === "approved" ? "selected" : "neutral"}`}>{row.approvalStatus === "approved" ? "SHADOW" : "待審查"}</span><br /><small>{row.approvedScope ?? "未核准"}</small></td><td><strong>{number.format(row.sampleCount)} 筆 / {number.format(row.tradeDates)} 日</strong><br /><small>PIT 覆蓋 {row.featureCoveragePct == null ? "--" : `${decimal.format(row.featureCoveragePct)}%`}</small></td><td><span className={`status-pill ${row.status === "promotion_review" ? "selected" : row.status === "evaluated" || row.status === "rejected" ? "blocked" : "neutral"}`}>{governedChallengerStatusLabels[row.status] ?? row.status}</span><br /><small>{row.rejectionReasons.slice(0, 2).map((reason) => governedChallengerReasonLabels[reason] ?? reason).join("、") || "尚無拒絕原因"}</small></td></tr>)}</tbody></table></div> : <div className="empty-state">研究提案尚未轉成版本化 Challenger。</div>}
+        </div>
       </section>
 
       <section className="analysis-grid equal-grid">
         <div className="panel">
           <PanelHeader eyebrow="Pre-registered hypotheses" title="下一輪 Challenger 假設" description="優先級來自資料缺口、前瞻風險與成熟樣本；提案不等於啟用" trailing={<span className="record-count">{activeHypotheses.length} 項</span>} />
-          {activeHypotheses.length ? <div className="table-scroll"><table className="data-table compact-table"><thead><tr><th>優先</th><th>研究層</th><th>假設</th><th>累積出現</th><th>狀態</th></tr></thead><tbody>{activeHypotheses.map((row) => <tr key={row.hypothesisKey}><td><strong>{row.priority}</strong></td><td>{learningLayerLabels[row.targetLayer] ?? row.targetLayer}</td><td><strong>{row.title}</strong><br /><small>{row.rationale}</small></td><td>{row.occurrences}</td><td><span className="status-pill neutral">{row.status === "proposed" ? "待審查" : row.status}</span></td></tr>)}</tbody></table></div> : <div className="empty-state">目前沒有達到最低證據要求的新假設。</div>}
+          {activeHypotheses.length ? <div className="table-scroll"><table className="data-table compact-table"><thead><tr><th>優先</th><th>研究層</th><th>假設</th><th>累積出現</th><th>狀態</th></tr></thead><tbody>{activeHypotheses.map((row) => <tr key={row.hypothesisKey}><td><strong>{row.priority}</strong></td><td>{learningLayerLabels[row.targetLayer] ?? row.targetLayer}</td><td><strong>{row.title}</strong><br /><small>{row.rationale}</small></td><td>{row.occurrences}</td><td><span className={`status-pill ${row.status === "approved_for_shadow" ? "selected" : "neutral"}`}>{row.status === "proposed" ? "待審查" : row.status === "approved_for_shadow" ? "已核准 Shadow 實驗" : row.status}</span></td></tr>)}</tbody></table></div> : <div className="empty-state">目前沒有達到最低證據要求的新假設。</div>}
         </div>
         <div className="panel">
           <PanelHeader eyebrow="Failure attribution" title="近期主要負向切片" description="只顯示至少 10 筆成熟正式入選；小樣本不會觸發自動改版" trailing={<span className="record-count">{negativeAttributions.length} 組</span>} />

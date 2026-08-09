@@ -116,7 +116,14 @@
   ```bash
   venv/bin/python3 learning_cycle.py
   ```
-  報告寫入 `Reports/research_cycles/` 並同步顯示在儀表板「AI 與資料」。假設只會登記為 `proposed`，不會自動改動正式規則、資金權重或下單設定。完整契約見 [`docs/automated_learning_cycle.md`](docs/automated_learning_cycle.md)。
+  報告寫入 `Reports/research_cycles/` 並同步顯示在儀表板「AI 與資料」。假設預設只會登記為 `proposed`；只有版本控制內 `config/shadow_challenger_approvals.json` 明確核准的項目，才會轉成可稽核的 shadow 實驗，仍不能自動改動正式規則、資金權重或下單設定。完整契約見 [`docs/automated_learning_cycle.md`](docs/automated_learning_cycle.md)。
+
+  每日流程會先擷取 TWSE／TPEx 官方估值、月營收與季度 EPS，保存來源雜湊、發布時間及系統首次得知時間：
+  ```bash
+  venv/bin/python3 fundamental_ingestion.py --fail-on-empty
+  venv/bin/python3 challenger_factory.py
+  ```
+  第一個版本化實驗為 `point_in_time_fundamentals_v1`。它只比較同一批樣本與相同 walk-forward 分折下的基礎模型和基本面增強模型；至少累積 300 筆成熟樣本、30 個獨立交易日與 60% 完整時間點覆蓋（估值、月營收、EPS 均具備）前，狀態固定為 `collecting_data`。完整資料契約見 [`docs/point_in_time_fundamentals.md`](docs/point_in_time_fundamentals.md)。
 
   自 `2026-07-20` 起，盤後流程另以同一批不可變的前瞻 EOD 預測建立 Top 3 等權、Top 5 分散與 Top 10 分數加權三個獨立資金帳戶。競賽不回填舊結果；挑戰者至少需要 120 個新決策日、100 筆結案、正的成本後報酬與大盤超額，並同時勝過 Top 3 的報酬及回撤效率，才會進入人工審查，永不自動接管正式策略。完整凍結契約見 [`docs/prospective_capital_tournament.md`](docs/prospective_capital_tournament.md)。
 

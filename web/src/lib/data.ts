@@ -162,6 +162,20 @@ const EMPTY_LEARNING_CYCLE: LearningCycle = {
   metrics: {},
   attributions: [],
   hypotheses: [],
+  fundamentalData: {
+    status: "not_run",
+    snapshotDate: null,
+    finishedAt: null,
+    sourceVersion: "",
+    observations: 0,
+    codes: 0,
+    latestKnownAt: null,
+    valuationDate: null,
+    revenuePeriod: null,
+    epsPeriod: null,
+    warnings: [],
+  },
+  challengers: [],
   recentCycles: [],
 };
 
@@ -406,6 +420,12 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
       metrics: snapshot.learningCycle?.metrics ?? {},
       attributions: snapshot.learningCycle?.attributions ?? [],
       hypotheses: snapshot.learningCycle?.hypotheses ?? [],
+      fundamentalData: {
+        ...EMPTY_LEARNING_CYCLE.fundamentalData,
+        ...(snapshot.learningCycle?.fundamentalData ?? {}),
+        warnings: snapshot.learningCycle?.fundamentalData?.warnings ?? [],
+      },
+      challengers: snapshot.learningCycle?.challengers ?? [],
       recentCycles: snapshot.learningCycle?.recentCycles ?? [],
     },
     learnabilityAudit: {

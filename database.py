@@ -23,6 +23,9 @@ HISTORICAL_REPLAY_EXECUTION_VERSION = "next_open_after_costs_t3_v1"
 HISTORICAL_ATTRIBUTION_VERSION = "replay_attribution_v1"
 INSTITUTIONAL_FEATURE_VERSION = "institutional_flow_v1_conservative_lag"
 LEARNING_CYCLE_VERSION = "automated_research_cycle_v1"
+FUNDAMENTAL_SOURCE_VERSION = "official_tw_fundamentals_v1"
+CHALLENGER_FACTORY_VERSION = "governed_hypothesis_challenger_v1"
+PIT_FUNDAMENTAL_FEATURE_VERSION = "candidate_features_v3_pit_fundamentals"
 
 
 def get_taipei_now():
@@ -215,8 +218,20 @@ def init_db(conn):
         "ON learning_hypotheses(status, priority DESC, updated_at DESC)"
     )
     conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_challenger_experiments_status "
+        "ON challenger_experiments(approval_status, status, updated_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_challenger_runs_experiment "
+        "ON challenger_experiment_runs(experiment_id, started_at DESC)"
+    )
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_fundamentals_code_known "
         "ON fundamental_observations(code, known_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_fundamental_ingestion_time "
+        "ON fundamental_ingestion_runs(snapshot_date DESC, finished_at DESC)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_model_validation_version_date "
@@ -519,6 +534,10 @@ def _create_quant_tables(conn):
             revenue_yoy REAL,
             revenue_mom REAL,
             eps_ttm REAL,
+            eps_latest REAL,
+            fundamental_age_days REAL,
+            fundamental_available INTEGER NOT NULL DEFAULT 0,
+            fundamental_complete INTEGER NOT NULL DEFAULT 0,
             news_score REAL,
             catalyst_score REAL,
             risk_score REAL,
@@ -549,6 +568,29 @@ def _create_quant_tables(conn):
             raw_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL,
             UNIQUE (code, source_name, period_end, published_at)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS fundamental_ingestion_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_date TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            source_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            twse_records INTEGER NOT NULL DEFAULT 0,
+            tpex_records INTEGER NOT NULL DEFAULT 0,
+            merged_codes INTEGER NOT NULL DEFAULT 0,
+            persisted_observations INTEGER NOT NULL DEFAULT 0,
+            valuation_date TEXT,
+            revenue_period TEXT,
+            eps_period TEXT,
+            payloads_json TEXT NOT NULL DEFAULT '{}',
+            warnings_json TEXT NOT NULL DEFAULT '[]',
+            git_commit TEXT,
+            UNIQUE (snapshot_date, source_version)
         )
         """
     )
@@ -1038,6 +1080,55 @@ def _create_learning_cycle_tables(conn):
             updated_at TEXT NOT NULL,
             FOREIGN KEY (first_cycle_id) REFERENCES research_cycles(id),
             FOREIGN KEY (latest_cycle_id) REFERENCES research_cycles(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS challenger_experiments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            hypothesis_key TEXT NOT NULL,
+            experiment_version TEXT NOT NULL,
+            factory_version TEXT NOT NULL,
+            target_layer TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            approval_status TEXT NOT NULL DEFAULT 'pending',
+            approved_scope TEXT,
+            approved_by TEXT,
+            approved_at TEXT,
+            config_json TEXT NOT NULL,
+            config_fingerprint TEXT NOT NULL,
+            data_start_date TEXT,
+            data_end_date TEXT,
+            sample_count INTEGER NOT NULL DEFAULT 0,
+            trade_dates INTEGER NOT NULL DEFAULT 0,
+            feature_coverage_pct REAL,
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            rejection_reasons_json TEXT NOT NULL DEFAULT '[]',
+            artifact_path TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (hypothesis_key) REFERENCES learning_hypotheses(hypothesis_key),
+            UNIQUE (hypothesis_key, experiment_version)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS challenger_experiment_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            experiment_id INTEGER NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            status TEXT NOT NULL,
+            sample_count INTEGER NOT NULL DEFAULT 0,
+            trade_dates INTEGER NOT NULL DEFAULT 0,
+            feature_coverage_pct REAL,
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            rejection_reasons_json TEXT NOT NULL DEFAULT '[]',
+            report_markdown TEXT NOT NULL DEFAULT '',
+            git_commit TEXT,
+            FOREIGN KEY (experiment_id) REFERENCES challenger_experiments(id)
         )
         """
     )
@@ -1587,6 +1678,25 @@ def _migrate_quant_tables(conn):
             "point_in_time_valid": "INTEGER NOT NULL DEFAULT 0",
             "feature_lineage_json": "TEXT NOT NULL DEFAULT '{}'",
             "quality_flags_json": "TEXT NOT NULL DEFAULT '[]'",
+            "eps_latest": "REAL",
+            "fundamental_age_days": "REAL",
+            "fundamental_available": "INTEGER NOT NULL DEFAULT 0",
+            "fundamental_complete": "INTEGER NOT NULL DEFAULT 0",
+        },
+    )
+    _ensure_columns(
+        conn,
+        "fundamental_observations",
+        {
+            "market": "TEXT",
+            "valuation_date": "TEXT",
+            "revenue_period": "TEXT",
+            "eps_period": "TEXT",
+            "eps_latest": "REAL",
+            "source_url": "TEXT",
+            "payload_sha256": "TEXT",
+            "quality_flags_json": "TEXT NOT NULL DEFAULT '[]'",
+            "ingestion_run_id": "INTEGER",
         },
     )
     _ensure_columns(

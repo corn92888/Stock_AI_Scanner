@@ -12,6 +12,7 @@ import pandas as pd
 from database import (
     CANDIDATE_EXECUTION_VERSION,
     DB_PATH,
+    PIT_FUNDAMENTAL_FEATURE_VERSION,
     get_connection,
     get_git_commit,
     get_taipei_now,
@@ -129,7 +130,7 @@ def _known_fundamentals(conn, code, decision_at):
     return None
 
 
-def candidate_to_feature(event, fundamentals=None):
+def candidate_to_feature(event, fundamentals=None, feature_version=FEATURE_VERSION):
     snapshot = _decode_json(event.get("snapshot_json"), {})
     strategies = {
         str(value).strip().lower()
@@ -156,6 +157,29 @@ def candidate_to_feature(event, fundamentals=None):
         quality_flags.append("missing_signal_price")
     if fundamentals is None:
         quality_flags.append("fundamentals_unavailable_at_decision")
+    fundamental_known = _timestamp((fundamentals or {}).get("known_at"))
+    fundamental_age_days = (
+        float((decision_stamp - fundamental_known) / pd.Timedelta(days=1))
+        if decision_stamp is not None
+        and fundamental_known is not None
+        and fundamental_known <= decision_stamp
+        else None
+    )
+    has_valuation = any(
+        _safe_float((fundamentals or {}).get(name)) is not None
+        for name in ("pe", "pb")
+    )
+    has_revenue = any(
+        _safe_float((fundamentals or {}).get(name)) is not None
+        for name in ("revenue_yoy", "revenue_mom")
+    )
+    has_eps = any(
+        _safe_float((fundamentals or {}).get(name)) is not None
+        for name in ("eps_ttm", "eps_latest")
+    )
+    fundamental_complete = bool(has_valuation and has_revenue and has_eps)
+    if fundamentals is not None and not fundamental_complete:
+        quality_flags.append("fundamentals_incomplete_at_decision")
 
     feature_values = {
         "candidate_score": _safe_float(event.get("score")),
@@ -184,6 +208,10 @@ def candidate_to_feature(event, fundamentals=None):
         "revenue_yoy": _safe_float((fundamentals or {}).get("revenue_yoy")),
         "revenue_mom": _safe_float((fundamentals or {}).get("revenue_mom")),
         "eps_ttm": _safe_float((fundamentals or {}).get("eps_ttm")),
+        "eps_latest": _safe_float((fundamentals or {}).get("eps_latest")),
+        "fundamental_age_days": fundamental_age_days,
+        "fundamental_available": int(fundamentals is not None),
+        "fundamental_complete": int(fundamental_complete),
     }
     lineage = {
         "scanner_snapshot": {"known_at": known_at, "source": "candidate_event"},
@@ -192,7 +220,11 @@ def candidate_to_feature(event, fundamentals=None):
                 "known_at": fundamentals.get("known_at"),
                 "published_at": fundamentals.get("published_at"),
                 "period_end": fundamentals.get("period_end"),
+                "valuation_date": fundamentals.get("valuation_date"),
+                "revenue_period": fundamentals.get("revenue_period"),
+                "eps_period": fundamentals.get("eps_period"),
                 "source": fundamentals.get("source_name"),
+                "payload_sha256": fundamentals.get("payload_sha256"),
             }
             if fundamentals
             else None
@@ -207,7 +239,7 @@ def candidate_to_feature(event, fundamentals=None):
         "decision_at": normalized_decision_at,
         "known_at": known_at,
         "point_in_time_valid": int(decision_stamp is not None),
-        "feature_version": FEATURE_VERSION,
+        "feature_version": feature_version,
         **feature_values,
         "feature_lineage_json": json.dumps(
             lineage, ensure_ascii=False, sort_keys=True
@@ -226,7 +258,12 @@ def candidate_to_feature(event, fundamentals=None):
     }
 
 
-def build_feature_snapshots(db_path=DB_PATH, run_id=None, missing_only=True):
+def build_feature_snapshots(
+    db_path=DB_PATH,
+    run_id=None,
+    missing_only=True,
+    feature_version=FEATURE_VERSION,
+):
     where = []
     params = []
     join_sql = (
@@ -236,7 +273,7 @@ def build_feature_snapshots(db_path=DB_PATH, run_id=None, missing_only=True):
         else ""
     )
     if missing_only:
-        params.append(FEATURE_VERSION)
+        params.append(feature_version)
         where.append("fs.id IS NULL")
     if run_id is not None:
         params.append(int(run_id))
@@ -264,7 +301,13 @@ def build_feature_snapshots(db_path=DB_PATH, run_id=None, missing_only=True):
                 event["code"],
                 event.get("as_of") or event.get("run_at"),
             )
-            records.append(candidate_to_feature(event, fundamentals=fundamentals))
+            records.append(
+                candidate_to_feature(
+                    event,
+                    fundamentals=fundamentals,
+                    feature_version=feature_version,
+                )
+            )
         columns = [
             "run_id", "signal_id", "code", "as_of", "decision_at",
             "known_at", "point_in_time_valid", "feature_version",
@@ -276,6 +319,8 @@ def build_feature_snapshots(db_path=DB_PATH, run_id=None, missing_only=True):
             "industry_up_ratio", "industry_avg_return", "industry_heat",
             "market_up_ratio", "market_avg_return", "market_median_return",
             "pe", "pb", "revenue_yoy", "revenue_mom", "eps_ttm",
+            "eps_latest", "fundamental_age_days", "fundamental_available",
+            "fundamental_complete",
             "feature_lineage_json", "quality_flags_json", "features_json",
             "created_at",
         ]

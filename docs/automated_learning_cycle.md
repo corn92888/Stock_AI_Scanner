@@ -38,11 +38,14 @@ does not inflate hypothesis occurrence counts.
 
 ## Governance contract
 
-Automated hypotheses remain `proposed`. A separate implementation must explicitly
-approve and convert a proposal into a version-controlled challenger experiment.
-That challenger must still pass purged walk-forward validation, reserved holdout,
-and a new prospective paper cohort. No path in this cycle updates formal ranking,
-capital weights, or broker transmission.
+Automated hypotheses remain `proposed` unless a matching shadow-only approval is
+checked into `config/shadow_challenger_approvals.json`. `challenger_factory.py`
+materializes each proposal as an immutable, fingerprinted experiment version and
+records every execution. An approval authorizes implementation and shadow
+evaluation only; it is not a production promotion. The challenger must still pass
+purged walk-forward validation, reserved holdout, and a new prospective paper
+cohort. No path in this cycle updates formal ranking, capital weights, or broker
+transmission.
 
 ## Run locally
 

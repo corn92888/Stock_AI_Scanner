@@ -10,6 +10,7 @@ from database import (
     CANDIDATE_EXECUTION_VERSION,
     DB_PATH,
     LEARNING_CYCLE_VERSION,
+    PIT_FUNDAMENTAL_FEATURE_VERSION,
     get_connection,
     get_git_commit,
     get_taipei_now,
@@ -377,9 +378,21 @@ def _data_gaps(conn):
         """
         SELECT COUNT(*) AS rows,
                COUNT(pe) AS pe_rows, COUNT(pb) AS pb_rows,
-               COUNT(revenue_yoy) AS revenue_rows, COUNT(eps_ttm) AS eps_rows
+               COUNT(revenue_yoy) AS revenue_rows, COUNT(eps_ttm) AS eps_rows,
+               COUNT(eps_latest) AS eps_latest_rows
         FROM feature_snapshots
         """
+    ).fetchone()
+    pit_features = conn.execute(
+        """
+        SELECT COUNT(*) AS rows,
+               SUM(CASE WHEN fundamental_complete=1 THEN 1 ELSE 0 END) AS available,
+               COUNT(DISTINCT CASE WHEN fundamental_complete=1 THEN sr.trade_date END) AS trade_dates
+        FROM feature_snapshots fs
+        JOIN scan_runs sr ON sr.id=fs.run_id
+        WHERE fs.feature_version=?
+        """,
+        (PIT_FUNDAMENTAL_FEATURE_VERSION,),
     ).fetchone()
     return {
         "fundamentalObservations": int(fundamentals or 0),
@@ -389,6 +402,9 @@ def _data_gaps(conn):
         "pbFeatureRows": int(features["pb_rows"] or 0),
         "revenueFeatureRows": int(features["revenue_rows"] or 0),
         "epsFeatureRows": int(features["eps_rows"] or 0),
+        "epsLatestFeatureRows": int(features["eps_latest_rows"] or 0),
+        "pitFundamentalFeatureRows": int(pit_features["available"] or 0),
+        "pitFundamentalTradeDates": int(pit_features["trade_dates"] or 0),
     }
 
 
@@ -496,11 +512,14 @@ def propose_hypotheses(metrics, attributions):
             }
         )
 
-    if data_gaps["fundamentalObservations"] == 0:
+    if (
+        data_gaps["pitFundamentalFeatureRows"] < 300
+        or data_gaps["pitFundamentalTradeDates"] < 30
+    ):
         add(
             "point_in_time_fundamentals_v1",
             "建立可回溯的基本面特徵層",
-            "目前沒有任何 point-in-time 基本面觀測，模型無法驗證估值、營收與獲利品質是否能改善選股。",
+            "point-in-time 基本面尚未累積到 300 筆成熟特徵與 30 個獨立交易日，模型不能提前宣稱估值、營收與獲利品質具有樣本外增值。",
             "data",
             100,
             {"features": ["pe", "pb", "revenue_yoy", "revenue_mom", "eps_ttm"]},
