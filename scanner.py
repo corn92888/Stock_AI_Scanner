@@ -400,6 +400,32 @@ def run_scanner():
                 f"Alpha v2 盤後訊號: {alpha_result['status']}，"
                 f"入選 {len(alpha_result['selected'])} 檔"
             )
+            from deployable_strategy import run_deployable_strategy
+
+            execution_result = run_deployable_strategy(
+                db_path="data/stock_scanner.db"
+            )
+            execution_message = [
+                f"固定 T+10 策略｜{trade_date}\n",
+                "每日最多 1 檔｜每檔 8%｜隔日開盤｜T+10 收盤退出\n",
+            ]
+            chosen = execution_result.get("selected")
+            if execution_result.get("action") == "BUY_NEXT_OPEN" and chosen:
+                execution_message.append(
+                    f"次日開盤候選：{chosen['code']} {chosen.get('name') or ''}\n"
+                    f"訊號價 {float(chosen['signalPrice']):.2f}｜"
+                    f"最高接受 {float(chosen['maxEntryPrice']):.2f}｜"
+                    f"預測 T+10 超額 {float(chosen['predictedAlpha']):.2f}%\n"
+                )
+            else:
+                reasons = ", ".join(execution_result.get("reasonCodes") or [])
+                execution_message.append(f"本日維持 CASH｜{reasons}\n")
+            execution_message.append("人工微型執行；券商自動送單維持關閉。")
+            send_telegram_message(execution_message)
+            print(
+                f"固定 T+10 決策: {execution_result['action']}，"
+                f"市場上漲家數 {execution_result.get('marketUpRatio') or 0:.1f}%"
+            )
         except Exception as e:
             raise RuntimeError(f"Alpha v2 全市場評分失敗: {e}") from e
     else:

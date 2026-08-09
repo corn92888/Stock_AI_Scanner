@@ -1217,6 +1217,34 @@ def _create_alpha_live_tables(conn):
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS deployable_strategy_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            signal_date TEXT NOT NULL,
+            evaluated_at TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            alpha_run_id INTEGER,
+            decision_status TEXT NOT NULL,
+            action TEXT NOT NULL,
+            code TEXT,
+            name TEXT,
+            industry TEXT,
+            signal_price REAL,
+            predicted_alpha REAL,
+            market_up_ratio REAL,
+            confidence REAL,
+            confidence_threshold REAL,
+            target_weight REAL NOT NULL,
+            holding_horizon INTEGER NOT NULL,
+            reason_codes_json TEXT NOT NULL DEFAULT '[]',
+            decision_json TEXT NOT NULL DEFAULT '{}',
+            evidence_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY (alpha_run_id) REFERENCES alpha_live_runs(id),
+            UNIQUE (strategy_version, signal_date)
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS live_capital_snapshots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             evaluated_at TEXT NOT NULL,
@@ -1273,6 +1301,10 @@ def _create_alpha_live_tables(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_alpha_live_candidates_run_score "
         "ON alpha_live_candidates(run_id, predicted_alpha DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_deployable_strategy_date "
+        "ON deployable_strategy_snapshots(strategy_version, signal_date DESC)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_alpha_forward_snapshots_time "

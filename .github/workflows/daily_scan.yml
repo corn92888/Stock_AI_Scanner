@@ -137,6 +137,11 @@ jobs:
       run: |
         python strategy_challenger.py
 
+    - name: Materialize fixed T+10 execution decision
+      if: steps.gate.outputs.run == 'true'
+      run: |
+        python deployable_strategy.py
+
     - name: Settle paper accounts and prospective capital tournament
       if: steps.gate.outputs.run == 'true'
       run: |

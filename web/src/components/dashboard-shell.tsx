@@ -88,6 +88,18 @@ const strategyColors: Record<string, string> = {
   wave: "amber",
 };
 
+const deployableReasonLabels: Record<string, string> = {
+  strategy_snapshot_missing: "尚未建立固定策略決策",
+  historical_evidence_failed: "歷史證據未通過固定門檻",
+  alpha_live_run_missing: "尚未取得最新盤後全市場評分",
+  model_version_mismatch: "最新訊號仍是舊模型，必須重新掃描",
+  alpha_signal_not_active: "模型信心不足，本日維持現金",
+  confidence_below_threshold: "模型信心未高於校準門檻",
+  market_breadth_below_gate: "上漲家數未過半，市場廣度不足",
+  ranked_signal_missing: "通過閘門後沒有可執行標的",
+  all_fixed_gates_passed: "歷史、信心、市場廣度與進場規則全部通過",
+};
+
 const experimentFamilyLabels: Record<string, string> = {
   rule_baseline: "正式規則",
   trend: "順勢突破",
@@ -651,6 +663,9 @@ function CandidateTable({ rows, sort, direction, onSort, onSelect, researchOnly 
 
 function DecisionView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const integrityGate = snapshot.researchHealth.integrityGate;
+  const deployable = snapshot.deployableStrategy;
+  const holdout = deployable.evidence.holdout;
+  const executionReady = deployable.status === "enter_next_open" && Boolean(deployable.selected);
   const researchOnly = !integrityGate.formalRecommendationsAllowed;
   const dates = useMemo(() => [...new Set(snapshot.candidates.map((row) => row.tradeDate))].sort().reverse(), [snapshot.candidates]);
   const latestCandidateDate = dates.includes(snapshot.overview.latestTradeDate) ? snapshot.overview.latestTradeDate : dates[0] || "";
@@ -703,6 +718,25 @@ function DecisionView({ snapshot }: { snapshot: DashboardSnapshot }) {
 
   return (
     <div className="view-stack">
+      <section className="model-hero-band">
+        <div>
+          <span className="eyebrow">Fixed execution strategy</span>
+          <h2>{executionReady ? `次一交易日開盤：${deployable.selected?.code} ${deployable.selected?.name}` : deployable.status === "cash" ? "本日決策：CASH" : deployable.status === "refresh_required" ? "固定策略等待新版模型重掃" : "固定策略尚未允許執行"}</h2>
+          <p>{deployable.signalDate ?? "--"} · {deployable.version} · {deployable.reasonCodes.map((reason) => deployableReasonLabels[reason] ?? reason).join("、")}</p>
+        </div>
+        <div className={`governance-state ${executionReady ? "ready" : "shadow"}`}><ShieldCheck size={20} /><span>{executionReady ? "MANUAL MICRO" : deployable.action}</span></div>
+      </section>
+
+      <section className="metrics-grid metrics-grid-five">
+        <Metric label="當日動作" value={executionReady ? "次日開盤買進" : deployable.action === "CASH" ? "維持現金" : "等待重掃"} detail={deployable.selected ? `${deployable.selected.code} · 上限 ${decimal.format(deployable.selected.maxEntryPrice)}` : deployableReasonLabels[deployable.reasonCodes[0]] ?? "尚無決策"} tone={executionReady ? "positive" : deployable.status === "cash" ? "warning" : "danger"} icon={Target} />
+        <Metric label="單檔部位" value={rate(deployable.targetWeight * 100)} detail={`最多 ${deployable.maxPositions} 檔 · 同產業 ${deployable.maxIndustryPositions} 檔`} tone="info" icon={WalletCards} />
+        <Metric label="市場上漲家數" value={deployable.marketUpRatio == null ? "--" : rate(deployable.marketUpRatio)} detail={`固定門檻 ${rate(deployable.marketGateMinimum)}`} tone={(deployable.marketUpRatio ?? 0) >= deployable.marketGateMinimum ? "positive" : "warning"} icon={Activity} />
+        <Metric label="2025 歷史保留區" value={holdout ? pct(holdout.totalReturnPct) : "--"} detail={holdout ? `${holdout.trades} 筆 · 勝率 ${rate(holdout.winRatePct)}` : "尚未建立稽核"} tone={(holdout?.totalReturnPct ?? 0) > 0 ? "positive" : "danger"} icon={TrendingUp} />
+        <Metric label="保留區最大回撤" value={holdout ? pct(holdout.maxDrawdownPct) : "--"} detail={`成本後 · 固定持有 T+${deployable.holdingHorizon}`} tone={(holdout?.maxDrawdownPct ?? -99) >= -10 ? "positive" : "danger"} icon={TrendingDown} />
+      </section>
+
+      <div className="validation-banner"><TriangleAlert size={18} /><div><strong>{deployable.evidence.manualMicroAllowed ? "歷史門檻通過，只允許人工微型執行" : "固定策略不可執行"}</strong><p>規則固定為每日最多 1 檔、每檔 8%、次日開盤價不得高於訊號價 3%、T+10 收盤退出；券商自動送單維持關閉。{deployable.evidence.holdoutCaveat ? " 2025 是時間外樣本，但曾被本專案先前研究看過，不能視為保證未來獲利。" : ""}</p></div></div>
+
       <section className="metrics-grid metrics-grid-five">
         <Metric label="分析批次" value={number.format(uniqueRuns)} detail={`${date || "--"} 盤中快照`} tone="info" icon={Layers3} />
         <Metric label="可交易候選" value={number.format(tradable.length)} detail={`通過率 ${dayRows.length ? Math.round(tradable.length / dayRows.length * 100) : 0}%`} tone="positive" icon={CheckCircle2} />

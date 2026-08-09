@@ -711,6 +711,65 @@ export type AlphaLiveSnapshot = {
   }>;
 };
 
+export type DeployableStrategySnapshot = {
+  version: string;
+  modelVersion: string | null;
+  signalDate: string | null;
+  evaluatedAt: string | null;
+  status: "not_run" | "cash" | "enter_next_open" | "blocked" | "refresh_required";
+  action: "CASH" | "BUY_NEXT_OPEN" | "BLOCKED" | "REFRESH";
+  reasonCodes: string[];
+  marketUpRatio: number | null;
+  marketGateMinimum: number;
+  confidence: number | null;
+  confidenceThreshold: number | null;
+  targetWeight: number;
+  holdingHorizon: number;
+  maxPositions: number;
+  maxIndustryPositions: number;
+  maxEntryGapPct: number;
+  selected: {
+    code: string;
+    name: string;
+    industry: string;
+    signalPrice: number;
+    predictedAlpha: number;
+    maxEntryPrice: number;
+  } | null;
+  evidence: {
+    qualified: boolean;
+    manualMicroAllowed: boolean;
+    automaticBrokerTransmission: boolean;
+    classification: string;
+    pristineHoldout?: boolean;
+    holdoutCaveat: string;
+    holdout: {
+      year: number;
+      activeDays: number;
+      trades: number;
+      totalReturnPct: number;
+      maxDrawdownPct: number;
+      annualizedSharpe: number | null;
+      meanTradeNetReturnPct: number;
+      meanTradeExcessReturnPct: number;
+      winRatePct: number;
+    } | null;
+    years: Array<{
+      year: number;
+      role: string;
+      activeDays: number;
+      trades: number;
+      totalReturnPct: number;
+      maxDrawdownPct: number;
+    }>;
+    gates: Array<{
+      key: string;
+      passed: boolean;
+      requirement: string;
+    }>;
+  };
+};
+
 export type AlphaForwardSnapshot = {
   version: string;
   evaluatedAt: string | null;
@@ -1135,6 +1194,7 @@ export type DashboardSnapshot = {
   modelChallengers: ModelChallenger[];
   strategyChallenger: StrategyChallengerSnapshot;
   alphaLive: AlphaLiveSnapshot;
+  deployableStrategy: DeployableStrategySnapshot;
   alphaForward: AlphaForwardSnapshot;
   capitalGovernance: CapitalGovernanceSnapshot;
   paperAccounts: PaperAccount[];

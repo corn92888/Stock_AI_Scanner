@@ -1,0 +1,141 @@
+{
+  "version": "alpha_t10_breadth_top1_history_2025_v1",
+  "strategyVersion": "alpha_t10_breadth_top1_v1",
+  "modelVersion": "hist_gradient_alpha_cash_gate_v3",
+  "generatedAt": "2026-08-10T01:20:19+08:00",
+  "datasetFingerprint": "a14fd9c59261af403f847424c1b78e6ab65afd58a6fd08474d44ed1d9af52490",
+  "datasetStart": "2021-01-04",
+  "datasetEnd": "2025-12-31",
+  "executionVersion": "alpha_next_open_after_costs_v1",
+  "costsBps": 78.5,
+  "classification": "historically_validated_manual_micro",
+  "qualified": true,
+  "manualMicroAllowed": true,
+  "automaticBrokerTransmission": false,
+  "pristineHoldout": false,
+  "holdoutCaveat": "2025 is chronologically out of sample for this fixed model fit, but it was visible to earlier project research and is not a never-observed holdout.",
+  "rules": {
+    "ranking": "regularized predicted T+10 benchmark excess",
+    "confidenceQuantile": 0.7,
+    "marketUpRatioMinimum": 50.0,
+    "dailySelections": 1,
+    "positionWeight": 0.08,
+    "holdingHorizon": 10,
+    "maxPositions": 10,
+    "maxIndustryPositions": 2,
+    "entry": "next_session_open",
+    "maxEntryGapPct": 3.0,
+    "exit": "t10_close",
+    "sameDayExit": false
+  },
+  "gates": [
+    {
+      "key": "development_positive_years",
+      "passed": true,
+      "requirement": "2022-2024 each after-cost year > 0%"
+    },
+    {
+      "key": "development_positive_excess",
+      "passed": true,
+      "requirement": "2022-2024 each mean trade excess > 0%"
+    },
+    {
+      "key": "development_sample",
+      "passed": true,
+      "requirement": "at least 60 pre-holdout trades"
+    },
+    {
+      "key": "development_drawdown",
+      "passed": true,
+      "requirement": "each pre-holdout drawdown no worse than -10%"
+    },
+    {
+      "key": "holdout_return",
+      "passed": true,
+      "requirement": "2025 after-cost total return > 0%"
+    },
+    {
+      "key": "holdout_excess",
+      "passed": true,
+      "requirement": "2025 mean trade excess > 0%"
+    },
+    {
+      "key": "holdout_sample",
+      "passed": true,
+      "requirement": "at least 20 holdout trades"
+    },
+    {
+      "key": "holdout_drawdown",
+      "passed": true,
+      "requirement": "2025 drawdown no worse than -10%"
+    }
+  ],
+  "years": [
+    {
+      "year": 2022,
+      "role": "walk_forward_validation",
+      "confidenceThreshold": 2.9455696793594677,
+      "activeDays": 41,
+      "trades": 41,
+      "totalReturnPct": 13.1276574522021,
+      "maxDrawdownPct": -4.725159239156119,
+      "annualizedSharpe": 1.9355171695177378,
+      "meanTradeNetReturnPct": 3.8262527644673954,
+      "meanTradeExcessReturnPct": 3.9187103259670697,
+      "winRatePct": 53.65853658536586
+    },
+    {
+      "year": 2023,
+      "role": "walk_forward_validation",
+      "confidenceThreshold": 2.035470447826296,
+      "activeDays": 5,
+      "trades": 5,
+      "totalReturnPct": 2.4351973889946033,
+      "maxDrawdownPct": -1.603410849867426,
+      "annualizedSharpe": 0.7535583139939243,
+      "meanTradeNetReturnPct": 6.153320765308292,
+      "meanTradeExcessReturnPct": 3.848595100210912,
+      "winRatePct": 60.0
+    },
+    {
+      "year": 2024,
+      "role": "walk_forward_validation",
+      "confidenceThreshold": 0.7234769503834786,
+      "activeDays": 34,
+      "trades": 34,
+      "totalReturnPct": 9.504805137319616,
+      "maxDrawdownPct": -6.772428982424161,
+      "annualizedSharpe": 1.047796616941455,
+      "meanTradeNetReturnPct": 3.493860170131125,
+      "meanTradeExcessReturnPct": 3.239952007024555,
+      "winRatePct": 52.94117647058824
+    },
+    {
+      "year": 2025,
+      "role": "holdout_audit",
+      "confidenceThreshold": 0.9373033061616834,
+      "activeDays": 26,
+      "trades": 26,
+      "totalReturnPct": 5.911034349898303,
+      "maxDrawdownPct": -2.5113569592300378,
+      "annualizedSharpe": 1.423404229821572,
+      "meanTradeNetReturnPct": 2.802921276192608,
+      "meanTradeExcessReturnPct": 1.3585560273902657,
+      "winRatePct": 65.38461538461539
+    }
+  ],
+  "holdout": {
+    "year": 2025,
+    "role": "holdout_audit",
+    "confidenceThreshold": 0.9373033061616834,
+    "activeDays": 26,
+    "trades": 26,
+    "totalReturnPct": 5.911034349898303,
+    "maxDrawdownPct": -2.5113569592300378,
+    "annualizedSharpe": 1.423404229821572,
+    "meanTradeNetReturnPct": 2.802921276192608,
+    "meanTradeExcessReturnPct": 1.3585560273902657,
+    "winRatePct": 65.38461538461539
+  },
+  "reasonCodes": []
+}

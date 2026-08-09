@@ -345,6 +345,33 @@ class PaperTradingTests(unittest.TestCase):
             all(row["allocation_weight"] == 0.08 for row in strict_selected)
         )
 
+    def test_deployable_policy_requires_breadth_and_selects_one_stock(self):
+        spec = next(
+            item
+            for item in ACCOUNT_SPECS
+            if item.account_key == "alpha_t10_breadth_top1_v1"
+        )
+        rows = []
+        for index, code in enumerate(("2330", "2454", "2317"), start=1):
+            row = tournament_signal(index, code, 100 - index, f"Industry {index}")
+            row.update(
+                source_type="alpha_candidate",
+                signal_date="2026-08-10",
+                signal_price=100.0,
+                market_up_ratio=55.0,
+            )
+            rows.append(row)
+
+        selected = apply_alpha_forward_policy(rows, spec)
+        blocked = apply_alpha_forward_policy(
+            [{**row, "market_up_ratio": 49.0} for row in rows], spec
+        )
+
+        self.assertEqual([row["code"] for row in selected], ["2330"])
+        self.assertEqual(selected[0]["allocation_weight"], 0.08)
+        self.assertEqual(selected[0]["raw_chase_limit"], 103.0)
+        self.assertEqual(blocked, [])
+
     def test_newer_cash_decision_invalidates_same_day_active_alpha_run(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "scanner.db"

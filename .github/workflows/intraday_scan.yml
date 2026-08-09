@@ -117,6 +117,11 @@ jobs:
       run: |
         python alpha_forward_monitor.py
 
+    - name: Refresh fixed T+10 execution decision
+      if: steps.gate.outputs.run == 'true'
+      run: |
+        python deployable_strategy.py
+
     - name: Re-evaluate staged live-capital governance
       if: steps.gate.outputs.run == 'true'
       env:

@@ -142,6 +142,26 @@ ACCOUNT_SPECS = (
         selection_policy="champion",
     ),
     PaperAccountSpec(
+        account_key="alpha_t10_breadth_top1_v1",
+        name="Alpha T+10 可執行固定策略",
+        strategy_kind="alpha_forward",
+        evidence_mode="prospective_alpha_forward",
+        source_type="alpha_candidate",
+        role="challenger",
+        evidence_start_date="2026-08-10",
+        selection_scope="same_day_scored_pool",
+        max_daily_selections=1,
+        max_per_industry=1,
+        weighting="equal",
+        daily_budget_pct=0.08,
+        max_positions=10,
+        position_size_pct=0.08,
+        max_industry_exposure_pct=0.16,
+        holding_horizon=10,
+        enforce_chase_limit=True,
+        selection_policy="deployable_breadth_top1",
+    ),
+    PaperAccountSpec(
         account_key="alpha_v2_champion_forward_t10_v1",
         name="Alpha v2 前瞻冠軍",
         strategy_kind="alpha_forward",
@@ -545,6 +565,7 @@ def load_alpha_candidate_pool(db_path=DB_PATH):
                     c.code,
                     c.name,
                     c.industry,
+                    c.signal_price,
                     NULL AS rank_order,
                     r.model_version,
                     c.predicted_alpha AS final_score,
@@ -631,7 +652,14 @@ def apply_alpha_forward_policy(signals, spec):
                 )
                 >= 0.5
                 and (_safe_number(row.get("market_up_ratio"), -math.inf) or 0.0)
-                >= 0.45
+                >= 50.0
+            ]
+        elif spec.selection_policy == "deployable_breadth_top1":
+            pool = [
+                row
+                for row in pool
+                if (_safe_number(row.get("market_up_ratio"), -math.inf) or 0.0)
+                >= 50.0
             ]
 
         if spec.selection_policy == "momentum":
@@ -666,6 +694,10 @@ def apply_alpha_forward_policy(signals, spec):
             chosen = dict(row)
             chosen["rank_order"] = len(daily) + 1
             chosen["allocation_weight"] = float(spec.position_size_pct or 0.08)
+            if spec.selection_policy == "deployable_breadth_top1":
+                signal_price = _safe_number(chosen.get("signal_price"), None)
+                if signal_price is not None:
+                    chosen["raw_chase_limit"] = signal_price * 1.03
             daily.append(chosen)
             if industry:
                 industry_counts[industry] = industry_counts.get(industry, 0) + 1

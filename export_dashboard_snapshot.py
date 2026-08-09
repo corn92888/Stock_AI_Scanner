@@ -1249,6 +1249,61 @@ def _alpha_live_snapshot(conn):
     }
 
 
+def _deployable_strategy_snapshot(conn):
+    empty = {
+        "version": "alpha_t10_breadth_top1_v1",
+        "modelVersion": None,
+        "signalDate": None,
+        "evaluatedAt": None,
+        "status": "not_run",
+        "action": "REFRESH",
+        "reasonCodes": ["strategy_snapshot_missing"],
+        "marketUpRatio": None,
+        "marketGateMinimum": 50.0,
+        "confidence": None,
+        "confidenceThreshold": None,
+        "targetWeight": 0.08,
+        "holdingHorizon": 10,
+        "maxPositions": 10,
+        "maxIndustryPositions": 2,
+        "maxEntryGapPct": 3.0,
+        "selected": None,
+        "evidence": {
+            "qualified": False,
+            "manualMicroAllowed": False,
+            "automaticBrokerTransmission": False,
+            "classification": "not_audited",
+            "holdout": None,
+            "years": [],
+            "gates": [],
+            "holdoutCaveat": "",
+        },
+    }
+    if not _table_exists(conn, "deployable_strategy_snapshots"):
+        return empty
+    row = conn.execute(
+        """
+        SELECT decision_json, evidence_json
+        FROM deployable_strategy_snapshots
+        ORDER BY signal_date DESC, evaluated_at DESC, id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if not row:
+        return empty
+    decision = _decode_object(row["decision_json"])
+    evidence = _decode_object(row["evidence_json"])
+    return {
+        **empty,
+        **decision,
+        "version": decision.get("strategyVersion", empty["version"]),
+        "evidence": {
+            **empty["evidence"],
+            **evidence,
+        },
+    }
+
+
 def _alpha_forward_snapshot(conn):
     empty = {
         "version": "alpha_forward_validation_v1",
@@ -2453,6 +2508,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
         model_challengers = _model_challenger_snapshot(conn)
         strategy_challenger = _strategy_challenger_snapshot(conn)
         alpha_live = _alpha_live_snapshot(conn)
+        deployable_strategy = _deployable_strategy_snapshot(conn)
         alpha_forward = _alpha_forward_snapshot(conn)
         capital_governance = _capital_governance_snapshot(conn)
         research_health = _research_health_snapshot(conn)
@@ -2474,6 +2530,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "learnabilityAudit": learnability_audit,
             "strategyChallenger": strategy_challenger,
             "alphaLive": alpha_live,
+            "deployableStrategy": deployable_strategy,
             "alphaForward": alpha_forward,
             "capitalGovernance": capital_governance,
             "candidates": candidates,

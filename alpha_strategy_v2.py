@@ -34,7 +34,7 @@ from strategy_challenger import save_strategy_snapshot
 
 ALPHA_CHALLENGER_VERSION = "alpha_liquid_universe_walk_forward_v2"
 ALPHA_EVALUATION_FAMILY = "alpha_liquid_universe_purged_walk_forward_v2"
-ALPHA_MODEL_VERSION = "hist_gradient_alpha_cash_gate_v2"
+ALPHA_MODEL_VERSION = "hist_gradient_alpha_cash_gate_v3"
 ALPHA_MODEL_ARTIFACT_VERSION = "alpha_model_artifact_v1"
 DEFAULT_MODEL_OUTPUT = Path("data/models/alpha_strategy_v2_model.joblib")
 LOCKED_COMPARISONS = 6
@@ -197,10 +197,10 @@ def _model():
                 "regressor",
                 HistGradientBoostingRegressor(
                     learning_rate=0.04,
-                    max_iter=160,
+                    max_iter=140,
                     max_leaf_nodes=15,
-                    min_samples_leaf=80,
-                    l2_regularization=2.0,
+                    min_samples_leaf=100,
+                    l2_regularization=3.0,
                     random_state=42,
                 ),
             ),
