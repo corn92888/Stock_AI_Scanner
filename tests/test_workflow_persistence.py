@@ -168,6 +168,7 @@ class WorkflowPersistenceTests(unittest.TestCase):
         paper_index = workflow.index("python paper_trading.py")
         monitor_index = workflow.index("python research_monitor.py")
         alpha_monitor_index = workflow.index("python alpha_forward_monitor.py")
+        learning_cycle_index = workflow.index("python learning_cycle.py")
         capital_index = workflow.index("python capital_governance.py")
         export_index = workflow.index("python export_dashboard_snapshot.py")
         self.assertIn("FORMAL_RECOMMENDATIONS_APPROVED", workflow)
@@ -181,6 +182,8 @@ class WorkflowPersistenceTests(unittest.TestCase):
         self.assertLess(training_index, paper_index)
         self.assertLess(paper_index, monitor_index)
         self.assertLess(monitor_index, export_index)
+        self.assertLess(alpha_monitor_index, learning_cycle_index)
+        self.assertLess(learning_cycle_index, capital_index)
         self.assertLess(alpha_monitor_index, capital_index)
         self.assertLess(capital_index, export_index)
 

@@ -112,6 +112,12 @@
   ```
   預設各有新台幣 100 萬元、單筆風險預算 1%、每檔市值上限 20%、最多同時持有 5 檔、保留 5% 現金，並執行禁止追價、交易成本及 T+3／防守價退出。規則帳戶標記為歷史點時訊號重播，AI 帳戶只接受當時真正產生的前瞻預測，不會把事後回算結果偽裝成模擬實績。
 
+  每日盤後會把成熟結果轉成版本化研究週期、失敗切片、漏選機會與下一輪 challenger 假設：
+  ```bash
+  venv/bin/python3 learning_cycle.py
+  ```
+  報告寫入 `Reports/research_cycles/` 並同步顯示在儀表板「AI 與資料」。假設只會登記為 `proposed`，不會自動改動正式規則、資金權重或下單設定。完整契約見 [`docs/automated_learning_cycle.md`](docs/automated_learning_cycle.md)。
+
   自 `2026-07-20` 起，盤後流程另以同一批不可變的前瞻 EOD 預測建立 Top 3 等權、Top 5 分散與 Top 10 分數加權三個獨立資金帳戶。競賽不回填舊結果；挑戰者至少需要 120 個新決策日、100 筆結案、正的成本後報酬與大盤超額，並同時勝過 Top 3 的報酬及回撤效率，才會進入人工審查，永不自動接管正式策略。完整凍結契約見 [`docs/prospective_capital_tournament.md`](docs/prospective_capital_tournament.md)。
 
   評估所有已登錄策略實驗：

@@ -3,7 +3,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { AlphaForwardSnapshot, AlphaLiveSnapshot, CandidateLearnabilityAudit, CapitalGovernanceSnapshot, CapitalTournament, CloudEvidence, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, PaperSettlement, ReplayAttribution, ResearchHealth, ResearchQuality, StrategyChallengerSnapshot, WorkflowRun } from "./types";
+import type { AlphaForwardSnapshot, AlphaLiveSnapshot, CandidateLearnabilityAudit, CapitalGovernanceSnapshot, CapitalTournament, CloudEvidence, DashboardSnapshot, GlobalMarketSnapshot, InstitutionalFlowSnapshot, LearningCycle, PaperSettlement, ReplayAttribution, ResearchHealth, ResearchQuality, StrategyChallengerSnapshot, WorkflowRun } from "./types";
 
 const DEFAULT_DATA_URL =
   "https://raw.githubusercontent.com/corn92888/Stock_AI_Scanner/main/data/dashboard_snapshot.json";
@@ -145,6 +145,24 @@ const EMPTY_REPLAY_ATTRIBUTION: ReplayAttribution = {
   generatedAt: "",
   dimensions: [],
   rows: [],
+};
+
+const EMPTY_LEARNING_CYCLE: LearningCycle = {
+  cycleVersion: "",
+  cycleDate: null,
+  generatedAt: null,
+  status: "not_run",
+  primaryDiagnosis: "not_available",
+  evidenceStartDate: null,
+  evidenceEndDate: null,
+  newMaturedOutcomes: 0,
+  closedChampionTrades: 0,
+  reportPath: null,
+  reportMarkdown: "",
+  metrics: {},
+  attributions: [],
+  hypotheses: [],
+  recentCycles: [],
 };
 
 const EMPTY_LEARNABILITY_AUDIT: CandidateLearnabilityAudit = {
@@ -381,6 +399,14 @@ function normalizeDashboardSnapshot(snapshot: DashboardSnapshot): DashboardSnaps
       ...(snapshot.replayAttribution ?? {}),
       dimensions: snapshot.replayAttribution?.dimensions ?? [],
       rows: snapshot.replayAttribution?.rows ?? [],
+    },
+    learningCycle: {
+      ...EMPTY_LEARNING_CYCLE,
+      ...(snapshot.learningCycle ?? {}),
+      metrics: snapshot.learningCycle?.metrics ?? {},
+      attributions: snapshot.learningCycle?.attributions ?? [],
+      hypotheses: snapshot.learningCycle?.hypotheses ?? [],
+      recentCycles: snapshot.learningCycle?.recentCycles ?? [],
     },
     learnabilityAudit: {
       ...EMPTY_LEARNABILITY_AUDIT,

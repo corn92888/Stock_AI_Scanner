@@ -84,6 +84,124 @@ export type ResearchExperiment = {
   rejectionReasons: string[];
 };
 
+export type LearningCycleAttribution = {
+  scope: "formal_selected" | "formal_rejected";
+  dimension: string;
+  bucketKey: string;
+  bucketLabel: string;
+  sampleCount: number;
+  meanNetReturn: number | null;
+  meanExcessReturn: number | null;
+  positiveRate: number | null;
+  meanDrawdown: number | null;
+  standardError: number | null;
+  ci95Low: number | null;
+  ci95High: number | null;
+  lossContribution: number | null;
+  sortOrder: number;
+};
+
+export type LearningHypothesis = {
+  hypothesisKey: string;
+  title: string;
+  rationale: string;
+  targetLayer: "data" | "model" | "selection" | "portfolio" | string;
+  status: "proposed" | "approved" | "testing" | "rejected" | "promoted" | string;
+  priority: number;
+  occurrences: number;
+  proposedConfig: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  seenThisCycle: boolean;
+};
+
+export type LearningCycle = {
+  cycleVersion: string;
+  cycleDate: string | null;
+  generatedAt: string | null;
+  status: "not_run" | "collecting" | "redesign_required" | "evidence_review" | "paused";
+  primaryDiagnosis: string;
+  evidenceStartDate: string | null;
+  evidenceEndDate: string | null;
+  newMaturedOutcomes: number;
+  closedChampionTrades: number;
+  reportPath: string | null;
+  reportMarkdown: string;
+  metrics: {
+    recentSelected?: {
+      samples: number;
+      meanNetReturn: number | null;
+      meanExcessReturn: number | null;
+      positiveRate: number | null;
+    };
+    recentRejected?: {
+      samples: number;
+      meanNetReturn: number | null;
+      meanExcessReturn: number | null;
+      positiveRate: number | null;
+    };
+    selectionNetLift?: number | null;
+    selectionExcessLift?: number | null;
+    alphaForward?: {
+      decision_days?: number;
+      closed_trades?: number;
+      total_return_pct?: number | null;
+      avg_excess_return_pct?: number | null;
+      max_drawdown_pct?: number | null;
+      probabilistic_sharpe?: number | null;
+    };
+    paperAccounts?: Array<{
+      accountKey: string;
+      name: string;
+      totalReturnPct: number | null;
+      maxDrawdownPct: number | null;
+      closedTrades: number;
+      winningTrades: number;
+      openPositions: number;
+      meanNetReturn: number | null;
+      meanExcessReturn: number | null;
+    }>;
+    dataGaps?: {
+      fundamentalObservations: number;
+      newsEvidence: number;
+      featureRows: number;
+      peFeatureRows: number;
+      pbFeatureRows: number;
+      revenueFeatureRows: number;
+      epsFeatureRows: number;
+    };
+    qualityExclusions?: Array<{
+      tradeDate: string;
+      code: string;
+      name: string;
+      netReturn3d: number | null;
+      excessReturn3d: number | null;
+      reason: string;
+    }>;
+    missedOpportunities?: Array<{
+      tradeDate: string;
+      code: string;
+      name: string;
+      industry: string;
+      score: number | null;
+      netReturn3d: number | null;
+      excessReturn3d: number | null;
+      selectionStatus: string;
+    }>;
+  };
+  attributions: LearningCycleAttribution[];
+  hypotheses: LearningHypothesis[];
+  recentCycles: Array<{
+    cycleDate: string;
+    generatedAt: string;
+    status: string;
+    primaryDiagnosis: string;
+    newMaturedOutcomes: number;
+    closedChampionTrades: number;
+  }>;
+};
+
 export type LearnabilityPortfolio = {
   trades: number;
   decisionDates: number;
@@ -965,6 +1083,7 @@ export type DashboardSnapshot = {
   researchHealth: ResearchHealth;
   replayAttribution: ReplayAttribution;
   researchExperiments: ResearchExperiment[];
+  learningCycle: LearningCycle;
   learnabilityAudit: CandidateLearnabilityAudit;
   candidates: Candidate[];
   dailyCandidates: DailyCandidate[];

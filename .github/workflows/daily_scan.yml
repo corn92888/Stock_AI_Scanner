@@ -155,6 +155,11 @@ jobs:
       run: |
         python alpha_forward_monitor.py
 
+    - name: Generate governed learning cycle and research journal
+      if: steps.gate.outputs.run == 'true'
+      run: |
+        python learning_cycle.py
+
     - name: Evaluate staged live-capital governance
       if: steps.gate.outputs.run == 'true'
       env:
@@ -183,6 +188,7 @@ jobs:
         name: daily-stock-reports
         path: |
           Reports/*.xlsx
+          Reports/research_cycles/*.md
           data/stock_scanner.db
           data/dashboard_snapshot.json
           data/global_market_latest.json

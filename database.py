@@ -22,6 +22,7 @@ HISTORICAL_REPLAY_VERSION = "point_in_time_eod_replay_v2"
 HISTORICAL_REPLAY_EXECUTION_VERSION = "next_open_after_costs_t3_v1"
 HISTORICAL_ATTRIBUTION_VERSION = "replay_attribution_v1"
 INSTITUTIONAL_FEATURE_VERSION = "institutional_flow_v1_conservative_lag"
+LEARNING_CYCLE_VERSION = "automated_research_cycle_v1"
 
 
 def get_taipei_now():
@@ -165,6 +166,7 @@ def init_db(conn):
     _migrate_backtest_results(conn)
     _create_quant_tables(conn)
     _create_research_tables(conn)
+    _create_learning_cycle_tables(conn)
     _create_alpha_live_tables(conn)
     _create_historical_replay_tables(conn)
     _create_global_market_tables(conn)
@@ -199,6 +201,18 @@ def init_db(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_strategy_challenger_time "
         "ON strategy_challenger_snapshots(evaluated_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_research_cycles_time "
+        "ON research_cycles(cycle_date DESC, generated_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_failure_attributions_cycle "
+        "ON research_failure_attributions(cycle_id, scope, dimension, sort_order)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_learning_hypotheses_status "
+        "ON learning_hypotheses(status, priority DESC, updated_at DESC)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_fundamentals_code_known "
@@ -953,6 +967,77 @@ def _create_research_tables(conn):
             candidate_count INTEGER NOT NULL DEFAULT 0,
             metrics_json TEXT NOT NULL,
             UNIQUE (challenger_version, dataset_fingerprint)
+        )
+        """
+    )
+
+
+def _create_learning_cycle_tables(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS research_cycles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cycle_date TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            cycle_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            evidence_start_date TEXT,
+            evidence_end_date TEXT,
+            primary_diagnosis TEXT NOT NULL,
+            new_matured_outcomes INTEGER NOT NULL DEFAULT 0,
+            closed_champion_trades INTEGER NOT NULL DEFAULT 0,
+            metrics_json TEXT NOT NULL,
+            report_path TEXT,
+            report_markdown TEXT NOT NULL,
+            git_commit TEXT,
+            UNIQUE (cycle_date, cycle_version)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS research_failure_attributions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cycle_id INTEGER NOT NULL,
+            scope TEXT NOT NULL,
+            dimension TEXT NOT NULL,
+            bucket_key TEXT NOT NULL,
+            bucket_label TEXT NOT NULL,
+            sample_count INTEGER NOT NULL DEFAULT 0,
+            mean_net_return REAL,
+            mean_excess_return REAL,
+            positive_rate REAL,
+            mean_drawdown REAL,
+            standard_error REAL,
+            ci95_low REAL,
+            ci95_high REAL,
+            loss_contribution REAL,
+            evidence_json TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (cycle_id) REFERENCES research_cycles(id),
+            UNIQUE (cycle_id, scope, dimension, bucket_key)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS learning_hypotheses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            hypothesis_key TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL,
+            rationale TEXT NOT NULL,
+            target_layer TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'proposed',
+            priority INTEGER NOT NULL DEFAULT 0,
+            first_cycle_id INTEGER NOT NULL,
+            latest_cycle_id INTEGER NOT NULL,
+            occurrences INTEGER NOT NULL DEFAULT 1,
+            proposed_config_json TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (first_cycle_id) REFERENCES research_cycles(id),
+            FOREIGN KEY (latest_cycle_id) REFERENCES research_cycles(id)
         )
         """
     )

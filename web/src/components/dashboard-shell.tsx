@@ -169,6 +169,36 @@ const learnabilityDiagnosisLabels: Record<string, string> = {
   not_available: "尚未完成稽核",
 };
 
+const learningDiagnosisLabels: Record<string, string> = {
+  hard_drawdown_stop: "前瞻策略已觸發硬性回撤停止線",
+  early_drawdown_breach: "早期前瞻回撤已超過微型實盤容忍值",
+  prospective_evidence_thin: "前瞻結案樣本仍不足",
+  prospective_edge_negative: "前瞻成本後與超額優勢均為負",
+  selection_policy_not_adding_value: "正式入選沒有勝過落選對照組",
+  evidence_building: "策略優勢仍在累積驗證",
+  not_available: "尚未完成第一次自動研究週期",
+};
+
+const learningDimensionLabels: Record<string, string> = {
+  strategy: "策略來源",
+  volume: "五日量比",
+  turnover: "成交值",
+  score: "規則分數",
+  extension: "當日漲幅",
+  intraday_position: "日內收位",
+  defense_distance: "防守距離",
+  market_regime: "市場狀態",
+  industry_breadth: "產業廣度",
+  industry: "產業",
+};
+
+const learningLayerLabels: Record<string, string> = {
+  data: "資料層",
+  model: "模型層",
+  selection: "選股層",
+  portfolio: "組合層",
+};
+
 const capitalIntentReasonLabels: Record<string, string> = {
   governance_paused: "治理停止線已觸發",
   capital_stage_shadow: "仍在影子觀察階段",
@@ -843,6 +873,18 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
   const alphaLive = snapshot.alphaLive;
   const alphaForward = snapshot.alphaForward;
   const capital = snapshot.capitalGovernance;
+  const learning = snapshot.learningCycle;
+  const learningForward = learning.metrics.alphaForward ?? {};
+  const learningSelected = learning.metrics.recentSelected;
+  const learningRejected = learning.metrics.recentRejected;
+  const learningGaps = learning.metrics.dataGaps;
+  const activeHypotheses = learning.hypotheses
+    .filter((row) => row.seenThisCycle)
+    .slice(0, 8);
+  const negativeAttributions = [...learning.attributions]
+    .filter((row) => row.scope === "formal_selected" && row.sampleCount >= 10 && (row.meanNetReturn ?? 0) < 0)
+    .sort((left, right) => (left.meanNetReturn ?? 0) - (right.meanNetReturn ?? 0) || right.sampleCount - left.sampleCount)
+    .slice(0, 10);
   const nextCapitalStage = capital.stages.find((stage) => stage.key === capital.nextStage);
   const isAlphaV2 = strategyLab.version === "alpha_liquid_universe_walk_forward_v2";
   const strategyLeader = strategyLab.candidateLeaderboard[0];
@@ -906,6 +948,30 @@ function PipelineView({ snapshot }: { snapshot: DashboardSnapshot }) {
       <section className="model-hero-band">
         <div><span className="eyebrow">Model governance</span><h2>{allGatesPassed ? "模型符合候選升級門檻" : latestModel ? "影子模型運作中，尚未允許接管排名" : "模型資料仍在建立"}</h2><p>{latestModel ? `${latestModel.version} · 訓練區間 ${latestModel.trainingStart} 至 ${latestModel.trainingEnd}` : "尚無可用模型版本"}</p></div>
         <div className={`governance-state ${allGatesPassed ? "ready" : "shadow"}`}><Bot size={20} /><span>{allGatesPassed ? "PROMOTION REVIEW" : "SHADOW ONLY"}</span></div>
+      </section>
+
+      <section className="panel">
+        <PanelHeader eyebrow="Automated research cycle" title="策略自我修正閉環" description="每天盤後把成熟結果轉成失敗歸因與預先登記的 challenger 假設；不會直接改正式規則" trailing={<span className={`status-pill ${learning.status === "evidence_review" ? "selected" : learning.status === "redesign_required" || learning.status === "paused" ? "blocked" : "neutral"}`}>{learning.status === "redesign_required" ? "REDESIGN REQUIRED" : learning.status === "paused" ? "PAUSED" : learning.status === "collecting" ? "COLLECTING" : learning.status === "evidence_review" ? "EVIDENCE REVIEW" : "NOT RUN"}</span>} />
+        <div className="readiness-callout"><Code2 size={19} /><div><strong>{learningDiagnosisLabels[learning.primaryDiagnosis] ?? learning.primaryDiagnosis}</strong><p>{learning.cycleDate ? `研究週期 ${learning.cycleDate} · 證據 ${learning.evidenceStartDate ?? "--"} 至 ${learning.evidenceEndDate ?? "--"} · 新成熟 ${number.format(learning.newMaturedOutcomes)} 筆。系統只建立研究提案；任何變更仍須固定版本、樣本外驗證與全新前瞻模擬。` : "盤後流程完成後會建立第一份自動研究日誌。"}</p></div></div>
+      </section>
+
+      <section className="metrics-grid metrics-grid-five">
+        <Metric label="前瞻 Alpha" value={pct(learningForward.total_return_pct)} detail={`${number.format(learningForward.closed_trades ?? 0)} 筆結案 · 超額 ${pct(learningForward.avg_excess_return_pct)}`} tone={(learningForward.total_return_pct ?? 0) > 0 && (learningForward.avg_excess_return_pct ?? 0) > 0 ? "positive" : "danger"} icon={TrendingUp} />
+        <Metric label="前瞻最大回撤" value={pct(learningForward.max_drawdown_pct)} detail={`PSR ${learningForward.probabilistic_sharpe == null ? "--" : decimal.format(learningForward.probabilistic_sharpe)}`} tone={(learningForward.max_drawdown_pct ?? -99) > -6 ? "positive" : "danger"} icon={TrendingDown} />
+        <Metric label="近期選股增值" value={pct(learning.metrics.selectionNetLift)} detail={`入選 ${learningSelected?.samples ?? 0} / 落選 ${learningRejected?.samples ?? 0} 筆`} tone={(learning.metrics.selectionNetLift ?? 0) > 0 ? "positive" : "danger"} icon={Target} />
+        <Metric label="本輪研究假設" value={number.format(activeHypotheses.length)} detail="只建立 challenger 提案" tone={activeHypotheses.length ? "warning" : "info"} icon={Bot} />
+        <Metric label="基本面特徵" value={number.format(learningGaps?.fundamentalObservations ?? 0)} detail={`${number.format(learningGaps?.newsEvidence ?? 0)} 筆新聞證據`} tone={(learningGaps?.fundamentalObservations ?? 0) > 0 ? "positive" : "danger"} icon={Database} />
+      </section>
+
+      <section className="analysis-grid equal-grid">
+        <div className="panel">
+          <PanelHeader eyebrow="Pre-registered hypotheses" title="下一輪 Challenger 假設" description="優先級來自資料缺口、前瞻風險與成熟樣本；提案不等於啟用" trailing={<span className="record-count">{activeHypotheses.length} 項</span>} />
+          {activeHypotheses.length ? <div className="table-scroll"><table className="data-table compact-table"><thead><tr><th>優先</th><th>研究層</th><th>假設</th><th>累積出現</th><th>狀態</th></tr></thead><tbody>{activeHypotheses.map((row) => <tr key={row.hypothesisKey}><td><strong>{row.priority}</strong></td><td>{learningLayerLabels[row.targetLayer] ?? row.targetLayer}</td><td><strong>{row.title}</strong><br /><small>{row.rationale}</small></td><td>{row.occurrences}</td><td><span className="status-pill neutral">{row.status === "proposed" ? "待審查" : row.status}</span></td></tr>)}</tbody></table></div> : <div className="empty-state">目前沒有達到最低證據要求的新假設。</div>}
+        </div>
+        <div className="panel">
+          <PanelHeader eyebrow="Failure attribution" title="近期主要負向切片" description="只顯示至少 10 筆成熟正式入選；小樣本不會觸發自動改版" trailing={<span className="record-count">{negativeAttributions.length} 組</span>} />
+          {negativeAttributions.length ? <div className="table-scroll"><table className="data-table compact-table"><thead><tr><th>維度</th><th>切片</th><th>樣本</th><th>淨報酬</th><th>超額</th><th>回撤</th></tr></thead><tbody>{negativeAttributions.map((row) => <tr key={`${row.dimension}-${row.bucketKey}`}><td>{learningDimensionLabels[row.dimension] ?? row.dimension}</td><td><strong>{row.bucketLabel}</strong></td><td>{row.sampleCount}</td><td className="negative-text">{pct(row.meanNetReturn)}</td><td className={(row.meanExcessReturn ?? 0) >= 0 ? "positive-text" : "negative-text"}>{pct(row.meanExcessReturn)}</td><td className="negative-text">{pct(row.meanDrawdown)}</td></tr>)}</tbody></table></div> : <div className="empty-state">近期尚無足量負向切片。</div>}
+        </div>
       </section>
 
       <section className="panel">

@@ -689,6 +689,111 @@ def _research_experiment_snapshot(conn):
     return rows
 
 
+def _empty_learning_cycle():
+    return {
+        "cycleVersion": "",
+        "cycleDate": None,
+        "generatedAt": None,
+        "status": "not_run",
+        "primaryDiagnosis": "not_available",
+        "evidenceStartDate": None,
+        "evidenceEndDate": None,
+        "newMaturedOutcomes": 0,
+        "closedChampionTrades": 0,
+        "reportPath": None,
+        "reportMarkdown": "",
+        "metrics": {},
+        "attributions": [],
+        "hypotheses": [],
+        "recentCycles": [],
+    }
+
+
+def _learning_cycle_snapshot(conn):
+    required = {
+        "research_cycles",
+        "research_failure_attributions",
+        "learning_hypotheses",
+    }
+    if any(not _table_exists(conn, table) for table in required):
+        return _empty_learning_cycle()
+    latest = conn.execute(
+        """
+        SELECT * FROM research_cycles
+        ORDER BY cycle_date DESC, generated_at DESC, id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if not latest:
+        return _empty_learning_cycle()
+    attributions = _read_records(
+        conn,
+        """
+        SELECT scope, dimension, bucket_key AS bucketKey,
+               bucket_label AS bucketLabel, sample_count AS sampleCount,
+               mean_net_return AS meanNetReturn,
+               mean_excess_return AS meanExcessReturn,
+               positive_rate AS positiveRate, mean_drawdown AS meanDrawdown,
+               standard_error AS standardError, ci95_low AS ci95Low,
+               ci95_high AS ci95High, loss_contribution AS lossContribution,
+               sort_order AS sortOrder
+        FROM research_failure_attributions
+        WHERE cycle_id=?
+        ORDER BY scope, dimension, sort_order, sample_count DESC
+        """,
+        (latest["id"],),
+    )
+    hypotheses = _read_records(
+        conn,
+        """
+        SELECT hypothesis_key AS hypothesisKey, title, rationale,
+               target_layer AS targetLayer, status, priority, occurrences,
+               proposed_config_json AS proposedConfigJson,
+               evidence_json AS evidenceJson, created_at AS createdAt,
+               updated_at AS updatedAt,
+               CASE WHEN latest_cycle_id=? THEN 1 ELSE 0 END AS seenThisCycle
+        FROM learning_hypotheses
+        WHERE status IN ('proposed', 'approved', 'testing')
+        ORDER BY priority DESC, updated_at DESC, hypothesis_key
+        LIMIT 30
+        """,
+        (latest["id"],),
+    )
+    for row in hypotheses:
+        row["seenThisCycle"] = bool(row.get("seenThisCycle"))
+        row["proposedConfig"] = _decode_object(row.pop("proposedConfigJson", ""))
+        row["evidence"] = _decode_object(row.pop("evidenceJson", ""))
+    recent_cycles = _read_records(
+        conn,
+        """
+        SELECT cycle_date AS cycleDate, generated_at AS generatedAt,
+               status, primary_diagnosis AS primaryDiagnosis,
+               new_matured_outcomes AS newMaturedOutcomes,
+               closed_champion_trades AS closedChampionTrades
+        FROM research_cycles
+        ORDER BY cycle_date DESC, generated_at DESC, id DESC
+        LIMIT 20
+        """,
+    )
+    return {
+        "cycleVersion": latest["cycle_version"],
+        "cycleDate": latest["cycle_date"],
+        "generatedAt": latest["generated_at"],
+        "status": latest["status"],
+        "primaryDiagnosis": latest["primary_diagnosis"],
+        "evidenceStartDate": latest["evidence_start_date"],
+        "evidenceEndDate": latest["evidence_end_date"],
+        "newMaturedOutcomes": int(latest["new_matured_outcomes"] or 0),
+        "closedChampionTrades": int(latest["closed_champion_trades"] or 0),
+        "reportPath": latest["report_path"],
+        "reportMarkdown": latest["report_markdown"],
+        "metrics": _decode_object(latest["metrics_json"]),
+        "attributions": attributions,
+        "hypotheses": hypotheses,
+        "recentCycles": recent_cycles,
+    }
+
+
 def _empty_learnability_audit():
     return {
         "auditVersion": "",
@@ -2234,6 +2339,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
         global_market = _global_market_snapshot(conn)
         institutional_flow = _institutional_flow_snapshot(conn)
         research_experiments = _research_experiment_snapshot(conn)
+        learning_cycle = _learning_cycle_snapshot(conn)
         learnability_audit = _learnability_audit_snapshot(conn)
         model_challengers = _model_challenger_snapshot(conn)
         strategy_challenger = _strategy_challenger_snapshot(conn)
@@ -2255,6 +2361,7 @@ def build_dashboard_snapshot(db_path="data/stock_scanner.db"):
             "researchHealth": research_health,
             "replayAttribution": replay_attribution,
             "researchExperiments": research_experiments,
+            "learningCycle": learning_cycle,
             "learnabilityAudit": learnability_audit,
             "strategyChallenger": strategy_challenger,
             "alphaLive": alpha_live,
