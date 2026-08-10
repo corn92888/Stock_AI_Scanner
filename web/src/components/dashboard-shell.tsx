@@ -668,6 +668,11 @@ function DecisionView({ snapshot, marketDataFresh }: { snapshot: DashboardSnapsh
   const executionReady = deployable.status === "enter_next_open" && Boolean(deployable.selected);
   const fixedSignalLagsLatestBatch = Boolean(deployable.signalDate)
     && deployable.signalDate !== snapshot.overview.latestTradeDate;
+  const fixedPlanAppliesToday = fixedSignalLagsLatestBatch
+    && snapshot.overview.latestMode === "intraday";
+  const latestBatchTime = snapshot.overview.latestRunAt.slice(11, 16);
+  const openingEntryWindowPassed = fixedPlanAppliesToday
+    && latestBatchTime > "09:15";
   const researchOnly = !integrityGate.formalRecommendationsAllowed;
   const dates = useMemo(() => [...new Set(snapshot.candidates.map((row) => row.tradeDate))].sort().reverse(), [snapshot.candidates]);
   const latestCandidateDate = dates.includes(snapshot.overview.latestTradeDate) ? snapshot.overview.latestTradeDate : dates[0] || "";
@@ -724,16 +729,17 @@ function DecisionView({ snapshot, marketDataFresh }: { snapshot: DashboardSnapsh
       <section className="model-hero-band">
         <div>
           <span className="eyebrow">Fixed next-open strategy</span>
-          <h2>{executionReady ? `固定策略：次一交易日開盤買進 ${deployable.selected?.code} ${deployable.selected?.name}` : deployable.status === "cash" ? "固定策略決策：CASH" : deployable.status === "refresh_required" ? "固定策略等待新版模型重掃" : "固定策略尚未允許執行"}</h2>
-          <p>收盤訊號日 {deployable.signalDate ?? "--"} · 最近核對 {formatDateTime(deployable.evaluatedAt)} · {deployable.version} · {deployable.reasonCodes.map((reason) => deployableReasonLabels[reason] ?? reason).join("、")}</p>
+          <h2>{executionReady ? fixedPlanAppliesToday ? openingEntryWindowPassed ? `今日原定開盤：${deployable.selected?.code} ${deployable.selected?.name}（禁止追價）` : `今日開盤計畫：${deployable.selected?.code} ${deployable.selected?.name}` : `次一交易日開盤計畫：${deployable.selected?.code} ${deployable.selected?.name}` : deployable.status === "cash" ? fixedPlanAppliesToday ? "今日執行計畫：維持現金" : "固定策略決策：CASH" : deployable.status === "refresh_required" ? "固定策略等待新版模型重掃" : "固定策略尚未允許執行"}</h2>
+          <p>{fixedPlanAppliesToday ? `適用交易日 ${snapshot.overview.latestTradeDate} · ` : ""}收盤訊號日 {deployable.signalDate ?? "--"} · 最近核對 {formatDateTime(deployable.evaluatedAt)} · {deployable.version} · {deployable.reasonCodes.map((reason) => deployableReasonLabels[reason] ?? reason).join("、")}</p>
         </div>
         <div className={`governance-state ${executionReady ? "ready" : "shadow"}`}><ShieldCheck size={20} /><span>{executionReady ? "MANUAL MICRO" : deployable.action}</span></div>
       </section>
 
-      {fixedSignalLagsLatestBatch && <div className="validation-banner"><Clock3 size={18} /><div><strong>盤中資料已更新；固定策略仍引用最近完成的收盤訊號</strong><p>盤中批次已更新至 {formatDateTime(snapshot.overview.latestRunAt)}，但固定 T+10 策略只在盤後產生次一交易日開盤計畫，因此目前仍使用 {deployable.signalDate} 收盤訊號。盤中研究候選不會覆寫這套已驗證策略。</p></div></div>}
+      {fixedPlanAppliesToday && <div className="validation-banner"><Clock3 size={18} /><div><strong>{deployable.action === "CASH" ? `${deployable.signalDate} 收盤訊號就是 ${snapshot.overview.latestTradeDate} 今日計畫：不建立新部位` : openingEntryWindowPassed ? "今日固定策略的開盤進場窗口已過，禁止盤中追價" : `${deployable.signalDate} 收盤訊號就是 ${snapshot.overview.latestTradeDate} 今日開盤計畫`}</strong><p>盤中批次已更新至 {formatDateTime(snapshot.overview.latestRunAt)}；盤中研究候選用於持續驗證，不會覆寫前一收盤已鎖定的執行計畫。{openingEntryWindowPassed && deployable.selected ? ` 原定標的是 ${deployable.selected.code} ${deployable.selected.name}，只有未高於 ${decimal.format(deployable.selected.maxEntryPrice)} 的開盤成交才符合規則。` : ""}</p></div></div>}
+      {!fixedPlanAppliesToday && fixedSignalLagsLatestBatch && <div className="validation-banner"><Clock3 size={18} /><div><strong>盤中資料已更新；固定策略仍引用最近完成的收盤訊號</strong><p>盤中批次已更新至 {formatDateTime(snapshot.overview.latestRunAt)}，但固定 T+10 策略只在盤後產生次一交易日開盤計畫，因此目前仍使用 {deployable.signalDate} 收盤訊號。盤中研究候選不會覆寫這套已驗證策略。</p></div></div>}
 
       <section className="metrics-grid metrics-grid-five">
-        <Metric label="固定策略動作" value={executionReady ? "次日開盤買進" : deployable.action === "CASH" ? "維持現金" : "等待重掃"} detail={deployable.selected ? `${deployable.selected.code} · 上限 ${decimal.format(deployable.selected.maxEntryPrice)}` : deployableReasonLabels[deployable.reasonCodes[0]] ?? "尚無決策"} tone={executionReady ? "positive" : deployable.status === "cash" ? "warning" : "danger"} icon={Target} />
+        <Metric label={fixedPlanAppliesToday ? "今日固定策略" : "固定策略動作"} value={executionReady ? openingEntryWindowPassed ? "禁止追價" : "開盤買進" : deployable.action === "CASH" ? "維持現金" : "等待重掃"} detail={deployable.selected ? `${deployable.selected.code} · 開盤上限 ${decimal.format(deployable.selected.maxEntryPrice)}` : deployableReasonLabels[deployable.reasonCodes[0]] ?? "尚無決策"} tone={executionReady ? openingEntryWindowPassed ? "danger" : "positive" : deployable.status === "cash" ? "warning" : "danger"} icon={Target} />
         <Metric label="單檔部位" value={rate(deployable.targetWeight * 100)} detail={`最多 ${deployable.maxPositions} 檔 · 同產業 ${deployable.maxIndustryPositions} 檔`} tone="info" icon={WalletCards} />
         <Metric label="訊號日上漲家數" value={deployable.marketUpRatio == null ? "--" : rate(deployable.marketUpRatio)} detail={`${deployable.signalDate ?? "--"} · 固定門檻 ${rate(deployable.marketGateMinimum)}`} tone={(deployable.marketUpRatio ?? 0) >= deployable.marketGateMinimum ? "positive" : "warning"} icon={Activity} />
         <Metric label="2025 歷史保留區" value={holdout ? pct(holdout.totalReturnPct) : "--"} detail={holdout ? `${holdout.trades} 筆 · 勝率 ${rate(holdout.winRatePct)}` : "尚未建立稽核"} tone={(holdout?.totalReturnPct ?? 0) > 0 ? "positive" : "danger"} icon={TrendingUp} />
@@ -750,7 +756,7 @@ function DecisionView({ snapshot, marketDataFresh }: { snapshot: DashboardSnapsh
         <Metric label="風險阻擋" value={number.format(dayRows.filter((row) => !row.tradable).length)} detail="未通過硬性交易條件" tone="danger" icon={ShieldCheck} />
       </section>
 
-      <div className="validation-banner"><TriangleAlert size={18} /><div><strong>{integrityGate.status === "blocked" ? "研究完整性閘門阻擋正式推薦" : integrityGate.status === "review_required" ? "量化證據待人工核准" : "研究完整性閘門已核准"}</strong><p>{researchOnly ? `目前僅通過 ${integrityGate.passedChecks}/${integrityGate.totalChecks} 項完整性檢查；下方入選結果只代表研究排序，不是買進指令。` : `已通過 ${integrityGate.passedChecks}/${integrityGate.totalChecks} 項檢查與人工核准；仍須依即時價格及個人風險承受度決策。`}</p></div></div>
+      <div className="validation-banner"><TriangleAlert size={18} /><div><strong>{integrityGate.status === "blocked" ? "盤中 BUY_NOW 未通過驗證，只能維持研究模式" : integrityGate.status === "review_required" ? "盤中 BUY_NOW 證據待人工核准" : "盤中 BUY_NOW 完整性閘門已核准"}</strong><p>{researchOnly ? `目前僅通過 ${integrityGate.passedChecks}/${integrityGate.totalChecks} 項完整性檢查；${snapshot.researchHealth.formalMatureSelected} 筆成熟入選的成本後 T+3 平均報酬 ${pct(snapshot.researchHealth.formalSelectedMeanNetReturn3d)}、平均超額 ${pct(snapshot.researchHealth.formalSelectedMeanExcessReturn3d)}。下方入選結果只代表研究排序，不是買進指令。` : `已通過 ${integrityGate.passedChecks}/${integrityGate.totalChecks} 項檢查與人工核准；仍須依即時價格及個人風險承受度決策。`}</p></div></div>
 
       <section className="panel decision-panel">
         <PanelHeader eyebrow="Decision workspace" title="候選決策工作台" description="同一交易日的規則訊號、流動性、AI 影子預測與風險證據" trailing={<div className="panel-actions"><span className="record-count">{scope === "latest" && latestRunAt ? `${formatDateTime(latestRunAt)} · ` : ""}{rows.length} / {dayRows.length} 筆</span><IconButton label="重設篩選" onClick={resetFilters}><RotateCcw size={16} /></IconButton><IconButton label="匯出目前候選 CSV" onClick={() => downloadCandidates(rows, date)}><Download size={16} /></IconButton></div>} />
