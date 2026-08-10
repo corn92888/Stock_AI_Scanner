@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   advanceDaytradeState,
+  buildDaytradeJournal,
   createDaytradeState,
   evaluateDaytradeSignal,
   type DaytradeQuote,
@@ -79,4 +80,13 @@ test("paper broker enters, charges costs, and exits at the fixed stop", () => {
   assert.equal(exited.fills[0].side, "SELL");
   assert.equal(exited.fills[0].reason, "固定停損");
   assert((exited.fills[0].realizedPnl ?? 0) < 0);
+
+  const journal = buildDaytradeJournal(exited.fills);
+  assert.equal(journal.length, 1);
+  assert.equal(journal[0].status, "closed");
+  assert.equal(journal[0].entryAt, quote.at);
+  assert.equal(journal[0].exitAt, stoppedQuote.at);
+  assert.equal(journal[0].entryPrice, entered.fills[0].price);
+  assert.equal(journal[0].exitPrice, exited.fills[0].price);
+  assert.equal(journal[0].holdingSeconds, 60);
 });

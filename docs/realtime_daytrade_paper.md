@@ -46,3 +46,13 @@ The browser needs two minutes of quote history before a symbol can pass the sign
 - Day-trading sell tax: 0.15%.
 
 State and fills are stored in browser local storage for the current trading date. The engine runs only while the workspace remains open. This is an execution and data-quality experiment, not evidence of profitability and not an instruction to place a real trade.
+
+## Runtime Observability
+
+The terminal exposes enough evidence to distinguish an idle strategy from a broken process:
+
+- Engine state, live heartbeat, last quote timestamp, quote age, last evaluation timestamp, and page evaluation count.
+- Current market phase and an explicit statement of whether new entries are allowed.
+- A no-trade explanation when the engine is running but no symbol passes the gates.
+- A paired trade journal showing entry and exit timestamps to the second, both fill prices, quantity, holding time, costs, realized PnL, and exit reason.
+- A separate immutable-style raw fill list retaining every simulated buy and sell event.

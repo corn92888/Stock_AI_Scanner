@@ -74,6 +74,24 @@ export type DaytradeFill = {
   realizedPnl: number | null;
 };
 
+export type DaytradeJournalEntry = {
+  id: string;
+  symbol: string;
+  name: string;
+  quantity: number;
+  entryAt: string;
+  entryPrice: number;
+  entryFee: number;
+  exitAt: string | null;
+  exitPrice: number | null;
+  exitFee: number;
+  tax: number;
+  realizedPnl: number | null;
+  exitReason: string | null;
+  holdingSeconds: number | null;
+  status: "open" | "closed";
+};
+
 export type DaytradeLog = {
   at: string;
   level: "info" | "trade" | "risk";
@@ -157,6 +175,53 @@ export function daytradeUnrealizedPnl(position: DaytradePosition, quote?: Daytra
   const exitNotional = mark * position.quantity;
   const exitCosts = commission(exitNotional) + exitNotional * DAYTRADE_TAX_RATE;
   return exitNotional - exitCosts - position.entryPrice * position.quantity - position.entryFee;
+}
+
+export function buildDaytradeJournal(fills: DaytradeFill[]): DaytradeJournalEntry[] {
+  const chronological = [...fills].sort((left, right) => Date.parse(left.filledAt) - Date.parse(right.filledAt));
+  const entries: DaytradeJournalEntry[] = [];
+  const openEntries = new Map<string, number[]>();
+
+  for (const fill of chronological) {
+    if (fill.side === "BUY") {
+      const index = entries.length;
+      entries.push({
+        id: fill.id,
+        symbol: fill.symbol,
+        name: fill.name,
+        quantity: fill.quantity,
+        entryAt: fill.filledAt,
+        entryPrice: fill.price,
+        entryFee: fill.fee,
+        exitAt: null,
+        exitPrice: null,
+        exitFee: 0,
+        tax: 0,
+        realizedPnl: null,
+        exitReason: null,
+        holdingSeconds: null,
+        status: "open",
+      });
+      openEntries.set(fill.symbol, [...(openEntries.get(fill.symbol) ?? []), index]);
+      continue;
+    }
+
+    const queue = openEntries.get(fill.symbol) ?? [];
+    const index = queue.shift();
+    if (index == null) continue;
+    openEntries.set(fill.symbol, queue);
+    const entry = entries[index];
+    entry.exitAt = fill.filledAt;
+    entry.exitPrice = fill.price;
+    entry.exitFee = fill.fee;
+    entry.tax = fill.tax;
+    entry.realizedPnl = fill.realizedPnl;
+    entry.exitReason = fill.reason;
+    entry.holdingSeconds = Math.max(0, Math.round((Date.parse(fill.filledAt) - Date.parse(entry.entryAt)) / 1000));
+    entry.status = "closed";
+  }
+
+  return entries.reverse();
 }
 
 function pointBefore(points: QuotePoint[], targetMs: number) {

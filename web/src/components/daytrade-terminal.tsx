@@ -29,6 +29,7 @@ import {
 
 import {
   advanceDaytradeState,
+  buildDaytradeJournal,
   createDaytradeState,
   daytradeEquity,
   daytradeUnrealizedPnl,
@@ -74,6 +75,47 @@ function timeLabel(value: string) {
   }).format(new Date(value));
 }
 
+function dateTimeLabel(value: string) {
+  if (!value) return "--";
+  return new Intl.DateTimeFormat("zh-TW", {
+    timeZone: "Asia/Taipei",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).format(new Date(value));
+}
+
+function durationLabel(seconds: number | null) {
+  if (seconds == null) return "持倉中";
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes} 分 ${remainder} 秒`;
+}
+
+function marketSessionState(value: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Taipei",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(value));
+  const read = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+  const weekday = read("weekday");
+  const minutes = Number(read("hour")) * 60 + Number(read("minute"));
+  if (weekday === "Sat" || weekday === "Sun") return { key: "closed", label: "非交易日", detail: "週末不執行進場" };
+  if (minutes < 9 * 60) return { key: "preopen", label: "開盤前", detail: "09:00 開始接收盤中行情" };
+  if (minutes < 9 * 60 + 15) return { key: "warmup", label: "開盤暖機", detail: "09:15 後才允許進場" };
+  if (minutes <= 12 * 60 + 45) return { key: "entry", label: "進場時段開放", detail: "策略每次行情更新都會重新評估" };
+  if (minutes < 13 * 60 + 20) return { key: "exit_only", label: "只出不進", detail: "12:45 後停止建立新倉" };
+  if (minutes <= 13 * 60 + 30) return { key: "flatten", label: "強制平倉時段", detail: "13:20 起清空模擬部位" };
+  return { key: "closed", label: "今日已收盤", detail: "下一交易日 09:00 恢復" };
+}
+
 function pct(value: number | null, digits = 2) {
   return value == null || !Number.isFinite(value) ? "--" : `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
 }
@@ -114,6 +156,9 @@ export default function DaytradeTerminal({ snapshot }: { snapshot: DashboardSnap
   const [feed, setFeed] = useState<QuotePayload | null>(null);
   const [feedError, setFeedError] = useState("");
   const [histories, setHistories] = useState<Record<string, QuotePoint[]>>({});
+  const [lastEvaluationAt, setLastEvaluationAt] = useState("");
+  const [evaluationCount, setEvaluationCount] = useState(0);
+  const [clock, setClock] = useState(() => Date.parse(snapshot.generatedAt));
   const [selectedSymbol, setSelectedSymbol] = useState(() => initialCandidates[0]?.symbol ?? "");
   const [state, setState] = useState<DaytradePaperState>(() => createDaytradeState(
     taipeiSessionDate(new Date(snapshot.generatedAt)),
@@ -164,6 +209,11 @@ export default function DaytradeTerminal({ snapshot }: { snapshot: DashboardSnap
   }, [hydrated, watchSymbols]);
 
   useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     if (!symbolsKey) return;
     let cancelled = false;
     let timer = 0;
@@ -179,6 +229,8 @@ export default function DaytradeTerminal({ snapshot }: { snapshot: DashboardSnap
         setFeed(payload);
         setFeedError("");
         setQuotes(payload.quotes);
+        setLastEvaluationAt(payload.generatedAt);
+        setEvaluationCount((count) => count + 1);
 
         const nextHistories = { ...historiesRef.current };
         for (const quote of payload.quotes) {
@@ -218,10 +270,56 @@ export default function DaytradeTerminal({ snapshot }: { snapshot: DashboardSnap
   const totalPnl = equity - state.startingCash;
   const unrealizedPnl = state.positions.reduce((sum, position) => sum + daytradeUnrealizedPnl(position, quoteBySymbol.get(position.symbol)), 0);
   const closedTrades = state.fills.filter((fill) => fill.side === "SELL").length;
+  const tradeJournal = useMemo(() => buildDaytradeJournal(state.fills), [state.fills]);
   const chartPoints = (histories[selectedSymbol] ?? []).map((point) => ({
     time: timeLabel(point.at),
     price: point.price,
   }));
+  const chartPrices = chartPoints.map((point) => point.price);
+  const chartLow = chartPrices.length ? Math.min(...chartPrices) : 0;
+  const chartHigh = chartPrices.length ? Math.max(...chartPrices) : 0;
+  const chartPadding = Math.max((chartHigh - chartLow) * 0.2, chartHigh * 0.001, 0.01);
+  const chartDomain: [number, number] = [
+    Number((chartLow - chartPadding).toFixed(2)),
+    Number((chartHigh + chartPadding).toFixed(2)),
+  ];
+  const chartTicks = [...new Set(Array.from({ length: 5 }, (_, index) => Number(
+    (chartDomain[0] + (chartDomain[1] - chartDomain[0]) * index / 4).toFixed(2),
+  )))];
+  const marketSession = marketSessionState(new Date(clock).toISOString());
+  const latestQuoteAt = quotes.reduce((latest, quote) => !latest || Date.parse(quote.at) > Date.parse(latest) ? quote.at : latest, "");
+  const quoteAgeSeconds = latestQuoteAt ? Math.max(0, Math.floor((clock - Date.parse(latestQuoteAt)) / 1000)) : null;
+  const heartbeatAgeSeconds = feed ? Math.max(0, Math.floor((clock - Date.parse(feed.generatedAt)) / 1000)) : null;
+  const heartbeatHealthy = Boolean(feed?.realtime && heartbeatAgeSeconds != null && heartbeatAgeSeconds <= 15 && !feedError);
+  const buySignals = [...signalBySymbol.values()].filter((signal) => signal?.action === "BUY").length;
+  const warmingSignals = [...signalBySymbol.values()].filter((signal) => signal?.reasons.includes("分鐘樣本暖機中")).length;
+  let engineActivity = "尚未啟動模擬引擎";
+  let engineActivityDetail = "按下啟動模擬後才會評估與撮合";
+  if (state.status === "halted") {
+    engineActivity = "風控已停止今日交易";
+    engineActivityDetail = "重設帳戶前不會再建立部位";
+  } else if (state.status === "running" && feedError) {
+    engineActivity = "已啟動，但行情連線中斷";
+    engineActivityDetail = "行情恢復前不會建立新倉";
+  } else if (state.status === "running" && !heartbeatHealthy) {
+    engineActivity = "已啟動，等待有效即時行情";
+    engineActivityDetail = "收到新報價後會自動恢復評估";
+  } else if (state.status === "running" && marketSession.key !== "entry") {
+    engineActivity = marketSession.key === "exit_only" || marketSession.key === "flatten" ? "持續監控出場，不再進場" : "引擎在線，現在不允許進場";
+    engineActivityDetail = marketSession.detail;
+  } else if (state.status === "running" && state.positions.length > 0) {
+    engineActivity = `正在監控 ${state.positions.length} 筆持倉`;
+    engineActivityDetail = "每次報價都會檢查停損、停利與持有時間";
+  } else if (state.status === "running" && buySignals > 0) {
+    engineActivity = `${buySignals} 檔條件通過，處理模擬撮合`;
+    engineActivityDetail = "成交後會立即出現在完整交易流水帳";
+  } else if (state.status === "running" && warmingSignals > 0) {
+    engineActivity = `正在暖機 ${warmingSignals} 檔`;
+    engineActivityDetail = "需累積兩分鐘報價才能判斷分鐘動能與量能";
+  } else if (state.status === "running") {
+    engineActivity = "引擎有在掃描，目前沒有進場訊號";
+    engineActivityDetail = "下方每檔的阻擋原因會說明未成交條件";
+  }
 
   const changeStatus = (status: DaytradePaperState["status"]) => {
     setState((current) => ({
@@ -287,6 +385,14 @@ export default function DaytradeTerminal({ snapshot }: { snapshot: DashboardSnap
         </div>
       ) : null}
 
+      <section className={`engine-observability ${state.status === "running" && heartbeatHealthy ? "active" : "idle"}`}>
+        <div className="engine-primary-state"><span className="engine-pulse" /><div><small>策略引擎</small><strong>{state.status === "running" ? heartbeatHealthy ? "有在運作" : "已啟動・等待行情" : state.status === "halted" ? "風控停機" : "沒有啟動"}</strong><p>{engineActivity}</p></div></div>
+        <div><small>最後行情</small><strong>{latestQuoteAt ? dateTimeLabel(latestQuoteAt) : "尚未收到"}</strong><p>{quoteAgeSeconds == null ? "等待第一筆行情" : `${quoteAgeSeconds} 秒前 · ${sourceLabel(quotes[0]?.source)}`}</p></div>
+        <div><small>最後策略評估</small><strong>{lastEvaluationAt ? dateTimeLabel(lastEvaluationAt) : "尚未評估"}</strong><p>本頁已評估 {integerFormatter.format(evaluationCount)} 次</p></div>
+        <div><small>現在能否買進</small><strong>{marketSession.label}</strong><p>{marketSession.detail}</p></div>
+        <div><small>今日成交狀態</small><strong>{closedTrades > 0 ? `已完成 ${closedTrades} 趟` : state.positions.length ? `持倉 ${state.positions.length} 筆` : "尚未成交"}</strong><p>{engineActivityDetail}</p></div>
+      </section>
+
       <section className="metrics-grid metrics-grid-five daytrade-metrics">
         <div className={`metric ${state.status === "running" ? "metric-positive" : state.status === "halted" ? "metric-danger" : "metric-warning"}`}><span className="metric-label"><Activity size={14} />機器人</span><strong>{stateStatusLabel(state)}</strong><small>頁面開啟時持續運作</small></div>
         <div className="metric metric-info"><span className="metric-label"><WalletCards size={14} />模擬權益</span><strong>{moneyFormatter.format(equity)}</strong><small>可用現金 {moneyFormatter.format(state.cash)}</small></div>
@@ -309,7 +415,7 @@ export default function DaytradeTerminal({ snapshot }: { snapshot: DashboardSnap
               <LineChart data={chartPoints} margin={{ top: 16, right: 22, bottom: 4, left: 6 }}>
                 <CartesianGrid stroke="#292d30" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="time" stroke="#73797e" tick={{ fontSize: 9 }} minTickGap={34} />
-                <YAxis domain={["auto", "auto"]} stroke="#73797e" tick={{ fontSize: 9 }} width={55} />
+                <YAxis domain={chartDomain} ticks={chartTicks} stroke="#73797e" tick={{ fontSize: 9 }} width={55} />
                 <Tooltip contentStyle={{ background: "#151718", border: "1px solid #3b4044", borderRadius: 5, fontSize: 11 }} formatter={(value) => [decimalFormatter.format(Number(value)), "價格"]} />
                 <Line type="monotone" dataKey="price" stroke="#55c29a" strokeWidth={2} dot={false} isAnimationActive={false} />
               </LineChart>
@@ -333,6 +439,11 @@ export default function DaytradeTerminal({ snapshot }: { snapshot: DashboardSnap
         </div>
       </section>
 
+      <section className="panel trade-journal-panel">
+        <div className="panel-header"><div><span className="eyebrow">Paired trade journal</span><h2>完整交易流水帳</h2><p>每一列是一趟完整模擬交易，買進與賣出時間精確到秒，價格、股數、成本與損益並排顯示。</p></div><span className="record-count">{tradeJournal.length} 趟</span></div>
+        <div className="table-scroll"><table className="data-table compact-table trade-journal-table"><thead><tr><th>交易</th><th>標的</th><th>狀態</th><th>買進時間</th><th>買進價</th><th>賣出時間</th><th>賣出價</th><th>股數</th><th>持有時間</th><th>交易成本</th><th>已實現損益</th><th>出場原因</th></tr></thead><tbody>{tradeJournal.length ? tradeJournal.map((trade, index) => { const totalCosts = trade.entryFee + trade.exitFee + trade.tax; return <tr key={trade.id}><td className="rank-cell">#{String(tradeJournal.length - index).padStart(3, "0")}</td><td><div className="symbol-cell"><strong>{trade.symbol}</strong><span>{trade.name}</span></div></td><td><span className={`status-pill ${trade.status === "closed" ? "neutral" : "selected"}`}>{trade.status === "closed" ? "已完成" : "持倉中"}</span></td><td className="trade-entry-cell"><strong>{dateTimeLabel(trade.entryAt)}</strong><small>模擬買進</small></td><td className="positive-text">{decimalFormatter.format(trade.entryPrice)}</td><td className="trade-exit-cell"><strong>{trade.exitAt ? dateTimeLabel(trade.exitAt) : "尚未賣出"}</strong><small>{trade.exitAt ? "模擬賣出" : "等待出場條件"}</small></td><td className={trade.exitPrice == null ? "muted-inline" : "negative-text"}>{trade.exitPrice == null ? "--" : decimalFormatter.format(trade.exitPrice)}</td><td>{integerFormatter.format(trade.quantity)}</td><td>{durationLabel(trade.holdingSeconds)}</td><td>{moneyFormatter.format(totalCosts)}</td><td className={(trade.realizedPnl ?? 0) >= 0 ? "positive-text" : "negative-text"}>{trade.realizedPnl == null ? "未實現" : moneyFormatter.format(trade.realizedPnl)}</td><td>{trade.exitReason ?? "持倉監控中"}</td></tr>; }) : <tr><td colSpan={12}><div className="journal-empty"><strong>今天尚未發生任何模擬成交</strong><span>{engineActivity}。{engineActivityDetail}。</span></div></td></tr>}</tbody></table></div>
+      </section>
+
       <div className="daytrade-lower-grid">
         <section className="panel">
           <div className="panel-header"><div><span className="eyebrow">Open risk</span><h2>即時模擬部位</h2></div><span className="record-count">{state.positions.length} 筆</span></div>
@@ -346,8 +457,8 @@ export default function DaytradeTerminal({ snapshot }: { snapshot: DashboardSnap
       </div>
 
       <section className="panel">
-        <div className="panel-header"><div><span className="eyebrow">Paper fills</span><h2>今日模擬成交明細</h2><p>成交價已加入 5 bps 滑價、最高牌告手續費與當沖賣出證交稅。</p></div><span className="record-count">{state.fills.length} 筆</span></div>
-        <div className="table-scroll"><table className="data-table compact-table daytrade-fill-table"><thead><tr><th>時間</th><th>標的</th><th>方向</th><th>股數</th><th>成交價</th><th>手續費</th><th>稅</th><th>已實現損益</th><th>原因</th></tr></thead><tbody>{state.fills.length ? state.fills.map((fill) => <tr key={fill.id}><td>{timeLabel(fill.filledAt)}</td><td><div className="symbol-cell"><strong>{fill.symbol}</strong><span>{fill.name}</span></div></td><td><span className={`status-pill ${fill.side === "BUY" ? "selected" : "blocked"}`}>{fill.side === "BUY" ? "買進" : "賣出"}</span></td><td>{integerFormatter.format(fill.quantity)}</td><td>{decimalFormatter.format(fill.price)}</td><td>{moneyFormatter.format(fill.fee)}</td><td>{moneyFormatter.format(fill.tax)}</td><td className={(fill.realizedPnl ?? 0) >= 0 ? "positive-text" : "negative-text"}>{fill.realizedPnl == null ? "--" : moneyFormatter.format(fill.realizedPnl)}</td><td>{fill.reason}</td></tr>) : <tr><td colSpan={9}>啟動後，引擎只會在所有交易與風控條件通過時模擬成交。</td></tr>}</tbody></table></div>
+        <div className="panel-header"><div><span className="eyebrow">Raw paper fills</span><h2>逐筆模擬成交原始紀錄</h2><p>每次買進與賣出都獨立留存，時間精確到秒；成交價已加入 5 bps 滑價、手續費與當沖賣出證交稅。</p></div><span className="record-count">{state.fills.length} 筆</span></div>
+        <div className="table-scroll"><table className="data-table compact-table daytrade-fill-table"><thead><tr><th>成交時間（秒）</th><th>標的</th><th>動作</th><th>股數</th><th>成交價</th><th>手續費</th><th>稅</th><th>已實現損益</th><th>成交原因</th></tr></thead><tbody>{state.fills.length ? state.fills.map((fill) => <tr key={fill.id}><td><strong>{dateTimeLabel(fill.filledAt)}</strong></td><td><div className="symbol-cell"><strong>{fill.symbol}</strong><span>{fill.name}</span></div></td><td><span className={`status-pill ${fill.side === "BUY" ? "selected" : "blocked"}`}>{fill.side === "BUY" ? "模擬買進" : "模擬賣出"}</span></td><td>{integerFormatter.format(fill.quantity)}</td><td>{decimalFormatter.format(fill.price)}</td><td>{moneyFormatter.format(fill.fee)}</td><td>{moneyFormatter.format(fill.tax)}</td><td className={(fill.realizedPnl ?? 0) >= 0 ? "positive-text" : "negative-text"}>{fill.realizedPnl == null ? "--" : moneyFormatter.format(fill.realizedPnl)}</td><td>{fill.reason}</td></tr>) : <tr><td colSpan={9}>目前沒有原始成交紀錄；上方引擎狀態會顯示正在評估或未成交的原因。</td></tr>}</tbody></table></div>
       </section>
     </div>
   );
