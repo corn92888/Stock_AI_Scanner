@@ -26,6 +26,7 @@ import {
   LoaderCircle,
   Menu,
   RefreshCw,
+  RadioTower,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -55,13 +56,14 @@ import {
 } from "recharts";
 
 import type { Candidate, DashboardSnapshot, GlobalMarketInstrument, PaperTrade, Performance, WorkflowRun } from "@/lib/types";
+import DaytradeTerminal from "@/components/daytrade-terminal";
 
-type ViewId = "decision" | "market" | "performance" | "paper" | "pipeline" | "operations";
+type ViewId = "decision" | "daytrade" | "market" | "performance" | "paper" | "pipeline" | "operations";
 type Scope = "latest" | "selected" | "all" | "rejected";
 type CandidateSort = "rank" | "score" | "turnover" | "volume" | "ai" | "excess";
 type SortDirection = "asc" | "desc";
 
-const viewIds: ViewId[] = ["decision", "market", "performance", "paper", "pipeline", "operations"];
+const viewIds: ViewId[] = ["decision", "daytrade", "market", "performance", "paper", "pipeline", "operations"];
 
 function isViewId(value: string | undefined): value is ViewId {
   return Boolean(value && viewIds.includes(value as ViewId));
@@ -69,6 +71,7 @@ function isViewId(value: string | undefined): value is ViewId {
 
 const navItems: Array<{ id: ViewId; label: string; hint: string; icon: typeof Gauge }> = [
   { id: "decision", label: "決策工作台", hint: "候選、共識與風險", icon: Gauge },
+  { id: "daytrade", label: "即時當沖", hint: "模擬撮合與即時風控", icon: RadioTower },
   { id: "market", label: "全球市場", hint: "跨市場脈動與傳導", icon: Globe2 },
   { id: "performance", label: "策略驗證", hint: "報酬、回撤與穩定性", icon: BarChart3 },
   { id: "paper", label: "模擬資金", hint: "規則與 AI 資金競賽", icon: WalletCards },
@@ -1501,6 +1504,7 @@ export default function DashboardShell({ snapshot, workflowRuns, snapshotFresh, 
         </header>
         <div className="main-content">
           {view === "decision" && <DecisionView snapshot={snapshot} marketDataFresh={marketDataFresh} />}
+          {view === "daytrade" && <DaytradeTerminal snapshot={snapshot} />}
           {view === "market" && <GlobalMarketView snapshot={snapshot} />}
           {view === "performance" && <PerformanceView snapshot={snapshot} />}
           {view === "paper" && <PaperTradingView snapshot={snapshot} />}

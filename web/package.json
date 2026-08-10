@@ -9,7 +9,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:daytrade": "node --experimental-strip-types --test src/lib/daytrade.test.ts"
   },
   "dependencies": {
     "lucide-react": "^1.24.0",

@@ -11,6 +11,7 @@
 * **🖥 視覺化戰情室 (Web UI)**：提供基於 Streamlit 開發的網頁 Dashboard，可輸入股票代號即時驗證技術指標 (如 SuperTrend 三線、布林通道等)，也可輸入目前持股，結合最新市場監控與策略訊號做部位分析。
 * **☁️ 雲端股票倉**：持股頁可接 Supabase/Postgres，讓每個使用者用自己的 Email/名稱 + 私密倉庫代碼開啟獨立股票倉，並寫入每日持股快照；也可設定超級管理員總覽所有股票倉，供之後績效追蹤與回測。
 * **🧭 量化控制中心**：獨立的 Next.js 儀表板整合正式候選、回測證據、AI 資料管線與 GitHub Actions 維運狀態，線上版位於 [stock-ai-control.vercel.app](https://stock-ai-control.vercel.app)。
+* **📡 即時當沖模擬終端**：以 Fugle 正式行情或 TWSE paper-only 備援輪詢最多五檔股票，執行分鐘動能、量能、價差與流動性閘門，並用新台幣 100 萬模擬資金即時顯示成交、持倉、損益及停機風控；完整規格見 [即時當沖模擬文件](docs/realtime_daytrade_paper.md)。
 * **🧠 AI 影子決策閉環**：候選會轉成具 `known_at` 與資料血緣的時間點特徵，由擴展視窗 walk-forward 模型預測 T+3 成功率、超額報酬與回撤；Claude 另對正式候選的近期新聞抽取催化劑與風險。AI 先平行觀察，不直接改寫正式規則名單。
 * **🌐 全球市場情報層**：以點時資料整合美股期貨、費半、VIX、韓股、匯率、利率與原物料，並在 Next.js 儀表板呈現來源品質、資料延遲與台股風險傳導；完整規格見 [全球市場情報文件](docs/global_market_intelligence.md)。
 * **🔐 可驗證雲端證據層**：排程會把一致性 SQLite 快照保存到私有 Supabase Storage，下載後比對壓縮檔與資料庫 SHA-256，再把 manifest 與同步狀態顯示在控制中心；目前採雲端與 Git 雙寫，切換條件見 [Cloud Evidence Store v1](docs/cloud_evidence_store.md)。
