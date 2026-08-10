@@ -661,7 +661,7 @@ function CandidateTable({ rows, sort, direction, onSort, onSelect, researchOnly 
   );
 }
 
-function DecisionView({ snapshot }: { snapshot: DashboardSnapshot }) {
+function DecisionView({ snapshot, marketDataFresh }: { snapshot: DashboardSnapshot; marketDataFresh: boolean }) {
   const integrityGate = snapshot.researchHealth.integrityGate;
   const deployable = snapshot.deployableStrategy;
   const holdout = deployable.evidence.holdout;
@@ -718,6 +718,7 @@ function DecisionView({ snapshot }: { snapshot: DashboardSnapshot }) {
 
   return (
     <div className="view-stack">
+      {!marketDataFresh && <div className="validation-banner"><Clock3 size={18} /><div><strong>本日尚無通過品質門檻的盤中批次</strong><p>最新有效候選仍為 {snapshot.overview.latestTradeDate || "--"}；系統會在下一個半小時排程自動重試。完成前請勿把下方舊候選視為今日訊號。</p></div></div>}
       <section className="model-hero-band">
         <div>
           <span className="eyebrow">Fixed execution strategy</span>
@@ -1447,7 +1448,7 @@ function OperationsView({ snapshot, workflowRuns, snapshotFresh }: { snapshot: D
   );
 }
 
-export default function DashboardShell({ snapshot, workflowRuns, snapshotFresh, initialView }: { snapshot: DashboardSnapshot; workflowRuns: WorkflowRun[]; snapshotFresh: boolean; initialView?: string }) {
+export default function DashboardShell({ snapshot, workflowRuns, snapshotFresh, marketDataFresh, initialView }: { snapshot: DashboardSnapshot; workflowRuns: WorkflowRun[]; snapshotFresh: boolean; marketDataFresh: boolean; initialView?: string }) {
   const router = useRouter();
   const [view, setView] = useState<ViewId>(isViewId(initialView) ? initialView : "decision");
   const [mobileMenu, setMobileMenu] = useState(false);
@@ -1479,17 +1480,17 @@ export default function DashboardShell({ snapshot, workflowRuns, snapshotFresh, 
         <div className="brand"><div className="brand-mark"><Activity size={21} /></div><div><strong>Stock AI Control</strong><span>Quant research OS</span></div><button className="mobile-close" onClick={() => setMobileMenu(false)} aria-label="關閉選單"><X size={18} /></button></div>
         <div className="workspace-label"><span>Workspace</span><strong>TAIWAN EQUITY</strong></div>
         <nav>{navItems.map((item) => { const Icon = item.icon; return <a href={`/?view=${item.id}`} className={view === item.id ? "active" : ""} onClick={(event) => { event.preventDefault(); selectView(item.id); }} key={item.id}><Icon size={19} /><span><strong>{item.label}</strong><small>{item.hint}</small></span><ChevronRight size={15} /></a>; })}</nav>
-        <div className="sidebar-footer"><div className={`system-indicator ${snapshotFresh ? "online" : "stale"}`}><span /><div><strong>{snapshotFresh ? "資料服務正常" : "資料需要更新"}</strong><small>{formatDateTime(snapshot.generatedAt)}</small></div></div><div className="sidebar-model"><Bot size={15} /><div><strong>{aiState}</strong><small>{latestModel?.version ?? "尚無模型版本"}</small></div></div><a href="https://github.com/corn92888/Stock_AI_Scanner" target="_blank" rel="noreferrer"><Code2 size={16} />查看原始碼<ExternalLink size={13} /></a></div>
+        <div className="sidebar-footer"><div className={`system-indicator ${snapshotFresh && marketDataFresh ? "online" : "stale"}`}><span /><div><strong>{!snapshotFresh ? "資料服務需要更新" : marketDataFresh ? "資料服務正常" : "服務正常・等待行情"}</strong><small>{marketDataFresh ? formatDateTime(snapshot.generatedAt) : `有效批次 ${formatDateTime(snapshot.overview.latestRunAt)}`}</small></div></div><div className="sidebar-model"><Bot size={15} /><div><strong>{aiState}</strong><small>{latestModel?.version ?? "尚無模型版本"}</small></div></div><a href="https://github.com/corn92888/Stock_AI_Scanner" target="_blank" rel="noreferrer"><Code2 size={16} />查看原始碼<ExternalLink size={13} /></a></div>
       </aside>
       {mobileMenu && <button className="backdrop" onClick={() => setMobileMenu(false)} aria-label="關閉選單遮罩" />}
       <div className="content-shell">
         <header className="topbar">
           <button className="menu-button" onClick={() => setMobileMenu(true)} aria-label="開啟選單"><Menu size={18} /></button>
           <div className="page-identity"><span className="topbar-eyebrow">TAIWAN EQUITY / {active.id.toUpperCase()}</span><h1>{active.label}</h1><p>{active.hint}</p></div>
-          <div className="topbar-context"><div className="context-item"><span>最新交易日</span><strong>{snapshot.overview.latestTradeDate || "--"}</strong></div><div className="context-item"><span>最新模式</span><strong>{modeLabel(snapshot.overview.latestMode)}</strong></div><div className={`topbar-health ${snapshotFresh ? "online" : "stale"}`}><span /><div><strong>{snapshotFresh ? "LIVE DATA" : "STALE DATA"}</strong><small>{formatDateTime(snapshot.generatedAt)}</small></div></div></div>
+          <div className="topbar-context"><div className="context-item"><span>最新交易日</span><strong>{snapshot.overview.latestTradeDate || "--"}</strong></div><div className="context-item"><span>最新模式</span><strong>{modeLabel(snapshot.overview.latestMode)}</strong></div><div className={`topbar-health ${snapshotFresh && marketDataFresh ? "online" : "stale"}`}><span /><div><strong>{!snapshotFresh ? "STALE SERVICE" : marketDataFresh ? "LIVE DATA" : "WAITING QUOTES"}</strong><small>{marketDataFresh ? formatDateTime(snapshot.generatedAt) : `有效批次 ${formatDateTime(snapshot.overview.latestRunAt)}`}</small></div></div></div>
         </header>
         <div className="main-content">
-          {view === "decision" && <DecisionView snapshot={snapshot} />}
+          {view === "decision" && <DecisionView snapshot={snapshot} marketDataFresh={marketDataFresh} />}
           {view === "market" && <GlobalMarketView snapshot={snapshot} />}
           {view === "performance" && <PerformanceView snapshot={snapshot} />}
           {view === "paper" && <PaperTradingView snapshot={snapshot} />}
