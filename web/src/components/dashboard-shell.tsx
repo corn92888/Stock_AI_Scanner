@@ -666,6 +666,8 @@ function DecisionView({ snapshot, marketDataFresh }: { snapshot: DashboardSnapsh
   const deployable = snapshot.deployableStrategy;
   const holdout = deployable.evidence.holdout;
   const executionReady = deployable.status === "enter_next_open" && Boolean(deployable.selected);
+  const fixedSignalLagsLatestBatch = Boolean(deployable.signalDate)
+    && deployable.signalDate !== snapshot.overview.latestTradeDate;
   const researchOnly = !integrityGate.formalRecommendationsAllowed;
   const dates = useMemo(() => [...new Set(snapshot.candidates.map((row) => row.tradeDate))].sort().reverse(), [snapshot.candidates]);
   const latestCandidateDate = dates.includes(snapshot.overview.latestTradeDate) ? snapshot.overview.latestTradeDate : dates[0] || "";
@@ -721,17 +723,19 @@ function DecisionView({ snapshot, marketDataFresh }: { snapshot: DashboardSnapsh
       {!marketDataFresh && <div className="validation-banner"><Clock3 size={18} /><div><strong>本日尚無通過品質門檻的盤中批次</strong><p>最新有效候選仍為 {snapshot.overview.latestTradeDate || "--"}；系統會在下一個半小時排程自動重試。完成前請勿把下方舊候選視為今日訊號。</p></div></div>}
       <section className="model-hero-band">
         <div>
-          <span className="eyebrow">Fixed execution strategy</span>
-          <h2>{executionReady ? `次一交易日開盤：${deployable.selected?.code} ${deployable.selected?.name}` : deployable.status === "cash" ? "本日決策：CASH" : deployable.status === "refresh_required" ? "固定策略等待新版模型重掃" : "固定策略尚未允許執行"}</h2>
-          <p>{deployable.signalDate ?? "--"} · {deployable.version} · {deployable.reasonCodes.map((reason) => deployableReasonLabels[reason] ?? reason).join("、")}</p>
+          <span className="eyebrow">Fixed next-open strategy</span>
+          <h2>{executionReady ? `固定策略：次一交易日開盤買進 ${deployable.selected?.code} ${deployable.selected?.name}` : deployable.status === "cash" ? "固定策略決策：CASH" : deployable.status === "refresh_required" ? "固定策略等待新版模型重掃" : "固定策略尚未允許執行"}</h2>
+          <p>收盤訊號日 {deployable.signalDate ?? "--"} · 最近核對 {formatDateTime(deployable.evaluatedAt)} · {deployable.version} · {deployable.reasonCodes.map((reason) => deployableReasonLabels[reason] ?? reason).join("、")}</p>
         </div>
         <div className={`governance-state ${executionReady ? "ready" : "shadow"}`}><ShieldCheck size={20} /><span>{executionReady ? "MANUAL MICRO" : deployable.action}</span></div>
       </section>
 
+      {fixedSignalLagsLatestBatch && <div className="validation-banner"><Clock3 size={18} /><div><strong>盤中資料已更新；固定策略仍引用最近完成的收盤訊號</strong><p>盤中批次已更新至 {formatDateTime(snapshot.overview.latestRunAt)}，但固定 T+10 策略只在盤後產生次一交易日開盤計畫，因此目前仍使用 {deployable.signalDate} 收盤訊號。盤中研究候選不會覆寫這套已驗證策略。</p></div></div>}
+
       <section className="metrics-grid metrics-grid-five">
-        <Metric label="當日動作" value={executionReady ? "次日開盤買進" : deployable.action === "CASH" ? "維持現金" : "等待重掃"} detail={deployable.selected ? `${deployable.selected.code} · 上限 ${decimal.format(deployable.selected.maxEntryPrice)}` : deployableReasonLabels[deployable.reasonCodes[0]] ?? "尚無決策"} tone={executionReady ? "positive" : deployable.status === "cash" ? "warning" : "danger"} icon={Target} />
+        <Metric label="固定策略動作" value={executionReady ? "次日開盤買進" : deployable.action === "CASH" ? "維持現金" : "等待重掃"} detail={deployable.selected ? `${deployable.selected.code} · 上限 ${decimal.format(deployable.selected.maxEntryPrice)}` : deployableReasonLabels[deployable.reasonCodes[0]] ?? "尚無決策"} tone={executionReady ? "positive" : deployable.status === "cash" ? "warning" : "danger"} icon={Target} />
         <Metric label="單檔部位" value={rate(deployable.targetWeight * 100)} detail={`最多 ${deployable.maxPositions} 檔 · 同產業 ${deployable.maxIndustryPositions} 檔`} tone="info" icon={WalletCards} />
-        <Metric label="市場上漲家數" value={deployable.marketUpRatio == null ? "--" : rate(deployable.marketUpRatio)} detail={`固定門檻 ${rate(deployable.marketGateMinimum)}`} tone={(deployable.marketUpRatio ?? 0) >= deployable.marketGateMinimum ? "positive" : "warning"} icon={Activity} />
+        <Metric label="訊號日上漲家數" value={deployable.marketUpRatio == null ? "--" : rate(deployable.marketUpRatio)} detail={`${deployable.signalDate ?? "--"} · 固定門檻 ${rate(deployable.marketGateMinimum)}`} tone={(deployable.marketUpRatio ?? 0) >= deployable.marketGateMinimum ? "positive" : "warning"} icon={Activity} />
         <Metric label="2025 歷史保留區" value={holdout ? pct(holdout.totalReturnPct) : "--"} detail={holdout ? `${holdout.trades} 筆 · 勝率 ${rate(holdout.winRatePct)}` : "尚未建立稽核"} tone={(holdout?.totalReturnPct ?? 0) > 0 ? "positive" : "danger"} icon={TrendingUp} />
         <Metric label="保留區最大回撤" value={holdout ? pct(holdout.maxDrawdownPct) : "--"} detail={`成本後 · 固定持有 T+${deployable.holdingHorizon}`} tone={(holdout?.maxDrawdownPct ?? -99) >= -10 ? "positive" : "danger"} icon={TrendingDown} />
       </section>
